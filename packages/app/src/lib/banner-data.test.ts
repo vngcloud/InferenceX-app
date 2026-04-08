@@ -85,6 +85,32 @@ describe('buildBannerFromWorkflowInfo', () => {
     expect(banner!.linkHref).toContain('g_model=DeepSeek-R1-0528');
   });
 
+  it('links to /evaluation for eval-related changelogs', () => {
+    const data: WorkflowInfoResponse = {
+      runs: [],
+      changelogs: [
+        {
+          workflow_run_id: 1,
+          date: '2026-03-28',
+          base_ref: 'a',
+          head_ref: 'b',
+          config_keys: ['qwen3.5-fp8-b200-sglang'],
+          description: 'Redo qwen eval',
+          pr_link: null,
+        },
+      ],
+      configs: [],
+    };
+    const banner = buildBannerFromWorkflowInfo('2026-03-28', data);
+    expect(banner!.linkHref).toMatch(/^\/evaluation\?/);
+    expect(banner!.linkHref).not.toContain('i_prec');
+  });
+
+  it('links to /inference for non-eval changelogs', () => {
+    const banner = buildBannerFromWorkflowInfo('2026-04-07', MOCK_WORKFLOW);
+    expect(banner!.linkHref).toMatch(/^\/inference\?/);
+  });
+
   it('includes count when multiple changelogs exist', () => {
     const data: WorkflowInfoResponse = {
       runs: [],

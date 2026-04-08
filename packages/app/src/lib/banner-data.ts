@@ -73,10 +73,14 @@ export function buildBannerFromWorkflowInfo(
   const label = `${model} ${precLabel} ${gpu.toUpperCase()} (${fwLabel})`;
   const extra = data.changelogs.length > 1 ? ` (+${data.changelogs.length - 1} more)` : '';
 
+  // Detect eval-only changelogs by description text
+  const isEval = entry.description.toLowerCase().includes('eval');
+  const tab = isEval ? 'evaluation' : 'inference';
+
   const linkParams = new URLSearchParams();
   if (displayModel) linkParams.set('g_model', displayModel);
   linkParams.set('g_rundate', date);
-  if (precision) linkParams.set('i_prec', precision);
+  if (!isEval && precision) linkParams.set('i_prec', precision);
   const search = linkParams.toString();
 
   // Format date as "Apr 7, 2026"
@@ -90,6 +94,6 @@ export function buildBannerFromWorkflowInfo(
     id: `changelog-${date}`,
     message: `New data: ${label}${extra}`,
     date: displayDate,
-    linkHref: `/inference?${search}`,
+    linkHref: `/${tab}?${search}`,
   };
 }
