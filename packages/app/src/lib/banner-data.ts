@@ -92,7 +92,7 @@ export function dismiss(id: string): void {
 }
 
 export interface BannerInfo {
-  /** Dismiss key — e.g. "changelog-2026-04-07" */
+  /** Dismiss key — e.g. "changelog-12345" (workflow run ID) */
   id: string;
   /** Human-readable summary, e.g. "New data: Kimi-K2.5 FP4 GB200 (Dynamo vLLM)" */
   message: string;
@@ -154,7 +154,7 @@ export function buildBannerFromWorkflowInfo(
   });
 
   return {
-    id: `changelog-${date}`,
+    id: `changelog-${entry.workflow_run_id}`,
     message: `New data: ${label}${extra}`,
     date: displayDate,
     linkHref: `/${tab}?${search}`,

@@ -36,7 +36,6 @@ export function AnnouncementBanner() {
         const latestDate = rows
           .reduce((max, r) => (r.date > max ? r.date : max), rows[0].date)
           .slice(0, 10);
-        if (isDismissed(`changelog-${latestDate}`)) return;
 
         const data = await fetchWorkflowInfo(latestDate);
         if (cancelled) return;
@@ -66,7 +65,7 @@ export function AnnouncementBanner() {
   };
 
   const className =
-    'bg-brand/15 border border-brand/30 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 transition-colors hover:bg-brand/25';
+    'animate-in fade-in slide-in-from-top-2 duration-300 bg-brand/15 border border-brand/30 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 transition-colors hover:bg-brand/25';
 
   const content = (
     <>

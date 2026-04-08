@@ -25,7 +25,7 @@ describe('buildBannerFromWorkflowInfo', () => {
   it('builds a banner from a changelog entry', () => {
     const banner = buildBannerFromWorkflowInfo('2026-04-07', MOCK_WORKFLOW);
     expect(banner).not.toBeNull();
-    expect(banner!.id).toBe('changelog-2026-04-07');
+    expect(banner!.id).toBe('changelog-1');
     expect(banner!.message).toMatch(/^New data: /);
     expect(banner!.message).toContain('Kimi-K2.5');
     expect(banner!.linkHref).toContain('/inference');
