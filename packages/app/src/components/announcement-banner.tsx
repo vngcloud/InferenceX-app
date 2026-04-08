@@ -59,7 +59,11 @@ export function AnnouncementBanner() {
   return (
     <Link
       href={banner.linkHref}
-      onClick={() => track('banner_clicked', { banner_id: banner.id, link_href: banner.linkHref })}
+      onClick={() => {
+        dismiss(banner.id);
+        track('banner_clicked', { banner_id: banner.id, link_href: banner.linkHref });
+        setBanner(null);
+      }}
       className="mb-2 bg-brand/15 border border-brand/30 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 transition-colors hover:bg-brand/25"
     >
       <div className="flex items-center gap-3 min-w-0">
