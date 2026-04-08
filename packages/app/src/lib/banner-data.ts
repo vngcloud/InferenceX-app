@@ -1,11 +1,26 @@
 /**
  * Announcement banner helpers.
  *
- * The banner is fully automated — it fetches the latest changelog entry from the
- * workflow-info API and displays it. No manual configuration needed.
+ * Two banner sources, checked in order (first non-dismissed match wins):
  *
- * Dismissals are tracked per changelog date in localStorage so users see each
- * new day's announcements once.
+ * 1. **Hardcoded announcements** — `ANNOUNCEMENTS` array below. Add entries via PR.
+ *    Shown when `new Date()` falls within [startDate, endDate].
+ *    Omit `endDate` to show until dismissed. Omit `startDate` to show immediately.
+ *
+ * 2. **Automated changelog** — fetched from the workflow-info API at runtime.
+ *    Shows the most recent benchmark submission automatically.
+ *
+ * @example
+ * ```ts
+ * // Hardcoded announcement (add to ANNOUNCEMENTS, newest first):
+ * {
+ *   id: 'clustermax-launch-2026-04',
+ *   message: 'ClusterMax is now live — compare inference API providers!',
+ *   linkHref: 'https://www.clustermax.ai/',
+ *   startDate: '2026-04-01',
+ *   endDate: '2026-04-30',
+ * }
+ * ```
  */
 
 import { DB_MODEL_TO_DISPLAY } from '@semianalysisai/inferencex-constants';
@@ -13,6 +28,54 @@ import { DB_MODEL_TO_DISPLAY } from '@semianalysisai/inferencex-constants';
 import type { ChangelogRow, WorkflowInfoResponse } from '@/lib/api';
 import { type Precision, MODEL_PREFIX_MAPPING, getPrecisionLabel } from '@/lib/data-mappings';
 import { getFrameworkLabel } from '@/lib/utils';
+
+// ─── Hardcoded Announcements ────────────────────────────────────────────────
+// Add new announcements here, newest first. These take priority over automated
+// changelog banners. Only the first active, non-dismissed entry is shown.
+
+interface Announcement {
+  /** Unique identifier — used as localStorage key for dismissal state. */
+  id: string;
+  /** Banner text. */
+  message: string;
+  /** Optional link href (internal path or external URL). */
+  linkHref?: string;
+  /** ISO date string (YYYY-MM-DD). Hidden before this date. */
+  startDate?: string;
+  /** ISO date string (YYYY-MM-DD). Hidden after this date. */
+  endDate?: string;
+}
+
+export const ANNOUNCEMENTS: Announcement[] = [
+  // Example:
+  // {
+  //   id: 'clustermax-launch-2026-04',
+  //   message: 'ClusterMax is now live — compare inference API providers!',
+  //   linkHref: 'https://www.clustermax.ai/',
+  //   startDate: '2026-04-01',
+  //   endDate: '2026-04-30',
+  // },
+];
+
+/** Get the first active hardcoded announcement (within date range, not dismissed). */
+export function getHardcodedBanner(
+  now = new Date(),
+  announcements: Announcement[] = ANNOUNCEMENTS,
+): BannerInfo | null {
+  const today = now.toISOString().slice(0, 10);
+  for (const a of announcements) {
+    if (a.startDate && today < a.startDate) continue;
+    if (a.endDate && today > a.endDate) continue;
+    if (isDismissed(a.id)) continue;
+    return {
+      id: a.id,
+      message: a.message,
+      date: '',
+      linkHref: a.linkHref ?? '',
+    };
+  }
+  return null;
+}
 
 const DISMISS_KEY_PREFIX = 'banner-dismissed-';
 
