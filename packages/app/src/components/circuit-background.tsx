@@ -11,8 +11,8 @@ const PATTERN_CLASSES = cn(
 export function CircuitBackground() {
   return (
     <>
-      <div aria-hidden className={cn(PATTERN_CLASSES, 'top-0 left-0')} />
-      <div aria-hidden className={cn(PATTERN_CLASSES, 'bottom-0 right-0 rotate-180')} />
+      <div aria-hidden className={cn(PATTERN_CLASSES, 'top-0 left-0 circuit-bg')} />
+      <div aria-hidden className={cn(PATTERN_CLASSES, 'bottom-0 right-0 rotate-180 circuit-bg')} />
     </>
   );
 }

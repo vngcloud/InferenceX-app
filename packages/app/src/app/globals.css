@@ -3,6 +3,7 @@
 @plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant minecraft (&:is(.minecraft *));
 
 /* Allow hash navigation to clear the fixed navbar */
 .blog-prose h2[id],
@@ -162,6 +163,126 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* ── Minecraft Theme ── */
+.minecraft {
+  --background: #1e1e1e;
+  --foreground: #ffffff;
+  --card: #1e1e1e;
+  --card-foreground: #ffffff;
+  --popover: #2a2a2a;
+  --popover-foreground: #ffffff;
+  --primary: #f7b041;
+  --primary-foreground: #1e1e1e;
+  --secondary: #0b86d1;
+  --secondary-foreground: #ffffff;
+  --brand: var(--primary);
+  --muted: #3a3a3a;
+  --muted-foreground: rgba(255, 255, 255, 0.55);
+  --accent: #2a2a2a;
+  --accent-foreground: #ffffff;
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: #555555;
+  --border-alt: #333333;
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: #ffffff;
+
+  /* Sidebar */
+  --sidebar: #1a1a1a;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2a2a2a;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #555555;
+  --sidebar-ring: #888888;
+
+  /* Override ALL fonts to pixel font */
+  --font-dm-sans: var(--font-minecraft, 'Monocraft', monospace);
+  --font-mono: var(--font-minecraft, 'Monocraft', monospace);
+
+  /* Kill all border radius — Minecraft has no curves */
+  --radius: 0px;
+}
+
+/* Force pixel font on everything in minecraft mode */
+.minecraft,
+.minecraft * {
+  font-family: var(--font-minecraft, 'Monocraft', monospace) !important;
+}
+
+/* Minecraft text shadow on all text */
+.minecraft * {
+  text-shadow: 1.5px 1.5px 0px rgba(0, 0, 0, 0.4);
+}
+
+/* Disable font smoothing for crisp pixel font */
+.minecraft {
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+}
+
+/* Minecraft-style beveled buttons — raised 3D effect */
+.minecraft button,
+.minecraft [role='button'],
+.minecraft a[class*='rounded'] {
+  border: 2px solid !important;
+  border-color: #ffffff80 #37373780 #37373780 #ffffff80 !important;
+  border-radius: 0 !important;
+}
+.minecraft button:hover,
+.minecraft [role='button']:hover {
+  background-color: rgba(170, 170, 221, 0.15) !important;
+  border-color: #ffffffe0 #6666aa80 #6666aa80 #ffffffe0 !important;
+}
+.minecraft button:active,
+.minecraft [role='button']:active {
+  border-color: #37373780 #ffffff80 #ffffff80 #37373780 !important;
+}
+
+/* Force square corners on everything */
+.minecraft [class*='rounded'] {
+  border-radius: 0 !important;
+}
+
+/* Pixelated rendering for images */
+.minecraft img {
+  image-rendering: pixelated;
+}
+
+/* Minecraft header grass-block top accent */
+.minecraft header {
+  border-bottom: 3px solid transparent !important;
+  border-image: linear-gradient(to right, #7fb238, #5d9b47, #7fb238, #526935, #7fb238) 1 !important;
+}
+
+/* Sunken slot effect on cards */
+.minecraft .border-border {
+  border: 2px solid;
+  border-color: #373737 #ffffff40 #ffffff40 #373737;
+}
+
+/* Input fields — sunken slot style */
+.minecraft input,
+.minecraft select,
+.minecraft textarea {
+  border: 2px solid !important;
+  border-color: #373737 #c6c6c680 #c6c6c680 #373737 !important;
+  border-radius: 0 !important;
+  background-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Shiki code blocks: reuse dark theme in minecraft mode */
+.minecraft .shiki,
+.minecraft .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+/* Hide circuit background in minecraft mode */
+.minecraft .circuit-bg {
+  display: none;
 }
 
 @layer base {
