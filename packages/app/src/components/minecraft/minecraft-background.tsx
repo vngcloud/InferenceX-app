@@ -113,6 +113,51 @@ export function MinecraftBackground() {
     document.head.append(tag);
   }, [showMusic]);
 
+  // Periodically save playback position so music survives page navigations
+  useEffect(() => {
+    if (!showMusic) return;
+    const interval = setInterval(() => {
+      const player = playerRef.current;
+      if (!player) return;
+      try {
+        const time = player.getCurrentTime();
+        const index = player.getPlaylistIndex();
+        if (time > 0) {
+          sessionStorage.setItem(
+            'minecraft-music-pos',
+            JSON.stringify({ time, index, ts: Date.now() }),
+          );
+        }
+      } catch {
+        /* player may not be ready */
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [showMusic]);
+
+  // Save position on page unload for full-page navigations
+  useEffect(() => {
+    if (!showMusic) return;
+    function save() {
+      const player = playerRef.current;
+      if (!player) return;
+      try {
+        const time = player.getCurrentTime();
+        const index = player.getPlaylistIndex();
+        if (time > 0) {
+          sessionStorage.setItem(
+            'minecraft-music-pos',
+            JSON.stringify({ time, index, ts: Date.now() }),
+          );
+        }
+      } catch {
+        /* player may not be ready */
+      }
+    }
+    window.addEventListener('beforeunload', save);
+    return () => window.removeEventListener('beforeunload', save);
+  }, [showMusic]);
+
   // Create / destroy the player when showMusic toggles.
   // YT.Player replaces the target element with an iframe, so we create
   // a disposable inner div inside our stable wrapper to avoid React's
@@ -139,7 +184,27 @@ export function MinecraftBackground() {
         started = true;
         document.removeEventListener('pointerdown', nudge);
         document.removeEventListener('keydown', nudge);
-        // Seek to a random position in the current track
+
+        // Resume from saved position if recent (< 30s ago), otherwise random
+        try {
+          const raw = sessionStorage.getItem('minecraft-music-pos');
+          if (raw) {
+            const saved = JSON.parse(raw);
+            if (Date.now() - saved.ts < 30_000) {
+              if (typeof saved.index === 'number' && saved.index >= 0) {
+                player.playVideoAt(saved.index);
+              }
+              if (typeof saved.time === 'number' && saved.time > 0) {
+                player.seekTo(saved.time, true);
+              }
+              return;
+            }
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+
+        // No recent saved position — seek to random spot
         const duration = player.getDuration();
         if (duration > 0) {
           player.seekTo(Math.random() * duration, true);
@@ -191,6 +256,22 @@ export function MinecraftBackground() {
     }
 
     return () => {
+      // Save position before destroying
+      const player = playerRef.current;
+      if (player) {
+        try {
+          const time = player.getCurrentTime();
+          const index = player.getPlaylistIndex();
+          if (time > 0) {
+            sessionStorage.setItem(
+              'minecraft-music-pos',
+              JSON.stringify({ time, index, ts: Date.now() }),
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       playerRef.current?.destroy();
       playerRef.current = null;
       if (wrapperRef.current) wrapperRef.current.innerHTML = '';
