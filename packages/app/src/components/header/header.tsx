@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
 
 import { ModeToggle } from '@/components/ui/mode-toggle';
+import { MinecraftToggles } from '@/components/minecraft/minecraft-toggles';
 import { cn } from '@/lib/utils';
 
 import { GitHubStars } from './GithubStars';
@@ -154,6 +155,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
           {/* Right side */}
           <div className="ml-auto flex items-center gap-2">
             <GitHubStars owner="SemiAnalysisAI" repo="InferenceX" starCount={starCount} />
+            <MinecraftToggles />
             <ModeToggle />
 
             {/* Mobile hamburger */}
