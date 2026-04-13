@@ -186,28 +186,41 @@ export function MinecraftBackground() {
         document.removeEventListener('keydown', nudge);
 
         // Resume from saved position if recent (< 30s ago), otherwise random
+        let savedPos: { time: number; index: number; ts: number } | null = null;
         try {
           const raw = sessionStorage.getItem('minecraft-music-pos');
           if (raw) {
-            const saved = JSON.parse(raw);
-            if (Date.now() - saved.ts < 30_000) {
-              if (typeof saved.index === 'number' && saved.index >= 0) {
-                player.playVideoAt(saved.index);
-              }
-              if (typeof saved.time === 'number' && saved.time > 0) {
-                player.seekTo(saved.time, true);
-              }
-              return;
+            const parsed = JSON.parse(raw);
+            if (Date.now() - parsed.ts < 30_000) {
+              savedPos = parsed;
             }
           }
         } catch {
           /* ignore parse errors */
         }
 
-        // No recent saved position — seek to random spot
-        const duration = player.getDuration();
-        if (duration > 0) {
-          player.seekTo(Math.random() * duration, true);
+        if (savedPos) {
+          // Resume: jump to saved playlist track, then seek within it
+          if (typeof savedPos.index === 'number' && savedPos.index >= 0) {
+            player.playVideoAt(savedPos.index);
+          }
+          // Delay seekTo so playVideoAt has time to load the track
+          setTimeout(() => {
+            if (typeof savedPos.time === 'number' && savedPos.time > 0) {
+              player.seekTo(savedPos.time, true);
+            }
+          }, 500);
+        } else {
+          // Fresh session — pick a random track and random position
+          // The playlist has ~20 tracks; pick a random index
+          const randomIndex = Math.floor(Math.random() * 20);
+          player.playVideoAt(randomIndex);
+          setTimeout(() => {
+            const duration = player.getDuration();
+            if (duration > 0) {
+              player.seekTo(Math.random() * duration, true);
+            }
+          }, 500);
         }
       }
 
