@@ -11,7 +11,7 @@ import {
   useState,
 } from 'react';
 
-import { DISPLAY_MODEL_TO_DB, islOslToSequence } from '@semianalysisai/inferencex-constants';
+import { DISPLAY_MODEL_TO_DB, rowToSequence } from '@semianalysisai/inferencex-constants';
 import { track } from '@/lib/analytics';
 import { FAVORITE_PRESETS, type FavoritePreset } from '@/components/favorites/favorite-presets';
 
@@ -110,6 +110,11 @@ export function InferenceProvider({
   const [selectedE2eXAxisMetric, setSelectedE2eXAxisMetric] = useState<string | null>(
     () => getUrlParam('i_e2e_xmetric') || null,
   );
+  // Latency percentile applied to the chart x-axis for agentic scenarios.
+  // Values: 'median' | 'p90' | 'p99' | 'p99.9'. Non-agentic charts ignore.
+  const [selectedPercentile, setSelectedPercentile] = useState<string>(
+    () => getUrlParam('i_pctl') || 'median',
+  );
   const [scaleType, setScaleType] = useState<'auto' | 'linear' | 'log'>(
     () => (getUrlParam('i_scale') as 'auto' | 'linear' | 'log') || 'auto',
   );
@@ -163,6 +168,7 @@ export function InferenceProvider({
     effectiveRunDate,
     isActive,
     latestDate,
+    selectedPercentile,
   );
 
   // For GPU comparison date picker — use shared availability data from global filters
@@ -176,7 +182,7 @@ export function InferenceProvider({
     if (!availabilityRows) return availableDates;
     const rows = availabilityRows.filter((r) => {
       if (!dbModelKeys.includes(r.model)) return false;
-      if (islOslToSequence(r.isl, r.osl) !== effectiveSequence) return false;
+      if (rowToSequence(r) !== effectiveSequence) return false;
       if (!effectivePrecisions.includes(r.precision)) return false;
       if (!r.hardware) return false;
       const hwKey = buildAvailabilityHwKey(r.hardware, r.framework, r.spec_method, r.disagg);
@@ -201,7 +207,7 @@ export function InferenceProvider({
     const hwKeys = new Set<string>();
     for (const r of availabilityRows) {
       if (!dbModelKeys.includes(r.model)) continue;
-      if (islOslToSequence(r.isl, r.osl) !== effectiveSequence) continue;
+      if (rowToSequence(r) !== effectiveSequence) continue;
       if (!effectivePrecisions.includes(r.precision)) continue;
       if (!r.hardware) continue;
       const hwKey = buildAvailabilityHwKey(r.hardware, r.framework, r.spec_method, r.disagg);
@@ -589,6 +595,7 @@ export function InferenceProvider({
   useUrlStateSync(
     {
       i_metric: selectedYAxisMetric,
+      i_pctl: selectedPercentile,
       i_gpus: selectedGPUs.join(','),
       i_dates: selectedDates.join(','),
       i_dstart: selectedDateRange.startDate,
@@ -783,6 +790,8 @@ export function InferenceProvider({
       workflowInfo,
       selectedYAxisMetric,
       setSelectedYAxisMetric: setSelectedYAxisMetricAndClear,
+      selectedPercentile,
+      setSelectedPercentile,
       selectedGPUs,
       setSelectedGPUs: setSelectedGPUsAndClear,
       availableGPUs,

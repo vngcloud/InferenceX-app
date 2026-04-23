@@ -1,11 +1,14 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+
 import { track } from '@/lib/analytics';
 
 import { useInference } from '@/components/inference/InferenceContext';
 import {
   ModelSelector,
-  SequenceSelector,
+  ScenarioSelector,
+  PercentileSelector,
   PrecisionSelector,
 } from '@/components/ui/chart-selectors';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
@@ -23,7 +26,7 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
 import type { ChartDefinition } from '@/components/inference/types';
-import type { Model, Sequence } from '@/lib/data-mappings';
+import { Sequence, type Model, type Percentile } from '@/lib/data-mappings';
 
 // Build Y-axis metric options from static chart config JSON — available immediately, no API wait
 const METRIC_GROUPS = [
@@ -78,6 +81,13 @@ interface ChartControlsProps {
 }
 
 export default function ChartControls({ hideGpuComparison = false }: ChartControlsProps) {
+  // The percentile selector is rendered conditionally on `selectedSequence`,
+  // which on the client is hydrated from URL params. SSR doesn't see the URL,
+  // so deferring the conditional until after mount keeps the initial DOM
+  // identical between server and client (avoids hydration warnings).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const {
     selectedModel,
     setSelectedModel,
@@ -87,6 +97,8 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
     setSelectedPrecisions,
     selectedYAxisMetric,
     setSelectedYAxisMetric,
+    selectedPercentile,
+    setSelectedPercentile,
     graphs,
     selectedGPUs,
     setSelectedGPUs,
@@ -203,12 +215,19 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
             availableModels={availableModels}
             data-testid="model-selector"
           />
-          <SequenceSelector
+          <ScenarioSelector
             value={selectedSequence}
             onChange={handleSequenceChange}
             availableSequences={availableSequences}
-            data-testid="sequence-selector"
+            data-testid="scenario-selector"
           />
+          {mounted && selectedSequence === Sequence.AgenticTraces && (
+            <PercentileSelector
+              value={selectedPercentile}
+              onChange={(p: Percentile) => setSelectedPercentile(p)}
+              data-testid="percentile-selector"
+            />
+          )}
           <PrecisionSelector
             value={selectedPrecisions}
             onChange={handlePrecisionChange}

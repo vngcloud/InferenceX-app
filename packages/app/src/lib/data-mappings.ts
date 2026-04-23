@@ -102,16 +102,76 @@ export enum Sequence {
   OneK_OneK = '1k/1k',
   OneK_EightK = '1k/8k',
   EightK_OneK = '8k/1k',
+  AgenticTraces = 'agentic-traces',
 }
 
-const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; category: CategoryTag }> =
-  {
-    [Sequence.OneK_OneK]: { label: '1K / 1K', compact: '1k1k', category: 'default' },
-    [Sequence.OneK_EightK]: { label: '1K / 8K', compact: '1k8k', category: 'deprecated' },
-    [Sequence.EightK_OneK]: { label: '8K / 1K', compact: '8k1k', category: 'default' },
-  };
+/**
+ * Top-level scenario kind. Fixed-seq sequences cluster under a single group
+ * in the selector; agentic traces sit alongside as their own kind.
+ */
+export type ScenarioKind = 'fixed-seq' | 'agentic';
+
+export function sequenceKind(seq: Sequence): ScenarioKind {
+  return seq === Sequence.AgenticTraces ? 'agentic' : 'fixed-seq';
+}
+
+const SEQUENCE_CONFIG: Record<
+  Sequence,
+  { label: string; compact: string; category: CategoryTag; kind: ScenarioKind }
+> = {
+  [Sequence.OneK_OneK]: {
+    label: '1K / 1K',
+    compact: '1k1k',
+    category: 'default',
+    kind: 'fixed-seq',
+  },
+  [Sequence.OneK_EightK]: {
+    label: '1K / 8K',
+    compact: '1k8k',
+    category: 'deprecated',
+    kind: 'fixed-seq',
+  },
+  [Sequence.EightK_OneK]: {
+    label: '8K / 1K',
+    compact: '8k1k',
+    category: 'default',
+    kind: 'fixed-seq',
+  },
+  [Sequence.AgenticTraces]: {
+    label: 'Agentic Traces',
+    compact: 'agentic',
+    category: 'default',
+    kind: 'agentic',
+  },
+};
 
 export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
+
+/**
+ * Percentile of the latency distribution used for the chart x-axis when
+ * viewing agentic traces. Agentic rows carry median/p90/p99/p99.9 variants
+ * for ttft, ttlt (=e2el), and itl (and intvty derived from itl) — pick which
+ * slice to plot.
+ */
+export enum Percentile {
+  Median = 'median',
+  P90 = 'p90',
+  P99 = 'p99',
+  P99_9 = 'p99.9',
+}
+
+const PERCENTILE_CONFIG: Record<Percentile, { label: string }> = {
+  [Percentile.Median]: { label: 'p50 (median)' },
+  [Percentile.P90]: { label: 'p90' },
+  [Percentile.P99]: { label: 'p99' },
+  [Percentile.P99_9]: { label: 'p99.9' },
+};
+
+export const PERCENTILE_OPTIONS = Object.keys(PERCENTILE_CONFIG) as Percentile[];
+
+export function getPercentileLabel(p: Percentile): string {
+  return PERCENTILE_CONFIG[p]?.label ?? p;
+}
 
 export const DEPRECATED_SEQUENCES: ReadonlySet<Sequence> = new Set(
   (Object.entries(SEQUENCE_CONFIG) as [Sequence, (typeof SEQUENCE_CONFIG)[Sequence]][])

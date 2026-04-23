@@ -88,6 +88,29 @@ export interface AggDataEntry {
   actualDate?: string;
   /** URL to the GitHub Actions workflow run that produced this data point. */
   run_url?: string;
+  /** Benchmark scenario: `single_turn` (fixed-seq isl/osl) or `agentic_traces`. */
+  benchmark_type?: string;
+  /** ISL in tokens — null for agentic_traces. */
+  isl?: number | null;
+  /** OSL in tokens — null for agentic_traces. */
+  osl?: number | null;
+  // ── Agentic-only fields (populated from metrics JSONB for `agentic_traces` rows) ──
+  /** "on" | "off" — whether KV cache offload to CPU was enabled. */
+  offload_mode?: string;
+  /** Actual server-observed GPU prefix-cache hit rate (0..1). */
+  server_gpu_cache_hit_rate?: number;
+  /** Actual server-observed CPU prefix-cache hit rate (0..1). */
+  server_cpu_cache_hit_rate?: number;
+  /** Infinite-cache theoretical hit rate (0..1) computed from trace. */
+  theoretical_cache_hit_rate?: number;
+  /** Total requests attempted during the window. */
+  num_requests_total?: number;
+  /** Requests that completed successfully. */
+  num_requests_successful?: number;
+  /** Total prompt tokens served. */
+  total_prompt_tokens?: number;
+  /** Total generated (output) tokens. */
+  total_generation_tokens?: number;
 }
 
 /**
@@ -468,6 +491,9 @@ export interface InferenceChartContextType {
   workflowInfo: any;
   selectedYAxisMetric: string;
   setSelectedYAxisMetric: (metric: string) => void;
+  /** Latency percentile for the x-axis under agentic scenarios (median/p90/p99/p99.9). */
+  selectedPercentile: string;
+  setSelectedPercentile: (p: string) => void;
   selectedXAxisMetric: string | null;
   setSelectedXAxisMetric: (metric: string | null) => void;
   selectedE2eXAxisMetric: string | null;

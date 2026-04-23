@@ -11,7 +11,7 @@ import {
   useState,
 } from 'react';
 
-import { DISPLAY_MODEL_TO_DB, islOslToSequence } from '@semianalysisai/inferencex-constants';
+import { DISPLAY_MODEL_TO_DB, rowToSequence } from '@semianalysisai/inferencex-constants';
 
 import { useAvailability } from '@/hooks/api/use-availability';
 import { useWorkflowInfo } from '@/hooks/api/use-workflow-info';
@@ -172,11 +172,7 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
   const availableSequences = useMemo(() => {
     if (!availabilityRows) return SEQUENCE_OPTIONS;
     const seqs = [
-      ...new Set(
-        modelRows
-          .map((r) => islOslToSequence(r.isl, r.osl))
-          .filter((s): s is Sequence => s !== null),
-      ),
+      ...new Set(modelRows.map((r) => rowToSequence(r)).filter((s): s is Sequence => s !== null)),
     ];
     return seqs.length > 0 ? seqs : SEQUENCE_OPTIONS;
   }, [availabilityRows, modelRows]);
@@ -190,7 +186,7 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
   // Precisions available for the selected model + sequence
   const availablePrecisions = useMemo(() => {
     if (!availabilityRows) return ['fp4'];
-    const rows = modelRows.filter((r) => islOslToSequence(r.isl, r.osl) === effectiveSequence);
+    const rows = modelRows.filter((r) => rowToSequence(r) === effectiveSequence);
     const precs = [...new Set(rows.map((r) => r.precision))].toSorted();
     return precs.length > 0 ? precs : ['fp4'];
   }, [availabilityRows, modelRows, effectiveSequence]);
@@ -205,7 +201,7 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
   // Dates available for selected model + sequence + precisions
   const availableDates = useMemo(() => {
     if (!availabilityRows) return [];
-    const seqRows = modelRows.filter((r) => islOslToSequence(r.isl, r.osl) === effectiveSequence);
+    const seqRows = modelRows.filter((r) => rowToSequence(r) === effectiveSequence);
     const rows = seqRows.filter((r) => effectivePrecisions.includes(r.precision));
     if (rows.length === 0) {
       return [...new Set(seqRows.map((r) => r.date))].toSorted();

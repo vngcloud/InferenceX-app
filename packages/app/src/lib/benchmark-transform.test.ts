@@ -23,6 +23,8 @@ function makeRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
     decode_num_workers: 0,
     num_prefill_gpu: 8,
     num_decode_gpu: 8,
+    benchmark_type: 'single_turn',
+    offload_mode: 'off',
     isl: 1024,
     osl: 1024,
     conc: 64,

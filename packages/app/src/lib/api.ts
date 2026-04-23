@@ -23,9 +23,13 @@ export interface BenchmarkRow {
   decode_num_workers: number;
   num_prefill_gpu: number;
   num_decode_gpu: number;
-  isl: number;
-  osl: number;
+  benchmark_type: string;
+  // Null for agentic_traces rows; numeric for single_turn fixed-seq rows.
+  isl: number | null;
+  osl: number | null;
   conc: number;
+  /** KV-cache offload mode: 'on' | 'off'. Defaults to 'off' for fixed-seq. */
+  offload_mode: string;
   image: string | null;
   metrics: Record<string, number>;
   date: string;
@@ -140,13 +144,15 @@ export function fetchWorkflowInfo(date: string, signal?: AbortSignal) {
 
 export interface AvailabilityRow {
   model: string;
-  isl: number;
-  osl: number;
+  // Null for agentic_traces rows; numeric for single_turn fixed-seq rows.
+  isl: number | null;
+  osl: number | null;
   precision: string;
   hardware: string;
   framework: string;
   spec_method: string;
   disagg: boolean;
+  benchmark_type: string;
   date: string;
 }
 

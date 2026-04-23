@@ -290,6 +290,8 @@ function toBenchmarkRow(
     decode_num_workers: c.decode_num_workers,
     num_prefill_gpu: c.num_prefill_gpu,
     num_decode_gpu: c.num_decode_gpu,
+    benchmark_type: br.benchmark_type ?? 'single_turn',
+    offload_mode: (br as { offload_mode?: string }).offload_mode ?? 'off',
     isl: br.isl,
     osl: br.osl,
     conc: br.conc,
@@ -410,7 +412,11 @@ export function getAvailabilityData(): AvailabilityRow[] {
   for (const a of s.availability) {
     const key = `${a.model}|${a.hardware}|${a.framework}|${a.precision}|${a.isl}|${a.osl}|${toDateString(a.date)}`;
     if (validKeys.has(key)) {
-      rows.push({ ...a, date: toDateString(a.date) });
+      rows.push({
+        ...a,
+        benchmark_type: (a as { benchmark_type?: string }).benchmark_type ?? 'single_turn',
+        date: toDateString(a.date),
+      });
     }
   }
 

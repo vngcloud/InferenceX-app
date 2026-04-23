@@ -18,9 +18,13 @@ export interface BenchmarkRow {
   decode_num_workers: number;
   num_prefill_gpu: number;
   num_decode_gpu: number;
-  isl: number;
-  osl: number;
+  benchmark_type: string;
+  // Null for agentic_traces; numeric for single_turn fixed-seq runs.
+  isl: number | null;
+  osl: number | null;
   conc: number;
+  /** KV-cache offload mode: 'on' | 'off'. Defaults to 'off' for fixed-seq. */
+  offload_mode: string;
   image: string | null;
   metrics: Record<string, number>;
   date: string;
@@ -68,6 +72,8 @@ export async function getLatestBenchmarks(
         c.decode_num_workers,
         c.num_prefill_gpu,
         c.num_decode_gpu,
+        br.benchmark_type,
+        br.offload_mode,
         br.isl,
         br.osl,
         br.conc,
@@ -106,6 +112,8 @@ export async function getLatestBenchmarks(
       c.decode_num_workers,
       c.num_prefill_gpu,
       c.num_decode_gpu,
+      lb.benchmark_type,
+      lb.offload_mode,
       lb.isl,
       lb.osl,
       lb.conc,
@@ -153,6 +161,7 @@ export async function getAllBenchmarksForHistory(
       c.decode_num_workers,
       c.num_prefill_gpu,
       c.num_decode_gpu,
+      br.benchmark_type,
       br.isl,
       br.osl,
       br.conc,

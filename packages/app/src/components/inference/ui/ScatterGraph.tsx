@@ -1512,6 +1512,24 @@ const ScatterGraph = React.memo(
             .attr('pointer-events', 'none');
         });
 
+        // Offload halo: dashed ring on frontier points that used KV offload
+        zoomGroup.selectAll<SVGGElement, InferenceData>('.dot-group').each(function (d) {
+          const onFrontier = optimalPointKeys.has(`${d.hwKey}_${d.precision}-${d.x}-${d.y}`);
+          const showHalo = onFrontier && d.offload_mode === 'on';
+          d3.select(this)
+            .selectAll<SVGCircleElement, boolean>('.offload-halo')
+            .data(showHalo ? [true] : [])
+            .join('circle')
+            .attr('class', 'offload-halo')
+            .attr('r', POINT_SIZE + 4)
+            .attr('fill', 'none')
+            .attr('stroke', 'var(--foreground)')
+            .attr('stroke-width', 1.5)
+            .attr('stroke-dasharray', '3 2')
+            .attr('opacity', 0.9)
+            .attr('pointer-events', 'none');
+        });
+
         // Double-click to track/untrack
         zoomGroup
           .selectAll<SVGGElement, InferenceData>('.dot-group')
@@ -1567,6 +1585,9 @@ const ScatterGraph = React.memo(
         chartDefinition.chartType,
         xScaleConfig._isLog,
         yScaleConfig.type,
+        optimalPointKeys,
+        getCssColor,
+        resolveColor,
       ],
     );
 

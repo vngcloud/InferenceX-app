@@ -49,6 +49,8 @@ export function normalizeArtifactRows(
       decode_num_workers: config.decodeNumWorkers,
       num_prefill_gpu: config.numPrefillGpu,
       num_decode_gpu: config.numDecodeGpu,
+      benchmark_type: params.benchmarkType,
+      offload_mode: params.offloadMode,
       isl: params.isl,
       osl: params.osl,
       conc: params.conc,

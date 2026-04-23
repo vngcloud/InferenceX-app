@@ -88,6 +88,51 @@ const runLinkHTML = (runUrl?: string) =>
 const tooltipLine = (label: string, value: string | number) =>
   `<div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;"><strong>${label}:</strong> ${value}</div>`;
 
+const formatPct = (v: number | undefined): string | null =>
+  v === undefined || v === null || Number.isNaN(v) ? null : `${(v * 100).toFixed(1)}%`;
+
+/**
+ * Agentic-only tooltip rows: offload mode, KV cache hit rates, request
+ * success, token totals. Returns an empty string for non-agentic rows.
+ */
+const generateAgenticHTML = (d: InferenceData): string => {
+  if (d.benchmark_type !== 'agentic_traces') return '';
+
+  const parts: string[] = [];
+  if (d.offload_mode) {
+    parts.push(tooltipLine('Offload Mode', d.offload_mode.toUpperCase()));
+  }
+
+  const gpuHit = formatPct(d.server_gpu_cache_hit_rate);
+  const cpuHit = formatPct(d.server_cpu_cache_hit_rate);
+  const theoHit = formatPct(d.theoretical_cache_hit_rate);
+  if (gpuHit) parts.push(tooltipLine('GPU Cache Hit Rate', gpuHit));
+  if (cpuHit) parts.push(tooltipLine('CPU Cache Hit Rate', cpuHit));
+  if (theoHit) parts.push(tooltipLine('Theoretical Cache Hit Rate', theoHit));
+
+  if (d.num_requests_total !== undefined && d.num_requests_successful !== undefined) {
+    const successPct =
+      d.num_requests_total > 0
+        ? ` (${((d.num_requests_successful / d.num_requests_total) * 100).toFixed(0)}%)`
+        : '';
+    parts.push(
+      tooltipLine(
+        'Requests',
+        `${d.num_requests_successful} / ${d.num_requests_total}${successPct}`,
+      ),
+    );
+  }
+
+  if (d.total_prompt_tokens !== undefined) {
+    parts.push(tooltipLine('Prompt Tokens', formatNumber(d.total_prompt_tokens)));
+  }
+  if (d.total_generation_tokens !== undefined) {
+    parts.push(tooltipLine('Generated Tokens', formatNumber(d.total_generation_tokens)));
+  }
+
+  return parts.join('');
+};
+
 /**
  * Generates HTML for the parallelism configuration section of a tooltip.
  * Falls back to GPU count for old data without parallelism fields.
@@ -177,9 +222,10 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
-      <div style="color: var(--muted-foreground); font-size: 11px;">
+      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
+      ${generateAgenticHTML(d)}
       ${runLinkHTML(runUrl)}
       ${
         isPinned
@@ -231,9 +277,10 @@ export const generateOverlayTooltipContent = (config: OverlayTooltipConfig): str
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
-      <div style="color: var(--muted-foreground); font-size: 11px;">
+      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
+      ${generateAgenticHTML(d)}
     </div>
   `;
 };
@@ -292,9 +339,10 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
-      <div style="color: var(--muted-foreground); font-size: 11px;">
+      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
+      ${generateAgenticHTML(d)}
       ${runLinkHTML(runUrl)}
     </div>
   `;

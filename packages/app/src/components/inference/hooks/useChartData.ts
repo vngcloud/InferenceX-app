@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 
 import { useQueries } from '@tanstack/react-query';
-import { sequenceToIslOsl } from '@semianalysisai/inferencex-constants';
+import { rowToSequence } from '@semianalysisai/inferencex-constants';
 
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
 import type {
@@ -15,7 +15,7 @@ import type {
 import { filterDataByCostLimit } from '@/components/inference/utils';
 import { useBenchmarks, benchmarkQueryOptions } from '@/hooks/api/use-benchmarks';
 import { GPU_ALIAS_TO_CANONICAL, getModelSortIndex } from '@/lib/constants';
-import { transformBenchmarkRows } from '@/lib/benchmark-transform';
+import { transformBenchmarkRows, withPercentile } from '@/lib/benchmark-transform';
 import type { Model, Sequence } from '@/lib/data-mappings';
 import { calculateCostsForGpus, calculatePowerForGpus } from '@/lib/utils';
 
@@ -79,6 +79,7 @@ export function useChartData(
   selectedRunDate?: string,
   enabled = true,
   latestAvailableDate?: string,
+  selectedPercentile = 'median',
 ) {
   // When the selected date is the latest available, use '' (empty string) to match
   // the initial no-date query key, reusing the eagerly-fetched benchmarks from the
@@ -119,11 +120,13 @@ export function useChartData(
   // Merge main rows with comparison date rows.
   // Stamp each row with the *requested* date (not the actual DB date) so that
   // GPUGraph's activeDates filter (keyed by user-selected date) matches the points.
-  const sequenceIslOsl = useMemo(() => sequenceToIslOsl(selectedSequence), [selectedSequence]);
+  //
+  // rowToSequence handles both fixed-seq (via isl/osl) and agentic (via
+  // benchmark_type), so one filter covers every scenario.
   const rows = useMemo(() => {
-    if (!allRows || !sequenceIslOsl) return [];
-    const seqFilter = (r: { isl: number; osl: number }) =>
-      r.isl === sequenceIslOsl.isl && r.osl === sequenceIslOsl.osl;
+    if (!allRows) return [];
+    const seqFilter = (r: { isl: number | null; osl: number | null; benchmark_type: string }) =>
+      rowToSequence(r) === selectedSequence;
     const seqFiltered = allRows.filter(seqFilter);
 
     // For each (hw, framework, spec_method, disagg, precision) group, keep only
@@ -150,14 +153,14 @@ export function useChartData(
         .map((r) => ({ ...r, date: comparisonDates[i], actualDate: r.date })),
     );
     return [...mainRows, ...extraRows];
-  }, [allRows, sequenceIslOsl, comparisonDates, comparisonDataKey, selectedRunDate]);
+  }, [allRows, selectedSequence, comparisonDates, comparisonDataKey, selectedRunDate]);
 
   // Transform filtered rows into chart data
   const { chartData, hardwareConfig: rawHardwareConfig } = useMemo(() => {
     if (rows.length === 0)
       return { chartData: [] as InferenceData[][], hardwareConfig: {} as HardwareConfig };
-    return transformBenchmarkRows(rows);
-  }, [rows]);
+    return transformBenchmarkRows(rows, selectedPercentile);
+  }, [rows, selectedPercentile]);
 
   // Sort hardware config — stabilize reference when keys haven't changed.
   // Different sequences for the same model often have the same GPU configs,
@@ -192,8 +195,11 @@ export function useChartData(
       (chartDefinitions as ChartDefinition[]).map((chartDef) => {
         const metricKey = selectedYAxisMetric.replace('y_', '') as YAxisMetricKey;
 
-        // Determine dynamic x-axis
-        let xAxisField: keyof AggDataEntry = chartDef.x;
+        // Default x-axis = chart's natural latency metric, percentile-adjusted
+        // for the agentic case (median_e2el → p99_e2el etc.). For non-agentic
+        // scenarios `withPercentile` is a no-op when percentile === 'median'.
+        const naturalX = withPercentile(chartDef.x, selectedPercentile) as keyof AggDataEntry;
+        let xAxisField: keyof AggDataEntry = naturalX;
         let xAxisLabel = chartDef.x_label;
 
         const metricTitle =
@@ -232,8 +238,10 @@ export function useChartData(
         // (e.g. interactivity → TTFT: "higher is better" → "lower is better").
         // E2EL → TTFT keeps the same direction ("lower is better" for both),
         // so no roofline flip is needed for the e2e chart.
+        // Compare against `naturalX` (percentile-adjusted) — switching the
+        // percentile of the same logical metric is NOT a flip.
         const xAxisFlipped =
-          xAxisField !== chartDef.x && !(chartDef.chartType === 'e2e' && isTtftOverride);
+          xAxisField !== naturalX && !(chartDef.chartType === 'e2e' && isTtftOverride);
 
         const yLabelKey = `${selectedYAxisMetric}_label` as keyof ChartDefinition;
         const dynamicYLabel = chartDef[yLabelKey];
@@ -261,7 +269,7 @@ export function useChartData(
           xAxisField,
         };
       }),
-    [selectedYAxisMetric, selectedXAxisMetric, selectedE2eXAxisMetric],
+    [selectedYAxisMetric, selectedXAxisMetric, selectedE2eXAxisMetric, selectedPercentile],
   );
 
   // Build renderable graphs (data processing + stable chart definitions)

@@ -57,7 +57,20 @@ const NON_METRIC_KEYS = new Set([
   'decode_num_workers',
   'num_prefill_gpu',
   'num_decode_gpu',
+  // agentic scenario
+  'scenario_type',
+  'users',
+  'offload_mode',
+  'num_requests_total',
+  'num_requests_successful',
 ]);
+
+/**
+ * `benchmark_type` values understood by the ingest.
+ * - `single_turn`    — fixed sequence-length runs (isl/osl set).
+ * - `agentic_traces` — trace-replay agentic runs (isl/osl null, `users` → conc).
+ */
+export type BenchmarkType = 'single_turn' | 'agentic_traces';
 
 /**
  * METRIC_KEYS from constants is the canonical set of known metric keys.
@@ -70,9 +83,13 @@ const _warnedMetricKeys = new Set<string>();
 
 export interface BenchmarkParams {
   config: ConfigParams;
-  isl: number;
-  osl: number;
+  benchmarkType: BenchmarkType;
+  // Null for agentic_traces; present for single_turn.
+  isl: number | null;
+  osl: number | null;
   conc: number;
+  /** 'on' | 'off' — KV cache offload to CPU. Defaults to 'off'. */
+  offloadMode: string;
   image: string | null;
   metrics: Record<string, number>;
 }
@@ -114,10 +131,15 @@ export function mapBenchmarkRow(
     return null;
   }
 
-  const isl = parseInt2(row.isl) ?? islOslFallback?.isl;
-  const osl = parseInt2(row.osl) ?? islOslFallback?.osl;
-  const conc = parseInt2(row.conc);
-  if (!isl || !osl || !conc) {
+  // Agentic-trace runs emit `scenario_type: 'agentic-coding'` (and variants),
+  // no isl/osl, and `users` instead of `conc`. Everything else stays as-is.
+  const isAgentic = String(row.scenario_type ?? '').startsWith('agentic');
+  const benchmarkType: BenchmarkType = isAgentic ? 'agentic_traces' : 'single_turn';
+
+  const isl = isAgentic ? null : (parseInt2(row.isl) ?? islOslFallback?.isl ?? null);
+  const osl = isAgentic ? null : (parseInt2(row.osl) ?? islOslFallback?.osl ?? null);
+  const conc = isAgentic ? parseInt2(row.users) : parseInt2(row.conc);
+  if (!conc || (!isAgentic && (!isl || !osl))) {
     tracker.skips.noIslOsl++;
     return null;
   }
@@ -182,6 +204,12 @@ export function mapBenchmarkRow(
     }
   }
 
+  // Agentic rows emit `offload_mode: "on" | "off"` as a string — preserve it
+  // as a stringified metric so the frontend can expose it in tooltips.
+  if (isAgentic && typeof row.offload_mode === 'string') {
+    (metrics as Record<string, unknown>).offload_mode = row.offload_mode;
+  }
+
   // Artifact names encode '/' as '#' to avoid path separators; restore the URI.
   const image = row.image ? String(row.image).replaceAll('#', '/') : null;
 
@@ -205,9 +233,14 @@ export function mapBenchmarkRow(
       numPrefillGpu,
       numDecodeGpu,
     },
+    benchmarkType,
     isl,
     osl,
     conc,
+    offloadMode:
+      typeof row.offload_mode === 'string' && row.offload_mode.length > 0
+        ? row.offload_mode
+        : 'off',
     image,
     metrics,
   };
