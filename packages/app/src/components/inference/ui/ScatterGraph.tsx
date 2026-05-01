@@ -84,8 +84,11 @@ function avoidLabelCollisions(
   labels.sort((a, b) => a.cx - b.cx);
   const placed: { left: number; right: number; top: number; bottom: number }[] = [];
   const pad = 1;
-  const candidates = [-8, 14, -22, 28];
   for (const lab of labels) {
+    // Candidates scale with the label's own height so multi-line labels don't
+    // overlap the point shape when flipped below.
+    const below = lab.h + 8;
+    const candidates = [-8, below, -8 - below - 4, 2 * below];
     let chosenDy: number | null = null;
     let chosenBox: { left: number; right: number; top: number; bottom: number } | null = null;
     for (const dy of candidates) {
@@ -1310,7 +1313,7 @@ const ScatterGraph = React.memo(
           getPointerEvents: (d) => (isPointVisible(d) ? 'auto' : 'none'),
           hideLabels: hidePointLabels || showGradientLabels,
           getLabelText: (d) =>
-            useAdvancedLabels ? `${getPointLabel(d)} C=${d.conc}` : `${d.tp} C=${d.conc}`,
+            useAdvancedLabels ? `${getPointLabel(d)}\nC=${d.conc}` : `${d.tp}\nC=${d.conc}`,
           foreground: 'var(--foreground)',
           dataAttrs: {
             'hw-key': (d) => String(d.hwKey),
@@ -1403,7 +1406,14 @@ const ScatterGraph = React.memo(
               // Labels
               const showLabels = !hidePointLabels && !showGradientLabels;
               overlayPoints.each(function (d) {
-                d3.select(this)
+                const lines = showLabels
+                  ? (useAdvancedLabels
+                      ? `${getPointLabel(d)}\nC=${d.conc}`
+                      : `${d.tp}\nC=${d.conc}`
+                    ).split('\n')
+                  : [];
+                const text = d3
+                  .select(this)
                   .selectAll<SVGTextElement, boolean>('.overlay-label')
                   .data(showLabels ? [true] : [])
                   .join('text')
@@ -1413,10 +1423,14 @@ const ScatterGraph = React.memo(
                   .style('fill', 'var(--foreground)')
                   .attr('font-size', '10px')
                   .attr('font-weight', '700')
-                  .attr('pointer-events', 'none')
-                  .text(
-                    useAdvancedLabels ? `${getPointLabel(d)} C=${d.conc}` : `${d.tp} C=${d.conc}`,
-                  );
+                  .attr('pointer-events', 'none');
+                text
+                  .selectAll<SVGTSpanElement, string>('tspan')
+                  .data(lines)
+                  .join('tspan')
+                  .attr('x', 0)
+                  .attr('dy', (_l, i) => (i === 0 ? `-${(lines.length - 1) * 1.1}em` : '1.1em'))
+                  .text((l) => l);
               });
 
               // Overlay tooltip handlers
