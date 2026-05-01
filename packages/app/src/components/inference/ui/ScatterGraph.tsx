@@ -1516,10 +1516,9 @@ const ScatterGraph = React.memo(
             .attr('pointer-events', 'none');
         });
 
-        // Offload halo: dashed ring on frontier points that used KV offload
+        // Offload halo: dashed ring on every point that used KV offload (Pareto or not)
         zoomGroup.selectAll<SVGGElement, InferenceData>('.dot-group').each(function (d) {
-          const onFrontier = optimalPointKeys.has(`${d.hwKey}_${d.precision}-${d.x}-${d.y}`);
-          const showHalo = onFrontier && d.offload_mode === 'on';
+          const showHalo = d.offload_mode === 'on';
           d3.select(this)
             .selectAll<SVGCircleElement, boolean>('.offload-halo')
             .data(showHalo ? [true] : [])
