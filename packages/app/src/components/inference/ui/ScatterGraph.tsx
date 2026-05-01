@@ -295,6 +295,10 @@ const ScatterGraph = React.memo(
     const buildPointConfigId = useCallback((point: InferenceData): string => {
       let key = `${point.hwKey}|${point.precision}|${point.tp}|${point.conc}|${point.decode_ep ?? 0}|${point.prefill_tp ?? 0}|${point.prefill_ep ?? 0}`;
       if (point.disagg) key += `|disagg|${point.num_prefill_gpu ?? 0}|${point.num_decode_gpu ?? 0}`;
+      // Agentic runs emit two rows per (config, conc) — one offload=on, one off.
+      // Without this suffix, d3's data join treats them as the same point and
+      // drops one variant (along with its halo).
+      if (point.offload_mode) key += `|offload-${point.offload_mode}`;
       return key;
     }, []);
 

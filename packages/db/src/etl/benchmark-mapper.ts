@@ -138,11 +138,23 @@ export function mapBenchmarkRow(
 
   const isl = isAgentic ? null : (parseInt2(row.isl) ?? islOslFallback?.isl ?? null);
   const osl = isAgentic ? null : (parseInt2(row.osl) ?? islOslFallback?.osl ?? null);
-  const conc = isAgentic ? parseInt2(row.users) : parseInt2(row.conc);
+  // Agentic artifacts encode concurrency as `users` in older schemas and `conc` in newer ones.
+  const conc = isAgentic ? (parseInt2(row.users) ?? parseInt2(row.conc)) : parseInt2(row.conc);
   if (!conc || (!isAgentic && (!isl || !osl))) {
     tracker.skips.noIslOsl++;
     return null;
   }
+
+  // Agentic offload signal: prefer `offload_mode` ('on'|'off'), fall back to `offloading`
+  // ('none' → 'off'; any other non-empty value → 'on').
+  const offloadModeRaw =
+    typeof row.offload_mode === 'string' && row.offload_mode.length > 0
+      ? row.offload_mode
+      : typeof row.offloading === 'string' && row.offloading.length > 0
+        ? row.offloading === 'none'
+          ? 'off'
+          : 'on'
+        : 'off';
 
   const { framework, disagg } = normalizeFramework(String(row.framework ?? ''), row.disagg);
   const isMultinode = parseBool(row.is_multinode);
@@ -204,10 +216,10 @@ export function mapBenchmarkRow(
     }
   }
 
-  // Agentic rows emit `offload_mode: "on" | "off"` as a string — preserve it
-  // as a stringified metric so the frontend can expose it in tooltips.
-  if (isAgentic && typeof row.offload_mode === 'string') {
-    (metrics as Record<string, unknown>).offload_mode = row.offload_mode;
+  // Agentic rows emit `offload_mode: "on" | "off"` (or older `offloading: "none"|...`)
+  // — preserve as a stringified metric so the frontend can expose it in tooltips.
+  if (isAgentic) {
+    (metrics as Record<string, unknown>).offload_mode = offloadModeRaw;
   }
 
   // Artifact names encode '/' as '#' to avoid path separators; restore the URI.
@@ -237,10 +249,7 @@ export function mapBenchmarkRow(
     isl,
     osl,
     conc,
-    offloadMode:
-      typeof row.offload_mode === 'string' && row.offload_mode.length > 0
-        ? row.offload_mode
-        : 'off',
+    offloadMode: offloadModeRaw,
     image,
     metrics,
   };
