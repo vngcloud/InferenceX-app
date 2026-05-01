@@ -101,15 +101,30 @@ if (isDownloadMode) {
     } catch {}
   }
 
-  const byName = new Map<string, (typeof allArtifacts)[0]>();
+  // Strip the trailing `_<runner-pool>_<attempt-digits>` token from each
+  // artifact name, then group by the resulting logical name and keep only
+  // the most recent per group. Without this, two artifacts produced on
+  // different runners for the same logical config (e.g. `…_h200-cw_00` and
+  // `…_h200-dgxc-slurm_1`) both land in the DB and the failed one's empty
+  // metrics can overwrite the good one via ON CONFLICT DO UPDATE.
+  //
+  // The runner pool name itself has no underscores (`h200-cw`,
+  // `h200-dgxc-slurm`, `b200-nb`), so `[a-zA-Z0-9.-]*` keeps the strip
+  // bounded — using `\w` here would over-match across earlier `_`
+  // separators and collapse different (conc, offload) variants into the
+  // same logical name.
+  const RUNNER_SUFFIX_RE = /_[a-zA-Z][a-zA-Z0-9.-]*_\d+$/;
+  const byLogical = new Map<string, (typeof allArtifacts)[0]>();
   for (const a of allArtifacts) {
-    const existing = byName.get(a.name);
+    const key = a.name.replace(RUNNER_SUFFIX_RE, '');
+    const existing = byLogical.get(key);
     if (!existing || a.created_at > existing.created_at) {
-      byName.set(a.name, a);
+      byLogical.set(key, a);
     }
   }
 
-  for (const [name, artifact] of byName) {
+  for (const [, artifact] of byLogical) {
+    const name = artifact.name;
     console.log(`  ${name}`);
     const zipPath = path.join(artifactsDir, 'artifact.zip');
     execSync(`gh api "${artifact.archive_download_url}" > "${zipPath}"`, {
@@ -121,7 +136,7 @@ if (isDownloadMode) {
     fs.unlinkSync(zipPath);
   }
 
-  console.log(`\n  Downloaded ${byName.size} artifact(s)`);
+  console.log(`\n  Downloaded ${byLogical.size} artifact(s)`);
 
   // Fetch run attempt from API
   const attemptStr = execSync(
@@ -510,11 +525,17 @@ async function main(): Promise<void> {
 
   const { skips, unmappedModels, unmappedHws, unmappedPrecisions } = tracker;
   const totalSkips =
-    skips.badZip + skips.unmappedModel + skips.unmappedHw + skips.noIslOsl + skips.dbError;
+    skips.badZip +
+    skips.unmappedModel +
+    skips.unmappedHw +
+    skips.noIslOsl +
+    skips.failedRun +
+    skips.dbError;
   if (totalSkips > 0) {
     console.log(`\n  Skipped: ${totalSkips} rows`);
     const skipLines: [string, number][] = [
       ['no isl/osl (old format)', skips.noIslOsl],
+      ['failed run (0 successful)', skips.failedRun],
       ['unmapped model', skips.unmappedModel],
       ['unmapped hw', skips.unmappedHw],
       ['bad/empty zip', skips.badZip],

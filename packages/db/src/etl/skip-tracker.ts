@@ -8,6 +8,7 @@ export interface Skips {
   unmappedModel: number;
   unmappedHw: number;
   noIslOsl: number;
+  failedRun: number;
   dbError: number;
 }
 
@@ -66,7 +67,14 @@ const MAX_DB_ERRORS = 10;
  * @returns A `SkipTracker` with zeroed counters and empty unmapped-name sets.
  */
 export function createSkipTracker(): SkipTracker {
-  const skips: Skips = { badZip: 0, unmappedModel: 0, unmappedHw: 0, noIslOsl: 0, dbError: 0 };
+  const skips: Skips = {
+    badZip: 0,
+    unmappedModel: 0,
+    unmappedHw: 0,
+    noIslOsl: 0,
+    failedRun: 0,
+    dbError: 0,
+  };
   const unmappedModels = new Set<string>();
   const unmappedHws = new Set<string>();
   const unmappedPrecisions = new Set<string>();

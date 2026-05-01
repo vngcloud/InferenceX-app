@@ -434,6 +434,7 @@ async function mapWorkflowDir(
       unmappedModel: local.skips.unmappedModel,
       unmappedHw: local.skips.unmappedHw,
       noIslOsl: local.skips.noIslOsl,
+      failedRun: local.skips.failedRun,
     },
     localUnmappedModels: new Set(local.unmappedModels),
     localUnmappedHws: new Set(local.unmappedHws),

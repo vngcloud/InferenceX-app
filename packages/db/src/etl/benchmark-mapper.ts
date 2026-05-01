@@ -145,6 +145,20 @@ export function mapBenchmarkRow(
     return null;
   }
 
+  // Failed-run guard: aggregated artifacts (`results_bmk`) merge rows from
+  // every runner, including ones with 0 successful requests and null metrics.
+  // Without this skip, the empty row's nulls overwrite a good row via
+  // ON CONFLICT DO UPDATE when both share the same (config, conc, offload).
+  if (
+    typeof row.num_requests_successful === 'number' &&
+    row.num_requests_successful === 0 &&
+    typeof row.num_requests_total === 'number' &&
+    row.num_requests_total > 0
+  ) {
+    tracker.skips.failedRun++;
+    return null;
+  }
+
   // Agentic offload signal: prefer `offload_mode` ('on'|'off'), fall back to `offloading`
   // ('none' → 'off'; any other non-empty value → 'on').
   const offloadModeRaw =
