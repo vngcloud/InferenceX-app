@@ -4,8 +4,14 @@ import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import { BarChart3, ChevronDown, Table2, X } from 'lucide-react';
 
+import chartDefinitions from '@/components/inference/inference-chart-config.json';
 import { useInference } from '@/components/inference/InferenceContext';
-import type { InferenceData, OverlayData, TrendDataPoint } from '@/components/inference/types';
+import type {
+  ChartDefinition,
+  InferenceData,
+  OverlayData,
+  TrendDataPoint,
+} from '@/components/inference/types';
 import { processOverlayChartData } from '@/components/inference/utils';
 import InferenceTable from '@/components/inference/ui/InferenceTable';
 import ScatterGraph from '@/components/inference/ui/ScatterGraph';
@@ -159,7 +165,8 @@ export default function ChartDisplay() {
     track('inference_view_changed', { view: value, chartIndex: index });
   };
 
-  const { unofficialRunInfo, getOverlayData, isUnofficialRun } = useUnofficialRun();
+  const { unofficialRunInfo, unofficialRunInfos, runIndexByUrl, getOverlayData, isUnofficialRun } =
+    useUnofficialRun();
 
   // Compute overlay data for each chart type — must match useChartData processing
   const overlayDataByChartType = useMemo(() => {
@@ -169,6 +176,23 @@ export default function ChartDisplay() {
 
     const e2eRaw = getOverlayData(selectedModel, selectedSequence, 'e2e');
     const interactivityRaw = getOverlayData(selectedModel, selectedSequence, 'interactivity');
+
+    // Per-row run lookup used by the overlay tooltip so hovering a point shows
+    // its OWN run's branch, not the banner-level first-run fallback.
+    const getRunForRow = (row: InferenceData) => {
+      const url = row.run_url ?? null;
+      if (!url) return undefined;
+      if (url in runIndexByUrl) {
+        const info = unofficialRunInfos[runIndexByUrl[url]];
+        return info ? { branch: info.branch, url: info.url } : undefined;
+      }
+      const idMatch = url.match(/\/runs\/(\d+)/);
+      if (idMatch && idMatch[1] in runIndexByUrl) {
+        const info = unofficialRunInfos[runIndexByUrl[idMatch[1]]];
+        return info ? { branch: info.branch, url: info.url } : undefined;
+      }
+      return undefined;
+    };
 
     const processData = (
       rawData: { data: InferenceData[]; hardwareConfig: any } | null,
@@ -191,6 +215,7 @@ export default function ChartDisplay() {
         hardwareConfig: rawData.hardwareConfig,
         label: unofficialRunInfo.branch,
         runUrl: unofficialRunInfo.url,
+        getRunForRow,
       };
     };
 
@@ -200,6 +225,8 @@ export default function ChartDisplay() {
     };
   }, [
     unofficialRunInfo,
+    unofficialRunInfos,
+    runIndexByUrl,
     getOverlayData,
     selectedModel,
     selectedSequence,
@@ -266,6 +293,23 @@ export default function ChartDisplay() {
   // keeps old graphs visible so we never flash skeletons when switching filters.
   const isFirstLoad = loading && graphs.length === 0;
 
+  // When the selected model has no DB data but an unofficial run provides overlay
+  // data for this (model, sequence), synthesize empty-data stub graphs from the
+  // chart-config so the overlay has a base chart to render on.
+  const effectiveGraphs = useMemo(() => {
+    if (graphs.length > 0) return graphs;
+    const hasOverlay =
+      (overlayDataByChartType.e2e?.data.length ?? 0) > 0 ||
+      (overlayDataByChartType.interactivity?.data.length ?? 0) > 0;
+    if (!hasOverlay) return graphs;
+    return (chartDefinitions as ChartDefinition[]).map((chartDefinition) => ({
+      model: selectedModel,
+      sequence: selectedSequence,
+      chartDefinition,
+      data: [] as InferenceData[],
+    }));
+  }, [graphs, overlayDataByChartType, selectedModel, selectedSequence]);
+
   const displayGraphs = isFirstLoad
     ? Array.from({ length: 2 }).map((_, index) => (
         <Card key={`skeleton-${index}`}>
@@ -274,9 +318,9 @@ export default function ChartDisplay() {
           <Skeleton className="h-[600px] w-full" />
         </Card>
       ))
-    : graphs.length === 0
+    : effectiveGraphs.length === 0
       ? []
-      : graphs.map((graph, graphIndex) => (
+      : effectiveGraphs.map((graph, graphIndex) => (
           <section key={graphIndex} className="pt-8 md:pt-0">
             <figure data-testid="chart-figure" className="relative rounded-lg">
               <ChartButtons
@@ -442,11 +486,20 @@ export default function ChartDisplay() {
                   );
 
                   if (getViewMode(graphIndex) === 'table') {
+                    const overlay =
+                      graph.chartDefinition.chartType === 'e2e'
+                        ? overlayDataByChartType.e2e
+                        : overlayDataByChartType.interactivity;
+                    const overlayRows = (overlay?.data ?? []).filter((p) =>
+                      selectedPrecisions.includes(p.precision),
+                    );
                     return (
                       <>
                         {chartCaption}
                         <InferenceTable
-                          data={graph.data}
+                          data={
+                            overlayRows.length > 0 ? [...graph.data, ...overlayRows] : graph.data
+                          }
                           chartDefinition={graph.chartDefinition}
                           selectedYAxisMetric={selectedYAxisMetric}
                         />
@@ -625,6 +678,8 @@ export default function ChartDisplay() {
               lineConfigs={trackedConfigs}
               yLabel={currentYLabel}
               logScale={logScale}
+              selectedPrecisions={selectedPrecisions}
+              selectedModel={selectedModel}
             />
           </div>
           <div className="relative">
@@ -639,6 +694,8 @@ export default function ChartDisplay() {
               lineConfigs={trackedConfigs}
               yLabel={currentXLabel}
               logScale={logScale}
+              selectedPrecisions={selectedPrecisions}
+              selectedModel={selectedModel}
             />
           </div>
         </DialogContent>

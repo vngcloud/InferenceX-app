@@ -132,8 +132,10 @@ export function buildEvaluationChartRows(
       const hwLabel = hwConfig.label;
 
       return {
+        evalResultId: item.id,
         configId: item.config_id,
         hwKey,
+        hardware: item.hardware,
         configLabel: buildConfigLabel(
           hwLabel,
           item.framework,
@@ -180,18 +182,20 @@ export function buildEvaluationChartRows(
     })
     .filter((item): item is EvaluationChartData => item !== null);
 
-  // Dedup by configId so each distinct config (unique prefill/decode geometry,
-  // spec method, precision, etc.) gets its own "latest date" slot. Prior code
-  // keyed by (hwKey, framework, spec, precision), which coalesced disagg
-  // variants and risked dropping one's history when another backfilled.
-  const latestDateForConfig = new Map<number, string>();
+  // Dedup by (configId, conc) so each distinct config (unique prefill/decode
+  // geometry, spec method, precision, etc.) gets its own "latest date" slot
+  // per concurrency. `conc` lives on `eval_results`, not `configs`, so a
+  // single config_id spans multiple concurrencies — keying on configId alone
+  // would collapse them.
+  const latestDateForConfig = new Map<string, string>();
   for (const item of allData) {
-    const existing = latestDateForConfig.get(item.configId);
-    if (!existing || item.date > existing) latestDateForConfig.set(item.configId, item.date);
+    const key = `${item.configId}|${item.conc}`;
+    const existing = latestDateForConfig.get(key);
+    if (!existing || item.date > existing) latestDateForConfig.set(key, item.date);
   }
 
   return allData
-    .filter((item) => item.date === latestDateForConfig.get(item.configId))
+    .filter((item) => item.date === latestDateForConfig.get(`${item.configId}|${item.conc}`))
     .toSorted((a, b) => a.configLabel.localeCompare(b.configLabel));
 }
 
@@ -199,19 +203,21 @@ export function buildEvaluationChartRows(
  * Aggregate repeated eval rows for the same config (retries, reruns on the same
  * date, etc.) into a single data point with min/max/error range metadata.
  *
- * Grouping is by `configId` rather than `configLabel`: two distinct configs
- * could theoretically render the same label — `configId` keys directly off the
- * row identity from the configs natural key.
+ * Grouping is by `(configId, conc)` rather than `configLabel`: two distinct
+ * configs could theoretically render the same label, so `configId` is the
+ * stable row identity. `conc` lives on `eval_results` (not on `configs`), so a
+ * single config_id can span multiple concurrencies that must stay separate.
  */
 export function aggregateEvaluationChartRows(
   unfilteredChartData: EvaluationChartData[],
   enabledHardware: Set<string>,
 ): EvaluationChartData[] {
-  const grouped = new Map<number, EvaluationChartData[]>();
+  const grouped = new Map<string, EvaluationChartData[]>();
   for (const data of unfilteredChartData) {
     if (!enabledHardware.has(String(data.hwKey))) continue;
-    if (!grouped.has(data.configId)) grouped.set(data.configId, []);
-    grouped.get(data.configId)!.push(data);
+    const key = `${data.configId}|${data.conc}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(data);
   }
 
   return [...grouped.values()]
@@ -233,8 +239,17 @@ export function aggregateEvaluationChartRows(
       }
 
       const meanScore = sum / dataPoints.length;
+      // Pick the highest evalResultId in the group — eval_results uses a
+      // bigserial PK so the highest id is the most recently inserted run,
+      // which is the one most likely to have eval_samples persisted for the
+      // drawer. Falls back to dataPoints[0] when ids aren't set.
+      const latest = dataPoints.reduce(
+        (best, d) => (d.evalResultId > best.evalResultId ? d : best),
+        dataPoints[0],
+      );
       return {
         ...dataPoints[0],
+        evalResultId: latest.evalResultId,
         score: meanScore,
         scoreError: (errMax - errMin) / 2,
         minScore: rawMin,

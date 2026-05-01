@@ -260,8 +260,10 @@ export function createMockEvaluationChartData(
   overrides?: Partial<EvaluationChartData>,
 ): EvaluationChartData {
   return {
+    evalResultId: 1,
     configId: 1,
     hwKey: 'b200_trt' as any,
+    hardware: 'b200',
     configLabel: 'B200 (TRT)',
     score: 87.5,
     scoreError: 1.2,
@@ -438,11 +440,14 @@ export function createMockUnofficialRunContext(
   return {
     isUnofficialRun: false,
     unofficialRunInfo: null,
+    unofficialRunInfos: [],
+    runIndexByUrl: {},
     unofficialChartData: null,
     unofficialEvalRows: null,
     loading: false,
     error: null,
     clearUnofficialRun: namedStub('clearUnofficialRun'),
+    dismissRun: namedStub('dismissRun'),
     availableModelsAndSequences: [],
     getOverlayData: cy
       .stub()

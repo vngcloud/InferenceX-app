@@ -10,6 +10,7 @@ import ChartLegend from '@/components/ui/chart-legend';
 import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import { computeToggle } from '@/hooks/useTogglableSet';
 import { getHardwareConfig, getModelSortIndex } from '@/lib/constants';
+import { getModelWatermark } from '@/lib/data-mappings';
 import { formatNumber, getDisplayLabel, updateRepoUrl } from '@/lib/utils';
 import { D3Chart } from '@/lib/d3-chart/D3Chart';
 import type {
@@ -22,12 +23,18 @@ import type {
 import type { ContinuousScale } from '@/lib/d3-chart/types';
 import { computeTooltipPosition } from '@/lib/d3-chart/layers/scatter-points';
 import {
+  overlayRooflineDasharray,
+  overlayRunColor,
+  overlayRunIndex,
+} from '@/lib/overlay-run-style';
+import {
   POINT_SIZE,
   HIT_AREA_RADIUS,
   formatLargeNumber,
   logTickFormat,
   applyHoverState,
   applyNormalState,
+  getShapeKeyForPrecision,
 } from '@/lib/chart-rendering';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import {
@@ -201,6 +208,7 @@ const ScatterGraph = React.memo(
       toggleHwType,
       removeHwType,
       hwTypesWithData,
+      selectedModel,
       selectedPrecisions,
       selectedYAxisMetric,
       availableRuns,
@@ -237,6 +245,8 @@ const ScatterGraph = React.memo(
       resetOverlayHwTypes,
       localOfficialOverride,
       setLocalOfficialOverride,
+      runIndexByUrl,
+      unofficialRunInfos,
     } = useUnofficialRun();
     const chartRef = useRef<D3ChartHandle>(null);
 
@@ -417,17 +427,24 @@ const ScatterGraph = React.memo(
     }, [filteredData, processedOverlayData]);
 
     const overlayRooflines = useMemo(() => {
-      if (processedOverlayData.length === 0) return {};
+      interface Entry {
+        hwKey: string;
+        runIndex: number;
+        points: InferenceData[];
+      }
+      if (processedOverlayData.length === 0) return {} as Record<string, Entry>;
+      // Group by hwKey + precision + runIndex so overlay rooflines from different
+      // unofficial runs stay separate and can be styled with per-run hue shifts.
       const grouped = processedOverlayData.reduce(
         (acc, p) => {
-          const key = `${p.hwKey}_${p.precision}`;
-          if (!acc[key]) acc[key] = [];
-          acc[key].push(p);
+          const runIndex = overlayRunIndex(p.run_url ?? null, runIndexByUrl);
+          const key = `${p.hwKey}_${p.precision}_run${runIndex}`;
+          if (!acc[key]) acc[key] = { hwKey: String(p.hwKey), runIndex, points: [] };
+          acc[key].points.push(p);
           return acc;
         },
-        {} as Record<string, InferenceData[]>,
+        {} as Record<string, Entry>,
       );
-      const result: Record<string, InferenceData[]> = {};
       const rooflineKey = `${selectedYAxisMetric}_roofline` as keyof ChartDefinition;
       const dir = chartDefinition[rooflineKey] as
         | 'upper_right'
@@ -435,20 +452,21 @@ const ScatterGraph = React.memo(
         | 'lower_left'
         | 'lower_right'
         | undefined;
-      for (const hw of Object.keys(grouped)) {
+      const result: Record<string, Entry> = {};
+      for (const [key, group] of Object.entries(grouped)) {
         const front =
           dir === 'upper_right'
-            ? paretoFrontUpperRight(grouped[hw])
+            ? paretoFrontUpperRight(group.points)
             : dir === 'upper_left'
-              ? paretoFrontUpperLeft(grouped[hw])
+              ? paretoFrontUpperLeft(group.points)
               : dir === 'lower_left'
-                ? paretoFrontLowerLeft(grouped[hw])
-                : paretoFrontLowerRight(grouped[hw]);
+                ? paretoFrontLowerLeft(group.points)
+                : paretoFrontLowerRight(group.points);
         front.sort((a, b) => a.x - b.x);
-        result[hw] = front;
+        result[key] = { hwKey: group.hwKey, runIndex: group.runIndex, points: front };
       }
       return result;
-    }, [processedOverlayData, selectedYAxisMetric, chartDefinition]);
+    }, [processedOverlayData, selectedYAxisMetric, chartDefinition, runIndexByUrl]);
 
     // All official points for rendering (unfiltered — visibility via opacity)
     const pointsData = useMemo(() => Object.values(groupedData).flat(), [groupedData]);
@@ -717,9 +735,15 @@ const ScatterGraph = React.memo(
         getRulerX: (d: InferenceData, xScale: any) => (xScale as ContinuousScale)(d.x),
         getRulerY: (d: InferenceData, yScale: any) => (yScale as ContinuousScale)(d.y),
         onHoverStart: (sel: d3.Selection<any, InferenceData, any, any>, d: InferenceData) =>
-          applyHoverState(sel.select('.visible-shape') as any, d.precision),
+          applyHoverState(
+            sel.select('.visible-shape') as any,
+            getShapeKeyForPrecision(d.precision, selectedPrecisions),
+          ),
         onHoverEnd: (sel: d3.Selection<any, InferenceData, any, any>, d: InferenceData) =>
-          applyNormalState(sel.select('.visible-shape') as any, d.precision),
+          applyNormalState(
+            sel.select('.visible-shape') as any,
+            getShapeKeyForPrecision(d.precision, selectedPrecisions),
+          ),
         onPointClick: (d: InferenceData) => {
           track('latency_data_point_clicked', { hw: String(d.hwKey), x: d.x, y: d.y });
           // Attach track-over-time button handler in the tooltip
@@ -755,6 +779,7 @@ const ScatterGraph = React.memo(
         addTrackedConfig,
         removeTrackedConfig,
         chartDefinition.chartType,
+        selectedPrecisions,
       ],
     );
 
@@ -1349,6 +1374,7 @@ const ScatterGraph = React.memo(
             'hw-key': (d) => String(d.hwKey),
             precision: (d) => d.precision,
           },
+          selectedPrecisions,
         },
         keyFn: buildPointConfigId,
       };
@@ -1373,16 +1399,18 @@ const ScatterGraph = React.memo(
                 key: string;
                 points: InferenceData[];
                 stroke: string;
+                runIndex: number;
               }
               const ovEntries: OvEntry[] = [];
-              Object.entries(overlayRooflines).forEach(([key, pts]) => {
-                const hw = key.split('_').slice(0, -1).join('_');
-                const hwCfg = overlayData.hardwareConfig[hw];
-                if (hwCfg && pts.length > 1) {
+              Object.entries(overlayRooflines).forEach(([key, group]) => {
+                const hwCfg = overlayData.hardwareConfig[group.hwKey];
+                if (hwCfg && group.points.length > 1) {
                   ovEntries.push({
                     key,
-                    points: pts,
-                    stroke: getCssColor(resolveColor(hw)),
+                    points: group.points,
+                    // Color by run — same palette entry the legend uses, so they match.
+                    stroke: overlayRunColor(group.runIndex),
+                    runIndex: group.runIndex,
                   });
                 }
               });
@@ -1399,8 +1427,9 @@ const ScatterGraph = React.memo(
                 .attr('fill', 'none')
                 .attr('stroke', (d) => d.stroke)
                 .attr('stroke-width', 2)
-                .attr('stroke-dasharray', '6 3')
-                .attr('d', (d) => lineGen(d.points));
+                .attr('stroke-dasharray', (d) => overlayRooflineDasharray(d.runIndex))
+                .attr('d', (d) => lineGen(d.points))
+                .style('filter', null);
 
               // Overlay X-shape points — index-keyed so every point renders
               const overlayPoints = zoomGroup
@@ -1429,9 +1458,12 @@ const ScatterGraph = React.memo(
                 });
 
               overlayPoints.attr('transform', (d) => `translate(${xScale(d.x)},${yScale(d.y)})`);
+              overlayPoints.style('filter', null);
               overlayPoints
                 .select('.overlay-x')
-                .attr('stroke', (d) => getCssColor(resolveColor(d.hwKey as string)));
+                .attr('stroke', (d) =>
+                  overlayRunColor(overlayRunIndex(d.run_url ?? null, runIndexByUrl)),
+                );
 
               // Labels
               const showLabels = !hidePointLabels && !showGradientLabels;
@@ -1555,10 +1587,10 @@ const ScatterGraph = React.memo(
                 .y((d) => newYScale(d.y))
                 .curve(d3.curveMonotoneX);
 
-              Object.entries(overlayRooflines).forEach(([key, pts]) => {
-                if (pts.length < 2) return;
+              Object.entries(overlayRooflines).forEach(([key, group]) => {
+                if (group.points.length < 2) return;
                 const sel = zoomGroup.select<SVGPathElement>(`.overlay-roofline-${key}`);
-                if (!sel.empty()) sel.attr('d', lineGen(pts) as string);
+                if (!sel.empty()) sel.attr('d', lineGen(group.points) as string);
               });
 
               // Update overlay points
@@ -1591,6 +1623,7 @@ const ScatterGraph = React.memo(
       overlayData,
       processedOverlayData,
       overlayRooflines,
+      runIndexByUrl,
       hardwareConfig,
       xLabel,
       yLabel,
@@ -1760,7 +1793,7 @@ const ScatterGraph = React.memo(
         chartId={chartId}
         data={chartScaleData}
         margin={CHART_MARGIN}
-        watermark={isUnofficialRun ? 'unofficial' : 'logo'}
+        watermark={getModelWatermark(selectedModel, isUnofficialRun)}
         testId="scatter-graph"
         grabCursor={true}
         caption={caption}
@@ -1795,32 +1828,35 @@ const ScatterGraph = React.memo(
             onItemHoverEnd={handleLegendHoverEnd}
             onItemRemove={showAllHardwareTypes ? undefined : removeHwType}
             legendItems={[
-              ...(overlayData
-                ? Object.entries(overlayData.hardwareConfig)
-                    .filter(([key]) =>
-                      overlayData.data.some(
-                        (d) => d.hwKey === key && selectedPrecisions.includes(d.precision),
-                      ),
-                    )
-                    .map(([key, hwConfig]) => {
-                      const parsed = parseHwKeyToLabel(key);
+              // Overlay legend: one entry per loaded unofficial run that actually
+              // contributes points to this chart. Colored from the shared palette
+              // so the legend swatch matches the stroke color used in the chart.
+              ...(overlayData && unofficialRunInfos.length > 0
+                ? unofficialRunInfos
+                    .map((info, idx) => {
+                      const hasPoints = overlayData.data.some(
+                        (d) =>
+                          overlayRunIndex(d.run_url ?? null, runIndexByUrl) === idx &&
+                          selectedPrecisions.includes(d.precision),
+                      );
+                      if (!hasPoints) return null;
+                      const branch = info.branch || `run ${info.id}`;
                       return {
-                        name: `✕ ${key}`,
-                        label: `✕ ${parsed.label}`,
-                        color: resolveColor(key),
-                        title: `UNOFFICIAL: ${hwConfig.framework || parsed.label}`,
+                        name: `✕ unofficial-run-${info.id}`,
+                        label: `✕ ${branch}`,
+                        color: overlayRunColor(idx),
+                        title: `UNOFFICIAL: ${branch}`,
                         isHighlighted: true,
-                        hw: `overlay-${key}`,
+                        hw: `overlay-run-${info.id}`,
                         isActive: true,
                         onClick: () => {},
                         tooltip: (
                           <div className="font-normal text-xs">
                             <div className="text-red-500 font-semibold">UNOFFICIAL RUN</div>
-                            <div>Branch: {overlayData.label}</div>
-                            <div>Hardware: {parsed.label}</div>
-                            {overlayData.runUrl && (
+                            <div>Branch: {branch}</div>
+                            {info.url && (
                               <a
-                                href={overlayData.runUrl}
+                                href={info.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="underline"
@@ -1832,6 +1868,7 @@ const ScatterGraph = React.memo(
                         ),
                       };
                     })
+                    .filter((x): x is NonNullable<typeof x> => x !== null)
                 : []),
               ...Object.entries(hardwareConfig)
                 .filter(([key]) =>
@@ -1967,7 +2004,7 @@ const ScatterGraph = React.memo(
                   ]
                 : []
             }
-            showFpShapeIndicators={selectedPrecisions.length > 1}
+            precisionIndicators={selectedPrecisions}
             enableTooltips={true}
           />
         }

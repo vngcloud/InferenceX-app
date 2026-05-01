@@ -17,6 +17,7 @@ import {
   type EvalBenchmark,
   type Precision,
   getEvalBenchmarkLabel,
+  getModelWatermark,
   getPrecisionLabel,
 } from '@/lib/data-mappings';
 import ChartLegend from '@/components/ui/chart-legend';
@@ -24,6 +25,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { computeToggle } from '@/hooks/useTogglableSet';
+import { overlayRunColor, overlayRunIndex } from '@/lib/overlay-run-style';
 
 const BASE_MARGIN = { top: 24, right: 24, bottom: 52 };
 const OVERLAY_X_SIZE = 6;
@@ -158,14 +160,36 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
   const {
     isUnofficialRun,
     unofficialRunInfo,
+    unofficialRunInfos,
     activeOverlayHwTypes,
     setActiveOverlayHwTypes,
     allOverlayHwTypes,
     resetOverlayHwTypes,
     localOfficialOverride,
     setLocalOfficialOverride,
+    runIndexByUrl,
   } = useUnofficialRun();
   const chartRef = useRef<D3ChartHandle>(null);
+
+  /** Look up the branch for an eval row via its `runUrl`, falling back to the
+   * first loaded run. Used so hovering an overlay bar shows that row's own
+   * branch across multi-run loads. */
+  const branchForRow = useCallback(
+    (datum: EvaluationChartData): string | undefined => {
+      const url = datum.runUrl ?? null;
+      if (url) {
+        const direct = runIndexByUrl[url];
+        if (direct !== undefined) return unofficialRunInfos[direct]?.branch;
+        const idMatch = url.match(/\/runs\/(\d+)/);
+        if (idMatch) {
+          const viaId = runIndexByUrl[idMatch[1]];
+          if (viaId !== undefined) return unofficialRunInfos[viaId]?.branch;
+        }
+      }
+      return unofficialRunInfo?.branch ?? undefined;
+    },
+    [runIndexByUrl, unofficialRunInfos, unofficialRunInfo],
+  );
 
   const effectiveOfficialHardware = localOfficialOverride ?? enabledHardware;
 
@@ -318,33 +342,45 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
 
   const legendItems = useMemo(
     () => [
-      ...unofficialConfigurations.map(({ hwKey, configLabel }) => ({
-        name: `✕ ${configLabel}`,
-        label: `✕ ${configLabel.replaceAll('\n', ' ')}`,
-        color: resolveColor(configLabel, hwKey),
-        title: `UNOFFICIAL: ${configLabel.replaceAll('\n', ' ')}`,
-        isHighlighted: true,
-        hw: `overlay:${hwKey}`,
-        isActive: true,
-        onClick: () => {},
-        tooltip: (
-          <div className="font-normal text-xs">
-            <div className="text-red-500 font-semibold">UNOFFICIAL RUN</div>
-            <div>Branch: {unofficialRunInfo?.branch}</div>
-            <div>Config: {configLabel.replaceAll('\n', ' ')}</div>
-            {unofficialRunInfo?.url && (
-              <a
-                href={unofficialRunInfo.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline"
-              >
-                View workflow run
-              </a>
-            )}
-          </div>
-        ),
-      })),
+      // Overlay legend: one entry per loaded unofficial run that contributes
+      // points to the current chart. Same palette color as the chart strokes.
+      ...(unofficialConfigurations.length > 0 && unofficialRunInfos.length > 0
+        ? unofficialRunInfos
+            .map((info, idx) => {
+              const hasPoints = unofficialChartData.some(
+                (d) => overlayRunIndex(d.runUrl ?? null, runIndexByUrl) === idx,
+              );
+              if (!hasPoints) return null;
+              const branch = info.branch || `run ${info.id}`;
+              return {
+                name: `✕ unofficial-run-${info.id}`,
+                label: `✕ ${branch}`,
+                color: overlayRunColor(idx),
+                title: `UNOFFICIAL: ${branch}`,
+                isHighlighted: true,
+                hw: `overlay-run-${info.id}`,
+                isActive: true,
+                onClick: () => {},
+                tooltip: (
+                  <div className="font-normal text-xs">
+                    <div className="text-red-500 font-semibold">UNOFFICIAL RUN</div>
+                    <div>Branch: {branch}</div>
+                    {info.url && (
+                      <a
+                        href={info.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        View workflow run
+                      </a>
+                    )}
+                  </div>
+                ),
+              };
+            })
+            .filter((x): x is NonNullable<typeof x> => x !== null)
+        : []),
       ...configurations.map(({ hwKey, configLabel }) => ({
         name: configLabel,
         label: configLabel.replaceAll('\n', ' '),
@@ -366,7 +402,9 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
       highlightedConfigs,
       resolveColor,
       unofficialConfigurations,
-      unofficialRunInfo,
+      unofficialChartData,
+      unofficialRunInfos,
+      runIndexByUrl,
     ],
   );
 
@@ -535,11 +573,14 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
               return bar;
             });
 
+          bars.style('filter', null);
           bars
             .selectAll<SVGLineElement, EvaluationChartData>(
               '.unofficial-eb-stem, .unofficial-eb-cap-top, .unofficial-eb-cap-bot',
             )
-            .attr('stroke', (d) => getCssColor(resolveColor(d.configLabel, String(d.hwKey))));
+            .attr('stroke', (d) =>
+              overlayRunColor(overlayRunIndex(d.runUrl ?? null, runIndexByUrl)),
+            );
 
           bars
             .select('.unofficial-eb-stem')
@@ -684,10 +725,13 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
             (d) =>
               `translate(${xScale(d.score)},${(yScale(d.configLabel) || 0) + yScale.bandwidth() / 2})`,
           );
+          overlayPoints.style('filter', null);
 
           overlayPoints
             .select('.unofficial-eval-x')
-            .attr('stroke', (d) => getCssColor(resolveColor(d.configLabel, String(d.hwKey))));
+            .attr('stroke', (d) =>
+              overlayRunColor(overlayRunIndex(d.runUrl ?? null, runIndexByUrl)),
+            );
 
           overlayPoints.each(function (d) {
             d3.select(this)
@@ -716,13 +760,7 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
                 .style('opacity', 1)
                 .style('display', 'block')
                 .style('pointer-events', 'none')
-                .html(
-                  generateEvaluationTooltipContent(
-                    d,
-                    false,
-                    unofficialRunInfo?.branch ?? undefined,
-                  ),
-                );
+                .html(generateEvaluationTooltipContent(d, false, branchForRow(d)));
             })
             .on('mousemove', function (event) {
               if (chartRef.current?.isPinned()) return;
@@ -742,9 +780,7 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
               event.stopPropagation();
               const [mx, my] = d3.pointer(event, container);
               tooltip
-                .html(
-                  generateEvaluationTooltipContent(d, true, unofficialRunInfo?.branch ?? undefined),
-                )
+                .html(generateEvaluationTooltipContent(d, true, branchForRow(d)))
                 .style('opacity', 1)
                 .style('display', 'block')
                 .style('pointer-events', 'auto');
@@ -774,7 +810,8 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
       showLabels,
       unofficialChartData,
       unofficialErrorData,
-      unofficialRunInfo,
+      branchForRow,
+      runIndexByUrl,
     ],
   );
 
@@ -824,7 +861,7 @@ export default function EvalBarChartD3({ caption }: { caption?: ReactNode }) {
       data={chartData}
       height={chartHeight}
       margin={chartMargin}
-      watermark={isUnofficialRun ? 'unofficial' : 'logo'}
+      watermark={getModelWatermark(selectedModel, isUnofficialRun)}
       grabCursor={false}
       caption={caption}
       xScale={{ type: 'linear', domain: xDomain }}

@@ -46,16 +46,33 @@ const UNOFFICIAL_RUN_PARAM_RE = /^unofficialruns?$/i;
 interface AvailableModelSequence {
   model: Model;
   sequence: Sequence;
+  precisions: string[];
 }
 
 export interface UnofficialRunContextType {
   isUnofficialRun: boolean;
+  /** First run in the loaded set — kept as a convenience alias for overlay labels. */
   unofficialRunInfo: UnofficialRunInfo | null;
+  /** All runs loaded from the `unofficialrun(s)` URL param (comma-separated). */
+  unofficialRunInfos: UnofficialRunInfo[];
+  /**
+   * Position of each run in the loaded set, keyed by both `run.url` and the
+   * numeric id as a string. Used to derive a distinct hue shift per run for
+   * overlay points so multiple runs are visually separable.
+   */
+  runIndexByUrl: Record<string, number>;
   unofficialChartData: UnofficialChartData | null;
   unofficialEvalRows: EvalRow[] | null;
   loading: boolean;
   error: string | null;
+  /** Clear every unofficial run. Wipes state + URL. */
   clearUnofficialRun: () => void;
+  /**
+   * Drop a single run ID. Rewrites the URL to the remaining IDs and filters
+   * local state (chart data + eval rows + run infos) by `run_url` without
+   * refetching the others.
+   */
+  dismissRun: (runId: string) => void;
   availableModelsAndSequences: AvailableModelSequence[];
   getOverlayData: (
     model: Model,
@@ -133,8 +150,15 @@ export function parseAvailableModelsAndSequences(
     const sequencePart = key.slice(lastUnderscoreIndex + 1);
     const model = allModels.find((m) => m === modelPart);
     const sequence = allSequences.find((s) => s === sequencePart);
-    if (model && sequence && !result.some((r) => r.model === model && r.sequence === sequence)) {
-      result.push({ model, sequence });
+    if (!model || !sequence) continue;
+    const group = chartData[key];
+    const precisions = [
+      ...new Set(
+        [...(group?.e2e.data ?? []), ...(group?.interactivity.data ?? [])].map((d) => d.precision),
+      ),
+    ];
+    if (!result.some((r) => r.model === model && r.sequence === sequence)) {
+      result.push({ model, sequence, precisions });
     }
   }
 
@@ -142,7 +166,8 @@ export function parseAvailableModelsAndSequences(
 }
 
 export function UnofficialRunProvider({ children }: { children: ReactNode }) {
-  const [unofficialRunInfo, setUnofficialRunInfo] = useState<UnofficialRunInfo | null>(null);
+  const [unofficialRunInfos, setUnofficialRunInfos] = useState<UnofficialRunInfo[]>([]);
+  const unofficialRunInfo = unofficialRunInfos[0] ?? null;
   const [unofficialChartData, setUnofficialChartData] = useState<UnofficialChartData | null>(null);
   const [unofficialEvalRows, setUnofficialEvalRows] = useState<EvalRow[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -204,7 +229,7 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
   );
 
   const clearUnofficialRun = useCallback(() => {
-    setUnofficialRunInfo(null);
+    setUnofficialRunInfos([]);
     setUnofficialChartData(null);
     setUnofficialEvalRows(null);
     setError(null);
@@ -215,6 +240,97 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
     }
     window.history.pushState({}, '', url);
   }, []);
+
+  /**
+   * Drop a single run from the URL + state. Since benchmark rows are tagged
+   * with `run_url` and eval rows have their own `run_url`, we can filter local
+   * state by the dismissed run's URL/id without refetching the remaining runs.
+   */
+  const dismissRun = useCallback(
+    (runId: string) => {
+      const target = unofficialRunInfos.find((r) => String(r.id) === runId);
+      if (!target) return;
+
+      const remaining = unofficialRunInfos.filter((r) => String(r.id) !== runId);
+
+      // Rewrite URL to the remaining IDs (or drop param if none left).
+      const url = new URL(window.location.href);
+      const existingKeys: string[] = [];
+      for (const key of url.searchParams.keys()) {
+        if (UNOFFICIAL_RUN_PARAM_RE.test(key)) existingKeys.push(key);
+      }
+      for (const key of existingKeys) url.searchParams.delete(key);
+      if (remaining.length > 0) {
+        url.searchParams.set('unofficialruns', remaining.map((r) => r.id).join(','));
+      }
+      window.history.pushState({}, '', url);
+
+      if (remaining.length === 0) {
+        setUnofficialRunInfos([]);
+        setUnofficialChartData(null);
+        setUnofficialEvalRows(null);
+        setError(null);
+        setAvailableModelsAndSequences([]);
+        return;
+      }
+
+      setUnofficialRunInfos(remaining);
+
+      // Filter chart data by stamped `run_url`. A row belongs to the dismissed
+      // run if its URL matches exactly OR the numeric id parses to the same.
+      const belongsToDismissed = (rowUrl?: string | null) => {
+        if (!rowUrl) return false;
+        if (rowUrl === target.url) return true;
+        const m = rowUrl.match(/\/runs\/(\d+)/);
+        return m !== null && m[1] === runId;
+      };
+
+      // Compute the filtered chart data BEFORE any setState so we can pass the
+      // same value to setUnofficialChartData and parseAvailableModelsAndSequences.
+      // Writing to an outer variable from inside a setState updater and then
+      // reading it synchronously is unsafe: React 18 invokes updaters during
+      // render, not at the call site, so the read would see the initial null.
+      const nextChartData: UnofficialChartData | null = unofficialChartData
+        ? (() => {
+            const next: UnofficialChartData = {};
+            for (const [key, group] of Object.entries(unofficialChartData)) {
+              const e2eData = group.e2e.data.filter((d) => !belongsToDismissed(d.run_url));
+              const intvData = group.interactivity.data.filter(
+                (d) => !belongsToDismissed(d.run_url),
+              );
+              if (e2eData.length === 0 && intvData.length === 0) continue;
+              next[key] = {
+                e2e: { data: e2eData, gpus: group.e2e.gpus },
+                interactivity: { data: intvData, gpus: group.interactivity.gpus },
+              };
+            }
+            return next;
+          })()
+        : null;
+      setUnofficialChartData(nextChartData);
+      // Re-derive available (model, sequence) pairs from surviving runs so the
+      // model/sequence picker doesn't still offer combos that only existed in
+      // the dismissed run.
+      setAvailableModelsAndSequences(parseAvailableModelsAndSequences(nextChartData));
+
+      setUnofficialEvalRows((prev) =>
+        prev ? prev.filter((row) => !belongsToDismissed(row.run_url)) : prev,
+      );
+    },
+    [unofficialRunInfos, unofficialChartData],
+  );
+
+  // Build a url → index lookup. Keyed by the full run.url AND by the numeric id
+  // as a string, since `updateRepoUrl` can rewrite hosts/orgs between the
+  // overlay rendering path and the run metadata.
+  const runIndexByUrl = useMemo(() => {
+    const map: Record<string, number> = {};
+    unofficialRunInfos.forEach((info, idx) => {
+      if (info.url) map[info.url] = idx;
+      if (info.id !== undefined && info.id !== null) map[String(info.id)] = idx;
+    });
+    return map;
+  }, [unofficialRunInfos]);
 
   const getOverlayData = useCallback(
     (model: Model, sequence: Sequence, chartType: 'e2e' | 'interactivity') => {
@@ -231,15 +347,15 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const load = () => {
       const params = new URLSearchParams(window.location.search);
-      let unofficialRunId: string | undefined;
+      let unofficialRunIdParam: string | undefined;
       for (const [key, value] of params) {
         if (UNOFFICIAL_RUN_PARAM_RE.test(key) && value) {
-          unofficialRunId = value;
+          unofficialRunIdParam = value;
           break;
         }
       }
-      if (!unofficialRunId) {
-        setUnofficialRunInfo(null);
+      if (!unofficialRunIdParam) {
+        setUnofficialRunInfos([]);
         setUnofficialChartData(null);
         setUnofficialEvalRows(null);
         setError(null);
@@ -250,12 +366,14 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setError(null);
 
-      fetch(`/api/unofficial-run?runId=${unofficialRunId}`)
+      // Pass the raw param value through — it may be a single id or a comma-separated list.
+      // encodeURIComponent preserves commas while escaping any accidental whitespace/symbols.
+      fetch(`/api/unofficial-run?runId=${encodeURIComponent(unofficialRunIdParam)}`)
         .then(async (response) => {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || 'Failed to fetch unofficial run');
 
-          setUnofficialRunInfo(data.runInfo);
+          setUnofficialRunInfos(Array.isArray(data.runInfos) ? data.runInfos : []);
           const chartData = buildChartData(data.benchmarks ?? []);
           setUnofficialChartData(chartData);
           setUnofficialEvalRows(data.evaluations ?? []);
@@ -263,7 +381,7 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
         })
         .catch((caughtError) => {
           setError(caughtError instanceof Error ? caughtError.message : 'Unknown error');
-          setUnofficialRunInfo(null);
+          setUnofficialRunInfos([]);
           setUnofficialChartData(null);
           setUnofficialEvalRows(null);
           setAvailableModelsAndSequences([]);
@@ -279,13 +397,16 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
   return (
     <UnofficialRunContext.Provider
       value={{
-        isUnofficialRun: Boolean(unofficialRunInfo),
+        isUnofficialRun: unofficialRunInfos.length > 0,
         unofficialRunInfo,
+        unofficialRunInfos,
+        runIndexByUrl,
         unofficialChartData,
         unofficialEvalRows,
         loading,
         error,
         clearUnofficialRun,
+        dismissRun,
         availableModelsAndSequences,
         getOverlayData,
         activeOverlayHwTypes,
@@ -297,8 +418,12 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
         setLocalOfficialOverride,
       }}
     >
-      {unofficialRunInfo && (
-        <UnofficialBanner runInfo={unofficialRunInfo} onDismiss={clearUnofficialRun} />
+      {unofficialRunInfos.length > 0 && (
+        <UnofficialBanner
+          runs={unofficialRunInfos}
+          onDismissRun={dismissRun}
+          onDismissAll={clearUnofficialRun}
+        />
       )}
       {children}
     </UnofficialRunContext.Provider>

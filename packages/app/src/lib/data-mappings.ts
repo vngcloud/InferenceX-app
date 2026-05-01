@@ -7,6 +7,7 @@ export enum Model {
   Kimi_K2_5 = 'Kimi-K2.5',
   MiniMax_M2_5 = 'MiniMax-M2.5',
   GLM_5 = 'GLM-5',
+  DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
 }
 
 export type CategoryTag = 'default' | 'experimental' | 'deprecated' | 'hidden';
@@ -35,17 +36,35 @@ export function groupByCategory<T>(
  * 1. Add an enum member to `Model` above.
  * 2. Add one entry here.
  */
-const MODEL_CONFIG: Record<Model, { label: string; prefix: string; category: CategoryTag }> = {
+interface ModelConfig {
+  label: string;
+  prefix: string;
+  category: CategoryTag;
+  /**
+   * If true, MTP configs from different engine families (e.g. vLLM and SGLang)
+   * cannot be active simultaneously, since their acceptance-rate forcing
+   * implementations differ and aren't directly comparable on the same graph.
+   */
+  mtpEngineExclusion?: boolean;
+}
+
+const MODEL_CONFIG: Record<Model, ModelConfig> = {
   [Model.DeepSeek_R1]: { label: 'DeepSeek R1 0528', prefix: 'dsr1', category: 'default' },
+  [Model.DeepSeek_V4_Pro]: {
+    label: 'DeepSeek V4 Pro',
+    prefix: 'dsv4',
+    category: 'experimental',
+    mtpEngineExclusion: true,
+  },
   [Model.Kimi_K2_5]: {
-    label: 'Kimi K2.6 1T Architecture',
+    label: 'Kimi K2.5',
     prefix: 'kimik2.5',
     category: 'default',
   },
-  [Model.Qwen3_5]: { label: 'Qwen3.5 397B Architecture', prefix: 'qwen3.5', category: 'default' },
-  [Model.GLM_5]: { label: 'GLM5.1 Architecture', prefix: 'glm5', category: 'default' },
+  [Model.Qwen3_5]: { label: 'Qwen3.5', prefix: 'qwen3.5', category: 'default' },
+  [Model.GLM_5]: { label: 'GLM5/5.1', prefix: 'glm5', category: 'default' },
   [Model.MiniMax_M2_5]: {
-    label: 'MiniMax M2.7 Architecture',
+    label: 'MiniMax M2.5',
     prefix: 'minimaxm2.5',
     category: 'default',
   },
@@ -86,6 +105,29 @@ export function getModelCategory(model: Model): CategoryTag {
 
 export function getModelLabel(model: Model): string {
   return MODEL_CONFIG[model]?.label ?? model;
+}
+
+/**
+ * True if the model enforces the rule that MTP configs from different engine
+ * families can't be shown on the same graph.
+ */
+export function hasMtpEngineExclusion(model: Model | string | null | undefined): boolean {
+  if (!model) return false;
+  return MODEL_CONFIG[model as Model]?.mtpEngineExclusion === true;
+}
+
+/**
+ * Pick the chart watermark for a given model + run state. Unofficial-run charts
+ * always get the red "UNOFFICIAL" banner; otherwise dsv4 (day-0 support) gets
+ * the blue "EXPERIMENTAL - DAY ZERO" banner; everything else gets the logo.
+ */
+export function getModelWatermark(
+  model: Model | string | null | undefined,
+  isUnofficialRun = false,
+): 'logo' | 'unofficial' | 'day0' {
+  if (isUnofficialRun) return 'unofficial';
+  if (model === Model.DeepSeek_V4_Pro) return 'day0';
+  return 'logo';
 }
 
 export const MODEL_PREFIX_MAPPING: Record<string, Model> = Object.fromEntries(
@@ -203,6 +245,7 @@ const SEQUENCE_PREFIX_MAPPING: Record<string, Sequence> = Object.fromEntries(
 
 export enum Precision {
   FP4 = 'fp4',
+  FP4FP8 = 'fp4fp8',
   FP8 = 'fp8',
   BF16 = 'bf16',
   INT4 = 'int4',
@@ -210,6 +253,7 @@ export enum Precision {
 
 const PRECISION_CONFIG: Record<Precision, { label: string }> = {
   [Precision.FP4]: { label: 'FP4' },
+  [Precision.FP4FP8]: { label: 'FP4+FP8' },
   [Precision.FP8]: { label: 'FP8' },
   [Precision.BF16]: { label: 'BF16' },
   [Precision.INT4]: { label: 'INT4' },

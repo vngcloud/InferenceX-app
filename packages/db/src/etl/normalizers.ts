@@ -34,6 +34,8 @@ export function hwToGpuKey(hw: string): string | null {
     .replace(/-dgxc-slurm$/, '')
     .replace(/-dgxc$/, '')
     .replace(/-nb$/, '')
+    .replace(/-dsv4$/, '')
+    .replace(/-cw$/, '')
     .replace(/-nv$/, '')
     .replace(/-p\d+$/, ''); // strip runner-pool suffix (e.g. b300-p1 → b300)
   return GPU_KEYS.has(base) ? base : null;
@@ -53,6 +55,7 @@ const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/i;
 /** Explicit aliases for prefixes that don't match any DB key after suffix stripping. */
 const PREFIX_ALIASES: Record<string, string> = {
   gptoss: 'gptoss120b',
+  dsv4pro: 'dsv4',
 };
 
 function resolvePrefixToKey(prefix: string): string | null {
@@ -105,6 +108,8 @@ export const MODEL_TO_KEY: Record<string, string> = {
   // GLM-5
   'zai-org/GLM-5-FP8': 'glm5',
   'amd/GLM-5.1-MXFP4': 'glm5.1',
+  // DeepSeek-V4-Pro
+  'deepseek-ai/DeepSeek-V4-Pro': 'dsv4',
 };
 
 /**
@@ -132,6 +137,12 @@ export function resolveModelKey(row: Record<string, any>): string | null {
  * Handles special cases: `sglang-disagg` is normalized to `mori-sglang` + `disagg=true`;
  * `dynamo-trtllm` is renamed to `dynamo-trt`.
  *
+ * Framework name carries disagg semantics: any canonical framework starting
+ * with `dynamo-` or `mori-` implies disagg, regardless of what the artifact
+ * wrote in its `disagg` field. Older artifacts (pre-2026-04) sometimes set
+ * `disagg=false` under these frameworks, which produced mixed-date legend
+ * lines in the frontend — see migration 002.
+ *
  * @param fw - Raw framework value from the artifact (e.g. `"sglang"`, `"sglang-disagg"` → `"mori-sglang"`).
  * @param disaggField - Raw disagg field from the artifact (boolean or string `"True"`/`"true"`).
  * @returns An object with the canonical `framework` string and the `disagg` boolean flag.
@@ -142,9 +153,11 @@ export function normalizeFramework(
 ): { framework: string; disagg: boolean } {
   const lower = fw.toLowerCase();
   const alias = FRAMEWORK_ALIASES[lower];
-  const disagg =
+  const canonical = alias?.canonical ?? lower;
+  const rawDisagg =
     alias?.disagg ?? (disaggField === true || disaggField === 'True' || disaggField === 'true');
-  return { framework: alias?.canonical ?? lower, disagg };
+  const disagg = rawDisagg || canonical.startsWith('dynamo-') || canonical.startsWith('mori-');
+  return { framework: canonical, disagg };
 }
 
 /** Vendor-specific precision aliases → canonical DB key. */

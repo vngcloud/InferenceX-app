@@ -56,6 +56,13 @@ describe('PARAM_DEFAULTS', () => {
     const { PARAM_DEFAULTS } = await import('@/lib/url-state');
     expect(PARAM_DEFAULTS.i_advlabel).toBe('');
   });
+
+  it('has empty string defaults for legend-active params', async () => {
+    const { PARAM_DEFAULTS } = await import('@/lib/url-state');
+    expect(PARAM_DEFAULTS.i_active).toBe('');
+    expect(PARAM_DEFAULTS.e_active).toBe('');
+    expect(PARAM_DEFAULTS.r_active).toBe('');
+  });
 });
 
 describe('readUrlParams', () => {
@@ -288,5 +295,110 @@ describe('buildShareUrl tab filtering', () => {
 
     const url = buildShareUrl();
     expect(url).not.toContain('?');
+  });
+
+  it('includes i_active on /inference but not e_active or r_active', async () => {
+    setupWindow('', '/inference');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({ i_active: 'h100,b200', e_active: 'h100', r_active: 'dsr1' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const url = buildShareUrl();
+    expect(url).toMatch(/i_active=h100(?:,|%2C)b200/);
+    expect(url).not.toContain('e_active');
+    expect(url).not.toContain('r_active');
+  });
+
+  it('includes e_active on /evaluation but not i_active or r_active', async () => {
+    setupWindow('', '/evaluation');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({ i_active: 'x', e_active: 'h100,b200', r_active: 'y' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const url = buildShareUrl();
+    expect(url).toMatch(/e_active=h100(?:,|%2C)b200/);
+    expect(url).not.toContain('i_active');
+    expect(url).not.toContain('r_active');
+  });
+
+  it('includes r_active on /reliability but not i_active or e_active', async () => {
+    setupWindow('', '/reliability');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({ i_active: 'x', e_active: 'y', r_active: 'dsr1,llama70b' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const url = buildShareUrl();
+    expect(url).toMatch(/r_active=dsr1(?:,|%2C)llama70b/);
+    expect(url).not.toContain('i_active');
+    expect(url).not.toContain('e_active');
+  });
+});
+
+describe('buildShareUrl unofficialrun handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('includes a single unofficial-run id from the live URL under the plural key', async () => {
+    setupWindow('?unofficialruns=111', '/inference');
+    const { buildShareUrl } = await import('@/lib/url-state');
+
+    const url = buildShareUrl();
+    expect(url).toContain('unofficialruns=111');
+  });
+
+  it('includes a comma-separated list of run ids verbatim', async () => {
+    setupWindow('?unofficialruns=111,222,333', '/inference');
+    const { buildShareUrl } = await import('@/lib/url-state');
+
+    const url = buildShareUrl();
+    // URLSearchParams encodes comma as %2C — accept either form.
+    expect(url).toMatch(/unofficialruns=111(?:,|%2C)222(?:,|%2C)333/);
+  });
+
+  it('canonicalizes the singular alias "unofficialrun" to plural "unofficialruns"', async () => {
+    setupWindow('?unofficialrun=111,222', '/inference');
+    const { buildShareUrl } = await import('@/lib/url-state');
+
+    const url = buildShareUrl();
+    expect(url).toMatch(/[?&]unofficialruns=/);
+    expect(url).not.toMatch(/[?&]unofficialrun=/);
+  });
+
+  it('preserves unofficialruns alongside other in-memory share params', async () => {
+    setupWindow('?unofficialruns=111&g_model=DeepSeek-R1-0528', '/inference');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({ g_model: 'DeepSeek-V4-Pro' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const url = buildShareUrl();
+    expect(url).toContain('g_model=DeepSeek-V4-Pro');
+    expect(url).toContain('unofficialruns=111');
+  });
+
+  it('is absent from the share URL when no unofficial run is in the address bar', async () => {
+    setupWindow('', '/inference');
+    const { buildShareUrl } = await import('@/lib/url-state');
+
+    const url = buildShareUrl();
+    expect(url).not.toContain('unofficialrun');
+  });
+
+  it('skips empty unofficialruns values', async () => {
+    setupWindow('?unofficialruns=', '/inference');
+    const { buildShareUrl } = await import('@/lib/url-state');
+
+    const url = buildShareUrl();
+    expect(url).not.toContain('unofficialrun');
   });
 });

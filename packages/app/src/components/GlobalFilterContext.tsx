@@ -16,6 +16,7 @@ import { DISPLAY_MODEL_TO_DB, rowToSequence } from '@semianalysisai/inferencex-c
 import { useAvailability } from '@/hooks/api/use-availability';
 import { useWorkflowInfo } from '@/hooks/api/use-workflow-info';
 import { useUrlState } from '@/hooks/useUrlState';
+import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import {
   Model,
   MODEL_OPTIONS,
@@ -147,6 +148,7 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
 
   // ── Availability data ─────────────────────────────────────────────────────
   const { data: availabilityRows } = useAvailability();
+  const { availableModelsAndSequences: unofficialAvailable } = useUnofficialRun();
 
   const dbModelKeys = useMemo<string[]>(
     () => DISPLAY_MODEL_TO_DB[selectedModel] ?? [selectedModel],
@@ -159,23 +161,29 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
     [availabilityRows, dbModelKeys],
   );
 
-  // Models that have any data
+  // Models that have any data (DB ∪ unofficial run)
   const availableModels = useMemo(() => {
     if (!availabilityRows) return MODEL_OPTIONS;
+    const unofficialModels = new Set(unofficialAvailable.map((a) => a.model));
     return MODEL_OPTIONS.filter((m) => {
+      if (unofficialModels.has(m)) return true;
       const keys = DISPLAY_MODEL_TO_DB[m] ?? [m];
       return availabilityRows.some((r) => keys.includes(r.model));
     });
-  }, [availabilityRows]);
+  }, [availabilityRows, unofficialAvailable]);
 
-  // Sequences available for the selected model
+  // Sequences available for the selected model (DB ∪ unofficial run for this model)
   const availableSequences = useMemo(() => {
-    if (!availabilityRows) return SEQUENCE_OPTIONS;
-    const seqs = [
-      ...new Set(modelRows.map((r) => rowToSequence(r)).filter((s): s is Sequence => s !== null)),
-    ];
-    return seqs.length > 0 ? seqs : SEQUENCE_OPTIONS;
-  }, [availabilityRows, modelRows]);
+    const unofficialSeqs = unofficialAvailable
+      .filter((a) => a.model === selectedModel)
+      .map((a) => a.sequence as Sequence);
+    if (!availabilityRows) {
+      return unofficialSeqs.length > 0 ? [...new Set(unofficialSeqs)] : SEQUENCE_OPTIONS;
+    }
+    const dbSeqs = modelRows.map((r) => rowToSequence(r)).filter((s): s is Sequence => s !== null);
+    const merged = [...new Set([...dbSeqs, ...unofficialSeqs])];
+    return merged.length > 0 ? merged : SEQUENCE_OPTIONS;
+  }, [availabilityRows, modelRows, unofficialAvailable, selectedModel]);
 
   // Synchronously validated sequence
   const effectiveSequence = useMemo(() => {
@@ -183,13 +191,19 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
     return availableSequences[0] ?? selectedSequence;
   }, [availableSequences, selectedSequence]);
 
-  // Precisions available for the selected model + sequence
+  // Precisions available for the selected model + sequence (DB ∪ unofficial run)
   const availablePrecisions = useMemo(() => {
-    if (!availabilityRows) return ['fp4'];
+    const unofficialPrecs = unofficialAvailable
+      .filter((a) => a.model === selectedModel && a.sequence === effectiveSequence)
+      .flatMap((a) => a.precisions);
+    if (!availabilityRows) {
+      return unofficialPrecs.length > 0 ? [...new Set(unofficialPrecs)].toSorted() : ['fp4'];
+    }
     const rows = modelRows.filter((r) => rowToSequence(r) === effectiveSequence);
-    const precs = [...new Set(rows.map((r) => r.precision))].toSorted();
-    return precs.length > 0 ? precs : ['fp4'];
-  }, [availabilityRows, modelRows, effectiveSequence]);
+    const dbPrecs = rows.map((r) => r.precision);
+    const merged = [...new Set([...dbPrecs, ...unofficialPrecs])].toSorted();
+    return merged.length > 0 ? merged : ['fp4'];
+  }, [availabilityRows, modelRows, effectiveSequence, unofficialAvailable, selectedModel]);
 
   // Synchronously validated precisions
   const effectivePrecisions = useMemo(() => {
