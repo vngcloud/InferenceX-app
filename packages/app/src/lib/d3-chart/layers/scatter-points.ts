@@ -64,10 +64,10 @@ export function renderScatterPoints<T extends { precision: string; x: number; y:
   });
 
   // Label (enter only). Multi-line labels are passed as `\n`-separated strings;
-  // we stack tspans UPWARD from the text's `dy` anchor so the LAST line sits
-  // at `dy` (just above the point) and earlier lines land above it. That way,
-  // the collision-avoidance pass only has to move the `<text>` element — the
-  // intra-stack offsets stay correct whether the label ends up above or below.
+  // we anchor the entire stack via the FIRST tspan's `dy` so getBBox() doesn't
+  // pick up the text element's own (unused) y=0 origin. The first tspan is
+  // raised so the LAST line baseline lands ~8px above the point; subsequent
+  // tspans cascade down by 1.1em.
   if (!config.hideLabels && config.getLabelText && config.foreground) {
     const labelGetter = config.getLabelText;
     entered.each(function (d) {
@@ -76,15 +76,18 @@ export function renderScatterPoints<T extends { precision: string; x: number; y:
         .select(this)
         .append('text')
         .attr('class', 'point-label')
-        .attr('dy', -8)
         .attr('text-anchor', 'middle')
         .attr('fill', config.foreground!)
         .attr('font-size', '10px')
         .attr('font-weight', '700')
         .attr('pointer-events', 'none');
+      const firstDy = -(0.8 + (lines.length - 1) * 1.1);
       lines.forEach((line, i) => {
-        const tspanDy = i === 0 ? `-${(lines.length - 1) * 1.1}em` : '1.1em';
-        text.append('tspan').attr('x', 0).attr('dy', tspanDy).text(line);
+        text
+          .append('tspan')
+          .attr('x', 0)
+          .attr('dy', i === 0 ? `${firstDy}em` : '1.1em')
+          .text(line);
       });
     });
   }
@@ -113,7 +116,9 @@ export function renderScatterPoints<T extends { precision: string; x: number; y:
   // Update colors on existing shapes (handles hw color changes)
   points.select('.visible-shape').attr('fill', config.getColor as any);
 
-  // Update labels: use data join so labels are created/removed properly on toggle
+  // Update labels: use data join so labels are created/removed properly on toggle.
+  // Anchor the stack via the first tspan (NOT the text dy — that doesn't shift the
+  // bbox cleanly when there are tspan children).
   if (!config.hideLabels && config.getLabelText && config.foreground) {
     const labelGetter = config.getLabelText;
     points.each(function (d) {
@@ -124,18 +129,18 @@ export function renderScatterPoints<T extends { precision: string; x: number; y:
         .data([true])
         .join('text')
         .attr('class', 'point-label')
-        .attr('dy', -8)
         .attr('text-anchor', 'middle')
         .attr('fill', config.foreground!)
         .attr('font-size', '10px')
         .attr('font-weight', '700')
         .attr('pointer-events', 'none');
+      const firstDy = -(0.8 + (lines.length - 1) * 1.1);
       text
         .selectAll<SVGTSpanElement, string>('tspan')
         .data(lines)
         .join('tspan')
         .attr('x', 0)
-        .attr('dy', (_l, i) => (i === 0 ? `-${(lines.length - 1) * 1.1}em` : '1.1em'))
+        .attr('dy', (_l, i) => (i === 0 ? `${firstDy}em` : '1.1em'))
         .text((l) => l);
     });
   } else {

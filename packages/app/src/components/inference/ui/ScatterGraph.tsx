@@ -55,58 +55,88 @@ import {
   buildGradientColorMap,
 } from '@/components/inference/utils/paretoLabels';
 
-// Greedy label-collision avoidance: try positions above/below the point;
-// hide labels that can't fit anywhere. Re-runs cheaply on each render/zoom.
+// Greedy label-collision avoidance.
+// Each candidate is the y-position of the FIRST baseline (relative to point
+// center) which we apply via the first tspan's `dy` — later tspans cascade
+// down by 1.1em. We try above/below at primary and secondary offsets, and
+// hide the label if all four positions collide.
 function avoidLabelCollisions(
   zoomGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
 ): void {
-  const labels: {
+  interface LabelInfo {
     el: SVGTextElement;
+    firstTspan: SVGTSpanElement;
     cx: number;
     cy: number;
     w: number;
-    h: number;
-  }[] = [];
+    nLines: number;
+    defaultFirstY: number;
+  }
+  const labels: LabelInfo[] = [];
+  const ASCENT = 9;
+  const DESCENT = 3;
+  const LINE_H = 11;
+
   zoomGroup.selectAll<SVGGElement, unknown>('.dot-group').each(function () {
     const labelEl = this.querySelector<SVGTextElement>('.point-label');
     if (!labelEl) return;
     if ((this as SVGGElement).style.opacity === '0') return;
+    const tspans = labelEl.querySelectorAll<SVGTSpanElement>('tspan');
+    if (tspans.length === 0) return;
     const transform = (this as SVGGElement).getAttribute('transform') ?? '';
     const m = transform.match(/translate\(([^,]+),([^)]+)\)/);
     if (!m) return;
     const cx = parseFloat(m[1]);
     const cy = parseFloat(m[2]);
-    labelEl.setAttribute('dy', '-8');
+    const nLines = tspans.length;
+    const defaultFirstY = -(8 + (nLines - 1) * LINE_H); // last baseline 8px above point
+    // Reset to default before measuring so prior positioning doesn't bias bbox
+    tspans[0].setAttribute('dy', `${defaultFirstY}px`);
     labelEl.style.opacity = '1';
     const bbox = labelEl.getBBox();
-    labels.push({ el: labelEl, cx, cy, w: bbox.width, h: bbox.height });
+    labels.push({
+      el: labelEl,
+      firstTspan: tspans[0],
+      cx,
+      cy,
+      w: bbox.width,
+      nLines,
+      defaultFirstY,
+    });
   });
+
   labels.sort((a, b) => a.cx - b.cx);
   const placed: { left: number; right: number; top: number; bottom: number }[] = [];
-  const pad = 1;
+  const pad = 2;
+
   for (const lab of labels) {
-    // Candidates scale with the label's own height so multi-line labels don't
-    // overlap the point shape when flipped below.
-    const below = lab.h + 8;
-    const candidates = [-8, below, -8 - below - 4, 2 * below];
-    let chosenDy: number | null = null;
+    const blockH = (lab.nLines - 1) * LINE_H + ASCENT + DESCENT;
+    const aboveFirstY = lab.defaultFirstY;
+    const belowFirstY = 14; // first baseline 14px below point center
+    const candidates = [
+      aboveFirstY,
+      belowFirstY,
+      aboveFirstY - blockH - 2,
+      belowFirstY + blockH + 2,
+    ];
+    let chosenY: number | null = null;
     let chosenBox: { left: number; right: number; top: number; bottom: number } | null = null;
-    for (const dy of candidates) {
-      const top = lab.cy + dy - lab.h - pad;
-      const bottom = lab.cy + dy + pad;
+    for (const firstY of candidates) {
+      const top = lab.cy + firstY - ASCENT - pad;
+      const bottom = lab.cy + firstY + (lab.nLines - 1) * LINE_H + DESCENT + pad;
       const left = lab.cx - lab.w / 2 - pad;
       const right = lab.cx + lab.w / 2 + pad;
       const collides = placed.some(
         (p) => !(right < p.left || left > p.right || bottom < p.top || top > p.bottom),
       );
       if (!collides) {
-        chosenDy = dy;
+        chosenY = firstY;
         chosenBox = { left, right, top, bottom };
         break;
       }
     }
-    if (chosenDy !== null && chosenBox) {
-      lab.el.setAttribute('dy', String(chosenDy));
+    if (chosenY !== null && chosenBox) {
+      lab.firstTspan.setAttribute('dy', `${chosenY}px`);
       lab.el.style.opacity = '1';
       placed.push(chosenBox);
     } else {
@@ -1418,18 +1448,18 @@ const ScatterGraph = React.memo(
                   .data(showLabels ? [true] : [])
                   .join('text')
                   .attr('class', 'overlay-label')
-                  .attr('dy', -10)
                   .attr('text-anchor', 'middle')
                   .style('fill', 'var(--foreground)')
                   .attr('font-size', '10px')
                   .attr('font-weight', '700')
                   .attr('pointer-events', 'none');
+                const firstDy = -(1 + (lines.length - 1) * 1.1);
                 text
                   .selectAll<SVGTSpanElement, string>('tspan')
                   .data(lines)
                   .join('tspan')
                   .attr('x', 0)
-                  .attr('dy', (_l, i) => (i === 0 ? `-${(lines.length - 1) * 1.1}em` : '1.1em'))
+                  .attr('dy', (_l, i) => (i === 0 ? `${firstDy}em` : '1.1em'))
                   .text((l) => l);
               });
 
