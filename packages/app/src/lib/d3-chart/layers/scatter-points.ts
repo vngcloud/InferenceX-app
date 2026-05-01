@@ -72,6 +72,7 @@ export function renderScatterPoints<T extends { precision: string; x: number; y:
       .attr('text-anchor', 'middle')
       .attr('fill', config.foreground)
       .attr('font-size', '10px')
+      .attr('font-weight', '700')
       .attr('pointer-events', 'none')
       .text(config.getLabelText);
   }

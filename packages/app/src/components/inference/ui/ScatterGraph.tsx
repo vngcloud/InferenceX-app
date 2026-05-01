@@ -55,6 +55,63 @@ import {
   buildGradientColorMap,
 } from '@/components/inference/utils/paretoLabels';
 
+// Greedy label-collision avoidance: try positions above/below the point;
+// hide labels that can't fit anywhere. Re-runs cheaply on each render/zoom.
+function avoidLabelCollisions(
+  zoomGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+): void {
+  const labels: {
+    el: SVGTextElement;
+    cx: number;
+    cy: number;
+    w: number;
+    h: number;
+  }[] = [];
+  zoomGroup.selectAll<SVGGElement, unknown>('.dot-group').each(function () {
+    const labelEl = this.querySelector<SVGTextElement>('.point-label');
+    if (!labelEl) return;
+    if ((this as SVGGElement).style.opacity === '0') return;
+    const transform = (this as SVGGElement).getAttribute('transform') ?? '';
+    const m = transform.match(/translate\(([^,]+),([^)]+)\)/);
+    if (!m) return;
+    const cx = parseFloat(m[1]);
+    const cy = parseFloat(m[2]);
+    labelEl.setAttribute('dy', '-8');
+    labelEl.style.opacity = '1';
+    const bbox = labelEl.getBBox();
+    labels.push({ el: labelEl, cx, cy, w: bbox.width, h: bbox.height });
+  });
+  labels.sort((a, b) => a.cx - b.cx);
+  const placed: { left: number; right: number; top: number; bottom: number }[] = [];
+  const pad = 1;
+  const candidates = [-8, 14, -22, 28];
+  for (const lab of labels) {
+    let chosenDy: number | null = null;
+    let chosenBox: { left: number; right: number; top: number; bottom: number } | null = null;
+    for (const dy of candidates) {
+      const top = lab.cy + dy - lab.h - pad;
+      const bottom = lab.cy + dy + pad;
+      const left = lab.cx - lab.w / 2 - pad;
+      const right = lab.cx + lab.w / 2 + pad;
+      const collides = placed.some(
+        (p) => !(right < p.left || left > p.right || bottom < p.top || top > p.bottom),
+      );
+      if (!collides) {
+        chosenDy = dy;
+        chosenBox = { left, right, top, bottom };
+        break;
+      }
+    }
+    if (chosenDy !== null && chosenBox) {
+      lab.el.setAttribute('dy', String(chosenDy));
+      lab.el.style.opacity = '1';
+      placed.push(chosenBox);
+    } else {
+      lab.el.style.opacity = '0';
+    }
+  }
+}
+
 // X-shape path for overlay (unofficial) data points
 const X_SIZE = 5;
 const X_HOVER_SIZE = 7;
@@ -603,6 +660,7 @@ const ScatterGraph = React.memo(
               d3.axisLeft(newYS).ticks(10).tickFormat(logTickFormat(newYS)) as any,
             );
           }
+          avoidLabelCollisions(ctx.layout.zoomGroup);
         },
       }),
       [zoomResetEventName, eventPrefix, xScaleConfig._isLog, yScaleConfig.type],
@@ -1251,7 +1309,8 @@ const ScatterGraph = React.memo(
           getOpacity: (d) => (isPointVisible(d) ? 1 : 0),
           getPointerEvents: (d) => (isPointVisible(d) ? 'auto' : 'none'),
           hideLabels: hidePointLabels || showGradientLabels,
-          getLabelText: (d) => (useAdvancedLabels ? getPointLabel(d) : String(d.tp)),
+          getLabelText: (d) =>
+            useAdvancedLabels ? `${getPointLabel(d)} C=${d.conc}` : `${d.tp} C=${d.conc}`,
           foreground: 'var(--foreground)',
           dataAttrs: {
             'hw-key': (d) => String(d.hwKey),
@@ -1353,8 +1412,11 @@ const ScatterGraph = React.memo(
                   .attr('text-anchor', 'middle')
                   .style('fill', 'var(--foreground)')
                   .attr('font-size', '10px')
+                  .attr('font-weight', '700')
                   .attr('pointer-events', 'none')
-                  .text(useAdvancedLabels ? getPointLabel(d) : String(d.tp));
+                  .text(
+                    useAdvancedLabels ? `${getPointLabel(d)} C=${d.conc}` : `${d.tp} C=${d.conc}`,
+                  );
               });
 
               // Overlay tooltip handlers
@@ -1565,6 +1627,8 @@ const ScatterGraph = React.memo(
               precision: d.precision,
             });
           });
+
+        avoidLabelCollisions(zoomGroup);
 
         // Log tick formatting on initial render
         if (xScaleConfig._isLog) {
