@@ -40,6 +40,12 @@ const NAV_LINKS = [
     event: 'header_supporters_clicked',
   },
   { href: '/blog', label: 'Articles', testId: 'nav-link-blog', event: 'header_blog_clicked' },
+  {
+    href: '/methodology',
+    label: 'Methodology',
+    testId: 'nav-link-methodology',
+    event: 'header_methodology_clicked',
+  },
   { href: '/about', label: 'About', testId: 'nav-link-about', event: 'header_about_clicked' },
 ] as const;
 

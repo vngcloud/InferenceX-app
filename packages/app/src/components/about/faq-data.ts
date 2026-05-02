@@ -76,7 +76,11 @@ export const FAQ_ITEMS: FaqItem[] = [
   },
   {
     question: 'What metrics does InferenceX measure?',
-    answer: '',
+    answer: 'See the methodology page for full definitions, formulas, and units.',
+    link: {
+      text: 'Methodology',
+      href: '/methodology#metrics',
+    },
     list: [
       'Interactivity (tok/s/user)',
       'Token throughput per GPU (tok/s/gpu)',

@@ -13,6 +13,8 @@ export async function GET() {
     `## Links`,
     '',
     `- [Dashboard](${SITE_URL})`,
+    `- [Methodology](${SITE_URL}/methodology)`,
+    `- [About](${SITE_URL}/about)`,
     `- [Articles](${SITE_URL}/blog)`,
     `- [RSS Feed](${SITE_URL}/feed.xml)`,
     `- [Full content for LLMs](${SITE_URL}/llms-full.txt)`,

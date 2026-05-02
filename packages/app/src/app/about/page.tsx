@@ -167,6 +167,12 @@ export default function AboutPage() {
               >
                 Source repository
               </Link>
+              <Link
+                href="/methodology"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 hover:bg-accent transition-colors"
+              >
+                Methodology →
+              </Link>
             </div>
           </Card>
         </section>
@@ -182,19 +188,30 @@ export default function AboutPage() {
                     {item.answer && (
                       <p>
                         {item.answer}
-                        {item.link && (
-                          <>
-                            {' '}
-                            <a
-                              href={item.link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-brand hover:underline font-medium"
-                            >
-                              {item.link.text}
-                            </a>
-                          </>
-                        )}
+                        {item.link &&
+                          (item.link.href.startsWith('/') || item.link.href.startsWith('#') ? (
+                            <>
+                              {' '}
+                              <Link
+                                href={item.link.href}
+                                className="text-brand hover:underline font-medium"
+                              >
+                                {item.link.text}
+                              </Link>
+                            </>
+                          ) : (
+                            <>
+                              {' '}
+                              <a
+                                href={item.link.href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-brand hover:underline font-medium"
+                              >
+                                {item.link.text}
+                              </a>
+                            </>
+                          ))}
                       </p>
                     )}
                     {item.list && (
