@@ -41,6 +41,7 @@ export function sequenceToIslOsl(seq: string): { isl: number; osl: number } | nu
     '1k/1k': { isl: 1024, osl: 1024 },
     '1k/8k': { isl: 1024, osl: 8192 },
     '8k/1k': { isl: 8192, osl: 1024 },
+    '8k/256': { isl: 8192, osl: 256 },
   };
   return map[seq] ?? null;
 }
@@ -51,6 +52,7 @@ export function islOslToSequence(isl: number, osl: number): string | null {
     '1024_1024': '1k/1k',
     '1024_8192': '1k/8k',
     '8192_1024': '8k/1k',
+    '8192_256': '8k/256',
   };
   return map[`${isl}_${osl}`] ?? null;
 }

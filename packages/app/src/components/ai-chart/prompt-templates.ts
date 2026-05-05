@@ -48,7 +48,7 @@ Open-source ML inference benchmark dashboard. Automated CI runs test real servin
   Note: "-disagg" suffix = disaggregated prefill/decode (separate GPU pools). "-sglang" vs "-trt" = different serving backends.
 **Precisions**: ${PRECISION_LIST}
 **Spec decoding**: ${SPEC_METHOD_LIST}
-**Sequences**: 1k/1k, 1k/8k, 8k/1k (input/output token lengths)
+**Sequences**: 1k/1k, 1k/8k, 8k/1k, 8k/256 (input/output token lengths)
 
 **Benchmark y-axis metrics**: ${Y_METRIC_LIST}
   Throughput: y_tpPerGpu (total tok/s/gpu, DEFAULT), y_outputTputPerGpu, y_inputTputPerGpu

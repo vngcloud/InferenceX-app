@@ -382,6 +382,11 @@ describe('parseIslOsl', () => {
   it('parses larger sequences', () => {
     expect(parseIslOsl('test_32k16k_result.json')).toEqual({ isl: 32768, osl: 16384 });
   });
+
+  it('parses raw-token OSL when no trailing k (e.g. 8k256)', () => {
+    expect(parseIslOsl('bmk_dsr1_8k256_fp8_sglang_42.zip')).toEqual({ isl: 8192, osl: 256 });
+    expect(parseIslOsl('results-8k256-run.json')).toEqual({ isl: 8192, osl: 256 });
+  });
 });
 
 describe('GPU_KEYS re-export', () => {

@@ -211,17 +211,21 @@ export function parseInt2(v: any): number | undefined {
 
 /**
  * Extract ISL (input sequence length) and OSL (output sequence length) in tokens
- * from a file/directory name that encodes them as `{n}k{m}k`.
+ * from a file/directory name that encodes them as `{n}k{m}k` or `{n}k{m}` (raw OSL).
  *
  * @example
  * parseIslOsl('Full_Sweep_-_1k1k_12345')            // { isl: 1024, osl: 1024 }
  * parseIslOsl('results_dsr1_1k8k_4305020262.zip')   // { isl: 1024, osl: 8192 }
+ * parseIslOsl('bmk_dsr1_8k256_fp8_sglang_42.zip')   // { isl: 8192, osl: 256 }
  *
  * @param name - File or directory name containing the encoded sequence lengths.
  * @returns An object with `isl` and `osl` in tokens, or `null` if no match is found.
  */
 export function parseIslOsl(name: string): { isl: number; osl: number } | null {
-  const m = name.match(/[_-](\d+)k(\d+)k[_\-.]/i);
+  const m = name.match(/[_-](\d+)k(\d+)(k?)[_\-.]/i);
   if (!m) return null;
-  return { isl: parseInt(m[1], 10) * 1024, osl: parseInt(m[2], 10) * 1024 };
+  return {
+    isl: parseInt(m[1], 10) * 1024,
+    osl: parseInt(m[2], 10) * (m[3] ? 1024 : 1),
+  };
 }
