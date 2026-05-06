@@ -39,6 +39,10 @@ describe('sequenceToIslOsl', () => {
     expect(sequenceToIslOsl('8k/1k')).toEqual({ isl: 8192, osl: 1024 });
   });
 
+  it('parses 8k/256 to 8192/256', () => {
+    expect(sequenceToIslOsl('8k/256')).toEqual({ isl: 8192, osl: 256 });
+  });
+
   it('returns null for unknown sequences', () => {
     expect(sequenceToIslOsl('2k/2k')).toBeNull();
     expect(sequenceToIslOsl('')).toBeNull();
@@ -55,13 +59,17 @@ describe('islOslToSequence', () => {
     expect(islOslToSequence(1024, 8192)).toBe('1k/8k');
   });
 
+  it('converts 8192/256 to 8k/256', () => {
+    expect(islOslToSequence(8192, 256)).toBe('8k/256');
+  });
+
   it('returns null for unmapped ISL/OSL pairs', () => {
     expect(islOslToSequence(2048, 2048)).toBeNull();
     expect(islOslToSequence(0, 0)).toBeNull();
   });
 
   it('round-trips with sequenceToIslOsl for all known sequences', () => {
-    for (const seq of ['1k/1k', '1k/8k', '8k/1k']) {
+    for (const seq of ['1k/1k', '1k/8k', '8k/1k', '8k/256']) {
       const parsed = sequenceToIslOsl(seq)!;
       expect(islOslToSequence(parsed.isl, parsed.osl)).toBe(seq);
     }
