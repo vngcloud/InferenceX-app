@@ -19,7 +19,7 @@ import type {
 } from '@/components/inference/types';
 import { processOverlayChartData } from '@/components/inference/utils';
 import type { HardwareEntry } from '@/lib/constants';
-import { overlayRunColor, overlayRunIndex } from '@/lib/overlay-run-style';
+import { overlayRunIndex } from '@/lib/overlay-run-style';
 
 const SYNTH_KEY_DELIM = '__uorun';
 
@@ -63,9 +63,12 @@ function makeSynthHardwareEntry(
 ): HardwareEntry {
   const branch = run.branch || `run ${run.id}`;
   const baseLabel = origEntry?.label ?? origHwKey;
+  // Legend label intentionally drops the branch — the color (assigned by the
+  // shared vendor-zone palette) is what disambiguates runs/GPUs visually.
+  // Branch + run URL stay in `gpu` so the row tooltip still shows provenance.
   return {
     name: synthHwKey.replaceAll('_', '-'),
-    label: `${baseLabel} • ${branch}`,
+    label: baseLabel,
     suffix: origEntry?.suffix ?? '',
     gpu: origEntry?.gpu ? `${origEntry.gpu} (UNOFFICIAL: ${branch})` : `UNOFFICIAL: ${branch}`,
     framework: origEntry?.framework,
@@ -100,7 +103,14 @@ interface MergeArgs {
 export interface MergeResult {
   graphs: RenderableGraph[];
   hardwareConfig: HardwareConfig;
-  /** Map from synth hwKey → CSS color. ScatterGraph consults this before falling back to vendor colors. */
+  /**
+   * Map from synth hwKey → CSS color. ScatterGraph consults this before falling
+   * back to vendor colors. Currently empty — synth keys preserve the original
+   * GPU base prefix (`b200_vllm__uorun123`), so the standard
+   * `generateVendorColors` pipeline picks a vendor-appropriate hue for each
+   * synth key automatically. The override map is retained so callers can still
+   * pin a specific color per synth key if needed.
+   */
   colorOverrides: Record<string, string>;
 }
 
@@ -146,9 +156,15 @@ export function mergeUnofficialIntoOfficial(args: MergeArgs): MergeResult {
 
   /**
    * Process overlay rows for one chart type: re-key by (run, origHwKey),
-   * synthesize HardwareEntry/colorOverride entries on first encounter, and
-   * apply the same metric/x-axis pipeline that `useChartData` runs on
-   * official rows so the resulting points sit in the same coordinate space.
+   * synthesize a HardwareEntry on first encounter, and apply the same
+   * metric/x-axis pipeline that `useChartData` runs on official rows so the
+   * resulting points sit in the same coordinate space.
+   *
+   * No color override is set: the synth hwKey preserves the original GPU base
+   * prefix, so the standard vendor-zone color generator distributes hues
+   * across all (official + synth) keys for a vendor automatically — that's
+   * how two NVIDIA GPUs from one unofficial run end up as different shades
+   * of green rather than two copies of the same overlay-palette color.
    */
   const processForChart = (
     chartType: 'e2e' | 'interactivity',
@@ -179,7 +195,6 @@ export function mergeUnofficialIntoOfficial(args: MergeArgs): MergeResult {
           run,
           synthHwKey,
         );
-        colorOverrides[synthHwKey] = overlayRunColor(runIdx);
       }
       return { ...row, hwKey: synthHwKey };
     });

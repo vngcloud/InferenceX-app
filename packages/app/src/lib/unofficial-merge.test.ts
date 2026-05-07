@@ -6,6 +6,7 @@ import type {
   InferenceData,
   RenderableGraph,
 } from '@/components/inference/types';
+import { generateVendorColors, getVendor } from '@/lib/dynamic-colors';
 
 import {
   isSynthHwKey,
@@ -183,7 +184,7 @@ describe('mergeUnofficialIntoOfficial', () => {
     expect(result.colorOverrides).toEqual({});
   });
 
-  it('rewrites overlay rows with synth hwKeys and adds matching hardwareConfig + colorOverrides', () => {
+  it('rewrites overlay rows with synth hwKeys and adds matching hardwareConfig (no color override)', () => {
     const { graphs, hardwareConfig } = emptyOfficial();
     const result = mergeUnofficialIntoOfficial({
       graphs,
@@ -205,14 +206,19 @@ describe('mergeUnofficialIntoOfficial', () => {
     expect(synthKeys).toContain('h100_vllm__uorun100');
     expect(synthKeys).toContain('a100_sglang__uorun100');
 
-    // The synth keys are present in hardwareConfig with branch-bearing labels.
+    // The synth keys are present in hardwareConfig with bare GPU labels — the
+    // branch is intentionally NOT in the legend label (the run is still
+    // recoverable from `gpu` for the row tooltip).
     const h100Synth = result.hardwareConfig['h100_vllm__uorun100'];
-    expect(h100Synth.label).toBe('H100 • feature-branch-a');
+    expect(h100Synth.label).toBe('H100');
+    expect(h100Synth.label).not.toContain('feature-branch-a');
     expect(h100Synth.gpu).toContain('UNOFFICIAL: feature-branch-a');
 
-    // Color overrides are populated for each synth key (palette-based, not GPU-vendor).
-    expect(result.colorOverrides['h100_vllm__uorun100']).toBe('var(--overlay-run-0)');
-    expect(result.colorOverrides['a100_sglang__uorun100']).toBe('var(--overlay-run-0)');
+    // No color overrides are populated — colors fall through to the
+    // vendor-aware system in dynamic-colors.ts so two NVIDIA GPUs from a
+    // single unofficial run get distinct shades of green instead of one
+    // shared overlay-palette color.
+    expect(result.colorOverrides).toEqual({});
   });
 
   it('keeps multiple runs separate so each (run, GPU) becomes its own legend entry', () => {
@@ -249,9 +255,18 @@ describe('mergeUnofficialIntoOfficial', () => {
     expect(h100Keys).toContain('h100_vllm__uorun100');
     expect(h100Keys).toContain('h100_vllm__uorun200');
 
-    expect(result.hardwareConfig['h100_vllm__uorun200'].label).toBe('H100 • feature-branch-b');
-    expect(result.colorOverrides['h100_vllm__uorun100']).toBe('var(--overlay-run-0)');
-    expect(result.colorOverrides['h100_vllm__uorun200']).toBe('var(--overlay-run-1)');
+    // Both runs of the same GPU get the bare GPU label — visual disambiguation
+    // is done by the vendor-zone color system, which assigns distinct hues
+    // within the same vendor band. Provenance still surfaces via `gpu`.
+    expect(result.hardwareConfig['h100_vllm__uorun100'].label).toBe('H100');
+    expect(result.hardwareConfig['h100_vllm__uorun200'].label).toBe('H100');
+    expect(result.hardwareConfig['h100_vllm__uorun100'].gpu).toContain(
+      'UNOFFICIAL: feature-branch-a',
+    );
+    expect(result.hardwareConfig['h100_vllm__uorun200'].gpu).toContain(
+      'UNOFFICIAL: feature-branch-b',
+    );
+    expect(result.colorOverrides).toEqual({});
   });
 
   it('preserves official rows alongside merged overlay rows', () => {
@@ -316,5 +331,52 @@ describe('mergeUnofficialIntoOfficial', () => {
     // Two stub graphs synthesized (e2e + interactivity), each carrying merged overlay rows.
     expect(result.graphs).toHaveLength(2);
     expect(result.graphs.every((g) => g.data.length > 0)).toBe(true);
+  });
+});
+
+// Pull a hue out of an `oklch(L C H)` string for assertions below.
+function hueOf(s: string): number {
+  const m = s.match(/oklch\([^)]*\s+([\d.]+)\)/);
+  return m ? Number(m[1]) : NaN;
+}
+
+describe('synth hwKey color integration with generateVendorColors', () => {
+  // Regression: previously, two NVIDIA GPUs from one unofficial run shared a
+  // single overlay-palette color (e.g. both rendered red), making B200 and
+  // B300 visually identical. Now the merge omits color overrides and the
+  // vendor-zone palette assigns each synth key its own hue within the
+  // vendor's band.
+  it('assigns distinct shades within the vendor zone to two NVIDIA GPUs from one unofficial run', () => {
+    const synthKeys = [makeSynthHwKey('b200_vllm', 100), makeSynthHwKey('b300_vllm', 100)];
+    expect(getVendor(synthKeys[0])).toBe('nvidia');
+    expect(getVendor(synthKeys[1])).toBe('nvidia');
+    const colors = generateVendorColors(synthKeys, 'light');
+    expect(colors[synthKeys[0]]).toBeDefined();
+    expect(colors[synthKeys[1]]).toBeDefined();
+    expect(colors[synthKeys[0]]).not.toBe(colors[synthKeys[1]]);
+  });
+
+  it('keeps NVIDIA synth keys inside the NVIDIA hue zone and AMD synth keys inside AMD', () => {
+    const nvidiaSynth = makeSynthHwKey('b200_vllm', 100);
+    const amdSynth = makeSynthHwKey('mi300x_sglang', 100);
+    const colors = generateVendorColors([nvidiaSynth, amdSynth], 'light');
+    // VENDOR_OKLCH_ZONES.nvidia is 120–170 (greens/teals).
+    const nvidiaHue = hueOf(colors[nvidiaSynth]);
+    expect(nvidiaHue).toBeGreaterThanOrEqual(120);
+    expect(nvidiaHue).toBeLessThanOrEqual(170);
+    // VENDOR_OKLCH_ZONES.amd is 12–42 (reds/oranges).
+    const amdHue = hueOf(colors[amdSynth]);
+    expect(amdHue).toBeGreaterThanOrEqual(12);
+    expect(amdHue).toBeLessThanOrEqual(42);
+  });
+
+  it('does not pin two unofficial runs of the same GPU to one color', () => {
+    // Both synth keys share the `b200_vllm` base, so they fall in the same
+    // sort bucket — but generateVendorColors still spreads them across
+    // distinct hues within the NVIDIA zone.
+    const a = makeSynthHwKey('b200_vllm', 100);
+    const b = makeSynthHwKey('b200_vllm', 200);
+    const colors = generateVendorColors([a, b], 'light');
+    expect(colors[a]).not.toBe(colors[b]);
   });
 });
