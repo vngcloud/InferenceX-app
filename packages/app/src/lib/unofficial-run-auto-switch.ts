@@ -46,3 +46,44 @@ export function computeAutoSwitchDecision(
   }
   return { nextKey: key, modelToSet: sortedModels[0] };
 }
+
+export interface UnofficialOverrideDecision {
+  /** New value the caller should write into the dedupe ref. */
+  nextKey: string;
+  /** Whether the caller should apply the temporary override. */
+  shouldOverride: boolean;
+}
+
+/**
+ * TEMPORARY (this branch only): when an unofficial run loads, override the
+ * default sequence to `8K / 256` and the default y-axis metric to "Output
+ * Token Throughput per GPU" so the InfiniteBench-style sweeps land on a
+ * useful default view. Mirrors the dedupe behavior of
+ * {@link computeAutoSwitchDecision} so manual user changes stick once they
+ * are URL-synced, and a fresh run-set transition can re-arm the override.
+ *
+ * - When the overlay set is empty, the dedupe key is reset.
+ * - When the URL pinned the corresponding param explicitly, no override
+ *   fires (respect intent).
+ * - The dedupe key is the sorted unique list of overlay models — same shape
+ *   as the auto-switch key — so a sequence-only delta does not invalidate a
+ *   manual user pick.
+ */
+export function computeUnofficialOverrideDecision(
+  unofficialAvailable: AvailableModelSequence[],
+  urlValue: string | undefined,
+  lastKey: string,
+): UnofficialOverrideDecision {
+  if (unofficialAvailable.length === 0) {
+    return { nextKey: '', shouldOverride: false };
+  }
+  if (urlValue) {
+    return { nextKey: lastKey, shouldOverride: false };
+  }
+  const sortedModels = [...new Set(unofficialAvailable.map((a) => a.model))].toSorted();
+  const key = sortedModels.join(',');
+  if (lastKey === key) {
+    return { nextKey: lastKey, shouldOverride: false };
+  }
+  return { nextKey: key, shouldOverride: true };
+}

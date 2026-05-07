@@ -29,6 +29,7 @@ import type {
 import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
 import { mergeUnofficialIntoOfficial } from '@/lib/unofficial-merge';
+import { computeUnofficialOverrideDecision } from '@/lib/unofficial-run-auto-switch';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -200,8 +201,31 @@ export function InferenceProvider({
   // synth hwKeys and merged into `graphs` so they participate in the same
   // filter/optimal-only/legend pipeline as official data. The resulting
   // `hwColorOverrides` map is consumed by ScatterGraph's color resolver.
-  const { mergeAsIngested, unofficialChartData, unofficialRunInfos, runIndexByUrl } =
-    useUnofficialRun();
+  const {
+    mergeAsIngested,
+    unofficialChartData,
+    unofficialRunInfos,
+    runIndexByUrl,
+    availableModelsAndSequences: unofficialAvailable,
+  } = useUnofficialRun();
+
+  // TEMPORARY (this branch only): default the y-axis metric to "Output Token
+  // Throughput per GPU" when an unofficial run loads and the URL didn't pin
+  // `i_metric`. Mirrors the sequence override in GlobalFilterContext — manual
+  // metric picks stick because the URL gets `i_metric` written after the
+  // override fires.
+  const lastUnofficialMetricOverrideRef = useRef<string>('');
+  useEffect(() => {
+    const decision = computeUnofficialOverrideDecision(
+      unofficialAvailable,
+      getUrlParam('i_metric'),
+      lastUnofficialMetricOverrideRef.current,
+    );
+    lastUnofficialMetricOverrideRef.current = decision.nextKey;
+    if (decision.shouldOverride) {
+      setSelectedYAxisMetric('y_outputTputPerGpu');
+    }
+  }, [unofficialAvailable]);
 
   const { graphs, hardwareConfig, hwColorOverrides } = useMemo(() => {
     if (!mergeAsIngested) {

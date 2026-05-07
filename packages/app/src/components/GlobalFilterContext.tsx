@@ -25,7 +25,10 @@ import {
   Sequence,
   SEQUENCE_OPTIONS,
 } from '@/lib/data-mappings';
-import { computeAutoSwitchDecision } from '@/lib/unofficial-run-auto-switch';
+import {
+  computeAutoSwitchDecision,
+  computeUnofficialOverrideDecision,
+} from '@/lib/unofficial-run-auto-switch';
 import type { AvailabilityRow, WorkflowInfoResponse } from '@/lib/api';
 
 interface RunInfo {
@@ -200,6 +203,23 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
       setSelectedModel(decision.modelToSet);
     }
   }, [unofficialAvailable, selectedModel]);
+
+  // TEMPORARY (this branch only): default the sequence to `8K / 256` when an
+  // unofficial run loads and the URL didn't pin `i_seq`. Same dedupe shape as
+  // the model auto-switch above — manual sequence picks stick because the URL
+  // gets `i_seq` written by the URL-sync effect after the override fires.
+  const lastUnofficialSeqOverrideRef = useRef<string>('');
+  useEffect(() => {
+    const decision = computeUnofficialOverrideDecision(
+      unofficialAvailable,
+      getUrlParam('i_seq'),
+      lastUnofficialSeqOverrideRef.current,
+    );
+    lastUnofficialSeqOverrideRef.current = decision.nextKey;
+    if (decision.shouldOverride) {
+      setSelectedSequence(Sequence.EightK_256);
+    }
+  }, [unofficialAvailable]);
 
   // Sequences available for the selected model (DB ∪ unofficial run for this model)
   const availableSequences = useMemo(() => {
