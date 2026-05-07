@@ -44,6 +44,7 @@ export const FRAMEWORK_LABELS: Record<string, string> = {
     ]),
   ),
   mtp: 'MTP',
+  aiperf: 'AIPerf',
 };
 
 /**
