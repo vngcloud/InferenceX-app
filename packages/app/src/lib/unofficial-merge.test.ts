@@ -1,0 +1,320 @@
+import { describe, expect, it } from 'vitest';
+
+import type {
+  ChartDefinition,
+  HardwareConfig,
+  InferenceData,
+  RenderableGraph,
+} from '@/components/inference/types';
+
+import {
+  isSynthHwKey,
+  makeSynthHwKey,
+  mergeUnofficialIntoOfficial,
+  parseSynthHwKey,
+  type UnofficialChartDataMap,
+} from './unofficial-merge';
+
+const E2E_DEF: ChartDefinition = {
+  chartType: 'e2e',
+  x: 'median_e2el',
+  y: 'tput_per_gpu',
+  x_label: 'End-to-end Latency (s)',
+  y_label: 'Throughput per GPU (tok/s/GPU)',
+  heading: 'Throughput vs Latency',
+  y_tpPerGpu_label: 'Throughput per GPU (tok/s/GPU)',
+} as unknown as ChartDefinition;
+
+const INTERACTIVITY_DEF: ChartDefinition = {
+  chartType: 'interactivity',
+  x: 'median_intvty',
+  y: 'tput_per_gpu',
+  x_label: 'Interactivity (tok/s/user)',
+  y_label: 'Throughput per GPU (tok/s/GPU)',
+  heading: 'Throughput vs Interactivity',
+  y_tpPerGpu_label: 'Throughput per GPU (tok/s/GPU)',
+} as unknown as ChartDefinition;
+
+const CHART_DEFS: ChartDefinition[] = [E2E_DEF, INTERACTIVITY_DEF];
+
+function makeOverlayPoint(overrides: Partial<InferenceData> = {}): InferenceData {
+  return {
+    hwKey: 'h100_vllm',
+    precision: 'fp8',
+    tp: 8,
+    conc: 64,
+    x: 0,
+    y: 0,
+    median_e2el: 2.3,
+    median_intvty: 12.5,
+    p99_ttft: 0.35,
+    median_ttft: 0.15,
+    tpPerGpu: { y: 450.5, roof: false },
+    date: '2026-04-01',
+    run_url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/100',
+    ...overrides,
+  } as InferenceData;
+}
+
+function makeOverlayChartData(): UnofficialChartDataMap {
+  const e2eData = [
+    makeOverlayPoint({ conc: 32 }),
+    makeOverlayPoint({
+      hwKey: 'a100_sglang',
+      conc: 64,
+      tpPerGpu: { y: 200.1, roof: false },
+    }),
+  ];
+  const interactivityData = [
+    makeOverlayPoint({ conc: 32 }),
+    makeOverlayPoint({
+      hwKey: 'a100_sglang',
+      conc: 64,
+      tpPerGpu: { y: 200.1, roof: false },
+    }),
+  ];
+  const gpus: HardwareConfig = {
+    h100_vllm: { name: 'h100_vllm', label: 'H100', suffix: '(VLLM)', gpu: 'NVIDIA H100' },
+    a100_sglang: { name: 'a100_sglang', label: 'A100', suffix: '(SGLANG)', gpu: 'NVIDIA A100' },
+  };
+  return {
+    'DeepSeek-R1-0528_1k/1k': {
+      e2e: { data: e2eData, gpus },
+      interactivity: { data: interactivityData, gpus },
+    },
+  };
+}
+
+function emptyOfficial(): { graphs: RenderableGraph[]; hardwareConfig: HardwareConfig } {
+  return {
+    graphs: [
+      { model: 'DeepSeek-R1-0528', sequence: '1k/1k', chartDefinition: E2E_DEF, data: [] },
+      {
+        model: 'DeepSeek-R1-0528',
+        sequence: '1k/1k',
+        chartDefinition: INTERACTIVITY_DEF,
+        data: [],
+      },
+    ],
+    hardwareConfig: {},
+  };
+}
+
+const RUN_INDEX = {
+  'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/100': 0,
+  '100': 0,
+  'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/200': 1,
+  '200': 1,
+};
+
+const RUN_INFOS = [
+  {
+    id: 100,
+    branch: 'feature-branch-a',
+    url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/100',
+  },
+  {
+    id: 200,
+    branch: 'feature-branch-b',
+    url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/200',
+  },
+];
+
+describe('synth hwKey helpers', () => {
+  it('encodes runId into hwKey while preserving the GPU base prefix', () => {
+    const synth = makeSynthHwKey('h100_vllm', 100);
+    expect(synth).toBe('h100_vllm__uorun100');
+    // Critical: the base GPU is still recoverable via split('_')[0] so
+    // getModelSortIndex / isKnownGpu keep working.
+    expect(synth.split('_')[0]).toBe('h100');
+  });
+
+  it('round-trips through parseSynthHwKey', () => {
+    const synth = makeSynthHwKey('a100_sglang', 200);
+    expect(parseSynthHwKey(synth)).toEqual({ origHwKey: 'a100_sglang', runId: 200 });
+  });
+
+  it('parseSynthHwKey returns null for non-synth keys', () => {
+    expect(parseSynthHwKey('h100_vllm')).toBeNull();
+    expect(parseSynthHwKey('mi300x')).toBeNull();
+  });
+
+  it('isSynthHwKey detects synthesized keys', () => {
+    expect(isSynthHwKey(makeSynthHwKey('h100', 100))).toBe(true);
+    expect(isSynthHwKey('h100_vllm')).toBe(false);
+  });
+});
+
+describe('mergeUnofficialIntoOfficial', () => {
+  it('is a no-op when unofficialChartData is null', () => {
+    const { graphs, hardwareConfig } = emptyOfficial();
+    const result = mergeUnofficialIntoOfficial({
+      graphs,
+      hardwareConfig,
+      unofficialChartData: null,
+      selectedModel: 'DeepSeek-R1-0528',
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: {},
+      unofficialRunInfos: [],
+    });
+    expect(result.graphs).toBe(graphs);
+    expect(result.hardwareConfig).toBe(hardwareConfig);
+    expect(result.colorOverrides).toEqual({});
+  });
+
+  it('is a no-op when no overlay group matches the selected (model, sequence)', () => {
+    const { graphs, hardwareConfig } = emptyOfficial();
+    const result = mergeUnofficialIntoOfficial({
+      graphs,
+      hardwareConfig,
+      unofficialChartData: makeOverlayChartData(),
+      selectedModel: 'gpt-oss-120b', // not present in overlay map
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: RUN_INDEX,
+      unofficialRunInfos: RUN_INFOS,
+    });
+    expect(result.graphs).toBe(graphs);
+    expect(result.colorOverrides).toEqual({});
+  });
+
+  it('rewrites overlay rows with synth hwKeys and adds matching hardwareConfig + colorOverrides', () => {
+    const { graphs, hardwareConfig } = emptyOfficial();
+    const result = mergeUnofficialIntoOfficial({
+      graphs,
+      hardwareConfig,
+      unofficialChartData: makeOverlayChartData(),
+      selectedModel: 'DeepSeek-R1-0528',
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: RUN_INDEX,
+      unofficialRunInfos: RUN_INFOS,
+    });
+
+    // Each chart graph received both overlay rows (different GPUs, both run 100).
+    const e2eGraph = result.graphs.find((g) => g.chartDefinition.chartType === 'e2e')!;
+    expect(e2eGraph.data).toHaveLength(2);
+    const synthKeys = e2eGraph.data.map((d) => d.hwKey);
+    expect(synthKeys).toContain('h100_vllm__uorun100');
+    expect(synthKeys).toContain('a100_sglang__uorun100');
+
+    // The synth keys are present in hardwareConfig with branch-bearing labels.
+    const h100Synth = result.hardwareConfig['h100_vllm__uorun100'];
+    expect(h100Synth.label).toBe('H100 • feature-branch-a');
+    expect(h100Synth.gpu).toContain('UNOFFICIAL: feature-branch-a');
+
+    // Color overrides are populated for each synth key (palette-based, not GPU-vendor).
+    expect(result.colorOverrides['h100_vllm__uorun100']).toBe('var(--overlay-run-0)');
+    expect(result.colorOverrides['a100_sglang__uorun100']).toBe('var(--overlay-run-0)');
+  });
+
+  it('keeps multiple runs separate so each (run, GPU) becomes its own legend entry', () => {
+    const data = makeOverlayChartData();
+    // Inject a second run's row alongside the first.
+    const secondRunPoint = makeOverlayPoint({
+      hwKey: 'h100_vllm',
+      run_url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/200',
+      tpPerGpu: { y: 460, roof: false },
+    });
+    data['DeepSeek-R1-0528_1k/1k'].e2e.data.push(secondRunPoint);
+    data['DeepSeek-R1-0528_1k/1k'].interactivity.data.push(secondRunPoint);
+
+    const { graphs, hardwareConfig } = emptyOfficial();
+    const result = mergeUnofficialIntoOfficial({
+      graphs,
+      hardwareConfig,
+      unofficialChartData: data,
+      selectedModel: 'DeepSeek-R1-0528',
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: RUN_INDEX,
+      unofficialRunInfos: RUN_INFOS,
+    });
+
+    // Same physical GPU (h100_vllm) appears twice — once per run — with distinct
+    // synth keys so they form separate roofline groups in the scatter chart.
+    const e2eGraph = result.graphs.find((g) => g.chartDefinition.chartType === 'e2e')!;
+    const h100Keys = e2eGraph.data
+      .map((d) => d.hwKey)
+      .filter((k) => String(k).startsWith('h100_vllm__uorun'));
+    expect(h100Keys).toContain('h100_vllm__uorun100');
+    expect(h100Keys).toContain('h100_vllm__uorun200');
+
+    expect(result.hardwareConfig['h100_vllm__uorun200'].label).toBe('H100 • feature-branch-b');
+    expect(result.colorOverrides['h100_vllm__uorun100']).toBe('var(--overlay-run-0)');
+    expect(result.colorOverrides['h100_vllm__uorun200']).toBe('var(--overlay-run-1)');
+  });
+
+  it('preserves official rows alongside merged overlay rows', () => {
+    const { hardwareConfig } = emptyOfficial();
+    const officialPoint = {
+      hwKey: 'b200_trt',
+      precision: 'fp4',
+      tp: 4,
+      conc: 8,
+      x: 1.5,
+      y: 800,
+      date: '2026-03-01',
+    } as InferenceData;
+    const graphs: RenderableGraph[] = [
+      {
+        model: 'DeepSeek-R1-0528',
+        sequence: '1k/1k',
+        chartDefinition: E2E_DEF,
+        data: [officialPoint],
+      },
+      {
+        model: 'DeepSeek-R1-0528',
+        sequence: '1k/1k',
+        chartDefinition: INTERACTIVITY_DEF,
+        data: [officialPoint],
+      },
+    ];
+
+    const result = mergeUnofficialIntoOfficial({
+      graphs,
+      hardwareConfig,
+      unofficialChartData: makeOverlayChartData(),
+      selectedModel: 'DeepSeek-R1-0528',
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: RUN_INDEX,
+      unofficialRunInfos: RUN_INFOS,
+    });
+
+    const e2eGraph = result.graphs.find((g) => g.chartDefinition.chartType === 'e2e')!;
+    expect(e2eGraph.data.some((d) => d.hwKey === 'b200_trt')).toBe(true);
+    expect(e2eGraph.data.some((d) => String(d.hwKey).startsWith('h100_vllm__uorun'))).toBe(true);
+  });
+
+  it('synthesizes stub graphs from chartDefinitions when official graphs is empty', () => {
+    const result = mergeUnofficialIntoOfficial({
+      graphs: [],
+      hardwareConfig: {},
+      unofficialChartData: makeOverlayChartData(),
+      selectedModel: 'DeepSeek-R1-0528',
+      selectedSequence: '1k/1k',
+      selectedYAxisMetric: 'y_tpPerGpu',
+      selectedXAxisMetric: null,
+      selectedE2eXAxisMetric: null,
+      runIndexByUrl: RUN_INDEX,
+      unofficialRunInfos: RUN_INFOS,
+      chartDefinitions: CHART_DEFS,
+    });
+
+    // Two stub graphs synthesized (e2e + interactivity), each carrying merged overlay rows.
+    expect(result.graphs).toHaveLength(2);
+    expect(result.graphs.every((g) => g.data.length > 0)).toBe(true);
+  });
+});

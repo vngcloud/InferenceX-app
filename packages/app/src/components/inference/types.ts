@@ -527,6 +527,12 @@ export interface InferenceChartContextType {
   activePresetId: string | null;
   setActivePresetId: (id: string | null) => void;
   presetGuardRef: React.RefObject<boolean>;
+  /**
+   * Per-hwKey CSS color overrides. Populated when unofficial-as-ingested
+   * merging is on so each synthesized run series gets the same per-run color
+   * the overlay legend would have shown. Empty when nothing is merged.
+   */
+  hwColorOverrides: Record<string, string>;
 }
 export interface CalculateUserCostsRequest {
   model: string;

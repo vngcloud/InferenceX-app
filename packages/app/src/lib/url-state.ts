@@ -37,6 +37,7 @@ const URL_STATE_KEYS = [
   'i_advlabel',
   'i_gradlabel',
   'i_linelabel',
+  'i_uoff_ingested',
   // Evaluation
   'e_rundate',
   'e_bench',
@@ -76,6 +77,7 @@ export const PARAM_DEFAULTS: Record<UrlStateKey, string> = {
   i_advlabel: '',
   i_gradlabel: '',
   i_linelabel: '',
+  i_uoff_ingested: '',
   e_rundate: '',
   e_bench: '',
   e_hc: '',

@@ -17,10 +17,14 @@ import { FAVORITE_PRESETS, type FavoritePreset } from '@/components/favorites/fa
 
 import { useGlobalFilters } from '@/components/GlobalFilterContext';
 import type {
+  ChartDefinition,
   InferenceChartContextType,
   InferenceData,
   TrackedConfig,
 } from '@/components/inference/types';
+import { useUnofficialRun } from '@/components/unofficial-run-provider';
+import chartDefinitions from '@/components/inference/inference-chart-config.json';
+import { mergeUnofficialIntoOfficial } from '@/lib/unofficial-merge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -144,10 +148,10 @@ export function InferenceProvider({
   const latestDate = availableDates.length > 0 ? availableDates.at(-1) : undefined;
 
   const {
-    graphs,
+    graphs: officialGraphs,
     loading: chartDataLoading,
     error: chartDataError,
-    hardwareConfig,
+    hardwareConfig: officialHardwareConfig,
   } = useChartData(
     selectedModel,
     effectiveSequence,
@@ -164,6 +168,58 @@ export function InferenceProvider({
     isActive,
     latestDate,
   );
+
+  // ── Promote unofficial rows to first-class series when toggled ────────────
+  // When `mergeAsIngested` is on, overlay points are re-keyed with per-run
+  // synth hwKeys and merged into `graphs` so they participate in the same
+  // filter/optimal-only/legend pipeline as official data. The resulting
+  // `hwColorOverrides` map is consumed by ScatterGraph's color resolver.
+  const { mergeAsIngested, unofficialChartData, unofficialRunInfos, runIndexByUrl } =
+    useUnofficialRun();
+
+  const { graphs, hardwareConfig, hwColorOverrides } = useMemo(() => {
+    if (!mergeAsIngested) {
+      return {
+        graphs: officialGraphs,
+        hardwareConfig: officialHardwareConfig,
+        hwColorOverrides: {} as Record<string, string>,
+      };
+    }
+    const merged = mergeUnofficialIntoOfficial({
+      graphs: officialGraphs,
+      hardwareConfig: officialHardwareConfig,
+      unofficialChartData,
+      selectedModel,
+      selectedSequence: effectiveSequence,
+      selectedYAxisMetric,
+      selectedXAxisMetric,
+      selectedE2eXAxisMetric,
+      runIndexByUrl,
+      unofficialRunInfos: unofficialRunInfos.map((r) => ({
+        id: r.id,
+        branch: r.branch,
+        url: r.url,
+      })),
+      chartDefinitions: chartDefinitions as ChartDefinition[],
+    });
+    return {
+      graphs: merged.graphs,
+      hardwareConfig: merged.hardwareConfig,
+      hwColorOverrides: merged.colorOverrides,
+    };
+  }, [
+    mergeAsIngested,
+    officialGraphs,
+    officialHardwareConfig,
+    unofficialChartData,
+    selectedModel,
+    effectiveSequence,
+    selectedYAxisMetric,
+    selectedXAxisMetric,
+    selectedE2eXAxisMetric,
+    runIndexByUrl,
+    unofficialRunInfos,
+  ]);
 
   // For GPU comparison date picker — use shared availability data from global filters
   const dbModelKeys = useMemo<string[]>(
@@ -833,6 +889,7 @@ export function InferenceProvider({
       activePresetId,
       setActivePresetId,
       presetGuardRef,
+      hwColorOverrides,
     }),
     [
       activeHwTypes,
@@ -884,6 +941,7 @@ export function InferenceProvider({
       removeTrackedConfig,
       clearTrackedConfigs,
       activePresetId,
+      hwColorOverrides,
     ],
   );
 

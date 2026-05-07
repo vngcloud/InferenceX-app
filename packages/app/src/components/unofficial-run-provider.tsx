@@ -51,6 +51,15 @@ interface AvailableModelSequence {
 
 export interface UnofficialRunContextType {
   isUnofficialRun: boolean;
+  /**
+   * When true, unofficial-run rows are promoted to first-class series in the
+   * inference scatter — each (run, GPU config) pair becomes its own legend
+   * entry with the run's branch name, and the rows participate in the same
+   * filter pipeline as ingested data (Optimal-only, hardware toggles, etc.)
+   * instead of rendering as a separate X-shape overlay.
+   */
+  mergeAsIngested: boolean;
+  setMergeAsIngested: (v: boolean) => void;
   /** First run in the loaded set — kept as a convenience alias for overlay labels. */
   unofficialRunInfo: UnofficialRunInfo | null;
   /** All runs loaded from the `unofficialrun(s)` URL param (comma-separated). */
@@ -175,6 +184,32 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
   const [availableModelsAndSequences, setAvailableModelsAndSequences] = useState<
     AvailableModelSequence[]
   >([]);
+
+  // Promote unofficial rows to ingested-style series. Initial value seeded
+  // synchronously when running in the browser so the toggle starts checked
+  // when the user shares a URL like `?unofficialrun=…&i_uoff_ingested=1`.
+  // Under SSR the value is false; we sync from the URL again after mount via
+  // the popstate listener attached below.
+  const [mergeAsIngested, setMergeAsIngestedRaw] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const sp = new URLSearchParams(window.location.search);
+    return sp.get('i_uoff_ingested') === '1';
+  });
+  // Re-sync after hydration in case the server rendered with the SSR default.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const fromUrl = sp.get('i_uoff_ingested') === '1';
+    setMergeAsIngestedRaw((prev) => (prev !== fromUrl ? fromUrl : prev));
+  }, []);
+  const setMergeAsIngested = useCallback((v: boolean) => {
+    setMergeAsIngestedRaw(v);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (v) url.searchParams.set('i_uoff_ingested', '1');
+    else url.searchParams.delete('i_uoff_ingested');
+    window.history.replaceState({}, '', url);
+  }, []);
 
   // --- Shared overlay toggle state (unified across both charts) ---
   const [activeOverlayHwTypes, setActiveOverlayHwTypes] = useState<Set<string>>(new Set());
@@ -398,6 +433,8 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
     <UnofficialRunContext.Provider
       value={{
         isUnofficialRun: unofficialRunInfos.length > 0,
+        mergeAsIngested,
+        setMergeAsIngested,
         unofficialRunInfo,
         unofficialRunInfos,
         runIndexByUrl,
