@@ -466,7 +466,7 @@ export function useChartExport({
       const exportElement = document.querySelector<HTMLElement>(`#${chartId}-export`);
       if (exportElement) exportElement.innerHTML = '';
     }
-  }, [chartId, setIsLegendExpanded]);
+  }, [chartId, setIsLegendExpanded, exportFileName]);
 
   return { isExporting, exportToImage };
 }
