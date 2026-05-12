@@ -87,7 +87,9 @@ function buildRunInfo(data: WorkflowInfoResponse): Record<string, RunInfo> {
   const runs: Record<string, RunInfo> = {};
   for (const run of data.runs) {
     const runId = String(run.github_run_id);
-    const runChangelogs = data.changelogs.filter((c) => c.workflow_run_id === run.github_run_id);
+    const runChangelogs = data.changelogs.filter(
+      (c) => String(c.workflow_run_id) === String(run.github_run_id),
+    );
     runs[runId] = {
       runId,
       runDate: run.created_at,
