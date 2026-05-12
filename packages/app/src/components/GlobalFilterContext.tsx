@@ -125,7 +125,9 @@ export function GlobalFilterProvider({ children }: { children: ReactNode }) {
   const [selectedSequence, setSelectedSequence] = useState<Sequence>(() => {
     const urlSeq = getUrlParam('i_seq');
     if (urlSeq && Object.values(Sequence).includes(urlSeq as Sequence)) return urlSeq as Sequence;
-    return Sequence.EightK_OneK;
+    // Prefer Agentic Traces by default when the selected model has it; the
+    // effectiveSequence fallback below handles models without agentic data.
+    return Sequence.AgenticTraces;
   });
 
   const [selectedPrecisions, setSelectedPrecisionsRaw] = useState<string[]>(() => {
