@@ -39,7 +39,6 @@ import {
   getModelLabel,
   getPrecisionLabel,
   getSequenceLabel,
-  isModelExperimental,
 } from '@/lib/data-mappings';
 import { useComparisonChangelogs } from '@/hooks/api/use-comparison-changelogs';
 import { useTrendData } from '@/components/inference/hooks/useTrendData';
@@ -186,7 +185,7 @@ export default function ChartDisplay() {
         const info = unofficialRunInfos[runIndexByUrl[url]];
         return info ? { branch: info.branch, url: info.url } : undefined;
       }
-      const idMatch = url.match(/\/runs\/(\d+)/);
+      const idMatch = url.match(/\/runs\/(\d+)/u);
       if (idMatch && idMatch[1] in runIndexByUrl) {
         const info = unofficialRunInfos[runIndexByUrl[idMatch[1]]];
         return info ? { branch: info.branch, url: info.url } : undefined;
@@ -467,21 +466,6 @@ export default function ChartDisplay() {
                       </p>
                       <MetricAssumptionNotes selectedYAxisMetric={selectedYAxisMetric} />
                       <UnofficialDomainNotice />
-                      <div
-                        className={`overflow-hidden transition-all duration-200 ease-in-out ${
-                          isModelExperimental(selectedModel)
-                            ? 'max-h-20 opacity-100'
-                            : 'max-h-0 opacity-0'
-                        }`}
-                      >
-                        <p className="text-muted-foreground text-xs mt-2 border-l-2 border-amber-500 pl-2 bg-amber-500/5 py-1">
-                          <strong>Note:</strong> At SemiAnalysis InferenceX™, we're still in the
-                          early stages of adding support for this model. Please note that these
-                          InferenceX™ results are experimental. If a GPU SKU is currently missing,
-                          it does not necessarily mean the model is unsupported; it simply means
-                          InferenceX™ has not added that SKU yet. Additional support is coming soon.
-                        </p>
-                      </div>
                     </>
                   );
 
@@ -561,7 +545,7 @@ export default function ChartDisplay() {
 
   return (
     <div data-testid="inference-chart-display" className="flex flex-col gap-4">
-      <section className="relative z-10">
+      <section className="relative z-20">
         <Card>
           <div className="flex flex-col gap-4">
             <div className="flex items-start justify-between">
@@ -679,7 +663,6 @@ export default function ChartDisplay() {
               yLabel={currentYLabel}
               logScale={logScale}
               selectedPrecisions={selectedPrecisions}
-              selectedModel={selectedModel}
             />
           </div>
           <div className="relative">
@@ -695,7 +678,6 @@ export default function ChartDisplay() {
               yLabel={currentXLabel}
               logScale={logScale}
               selectedPrecisions={selectedPrecisions}
-              selectedModel={selectedModel}
             />
           </div>
         </DialogContent>

@@ -12,32 +12,19 @@ import {
 export { GPU_KEYS };
 
 /**
- * Strip known hw suffixes (-trt, -multinode-slurm, -amds, etc.) from a raw
- * hardware identifier and return the canonical lowercase GPU key.
+ * Strip everything from the first `-` onwards (and any trailing `_<digits>`
+ * runner-index suffix) from a raw hardware identifier and return the canonical
+ * lowercase GPU key. All keys in `GPU_KEYS` are single-segment, so this is
+ * sufficient; unknown bases return `null`.
  *
  * @param hw - Raw hardware string from the benchmark artifact (e.g. `"h200-nv"`, `"mi355x-amds"`).
  * @returns The canonical GPU key (e.g. `"h200"`, `"mi355x"`), or `null` if the
  *   stripped base is not in `GPU_KEYS`.
  */
 export function hwToGpuKey(hw: string): string | null {
-  const base = hw
-    .toLowerCase()
-    .replace(/_\d+$/, '') // strip runner index suffix (e.g. mi355x-amd_0 → mi355x-amd)
-    .replace(/-trt$/, '')
-    .replace(/-multinode-slurm$/, '')
-    .replace(/-multinode$/, '')
-    .replace(/-nvs$/, '')
-    .replace(/-disagg$/, '')
-    .replace(/-amds$/, '')
-    .replace(/-amd$/, '')
-    .replace(/-nvd$/, '')
-    .replace(/-dgxc-slurm$/, '')
-    .replace(/-dgxc$/, '')
-    .replace(/-nb$/, '')
-    .replace(/-dsv4$/, '')
-    .replace(/-cw$/, '')
-    .replace(/-nv$/, '')
-    .replace(/-p\d+$/, ''); // strip runner-pool suffix (e.g. b300-p1 → b300)
+  // Take the first segment before `-` as the canonical key. Subsumes all the
+  // prior explicit suffix strips (-nv, -amds, -dgxc-slurm, -p1, -cw, …).
+  const base = hw.toLowerCase().split('-')[0];
   return GPU_KEYS.has(base) ? base : null;
 }
 
@@ -50,7 +37,7 @@ export function hwToGpuKey(hw: string): string | null {
 const DB_MODEL_KEYS = new Set(Object.keys(DB_MODEL_TO_DISPLAY));
 
 /** Precision suffixes that can appear on `infmax_model_prefix` values. */
-const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/i;
+const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/iu;
 
 /** Explicit aliases for prefixes that don't match any DB key after suffix stripping. */
 const PREFIX_ALIASES: Record<string, string> = {
@@ -236,7 +223,7 @@ export function parseInt2(v: any): number | undefined {
  * @returns An object with `isl` and `osl` in tokens, or `null` if no match is found.
  */
 export function parseIslOsl(name: string): { isl: number; osl: number } | null {
-  const m = name.match(/[_-](\d+)k(\d+)k[_\-.]/i);
+  const m = name.match(/[_-](\d+)k(\d+)k[_\-.]/iu);
   if (!m) return null;
   return { isl: parseInt(m[1], 10) * 1024, osl: parseInt(m[2], 10) * 1024 };
 }

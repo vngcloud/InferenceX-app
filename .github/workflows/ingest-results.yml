@@ -15,7 +15,7 @@ jobs:
         run: sleep 300
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: pnpm/action-setup@8912a9102ac27614460f54aedde9e1e7f9aec20d # v6.0.5
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
@@ -76,6 +76,33 @@ jobs:
             exit 1
           fi
 
+      - name: Flatten reused ingest artifact bundle
+        env:
+          ARTIFACTS_PATH: ${{ github.workspace }}/artifacts
+        run: |
+          bundle="$ARTIFACTS_PATH/reused-ingest-artifacts"
+          if [ ! -d "$bundle" ]; then
+            echo "No reused ingest artifact bundle found."
+            exit 0
+          fi
+
+          echo "Flattening reused ingest artifact bundle:"
+          for child in "$bundle"/*; do
+            [ -e "$child" ] || continue
+            name=$(basename "$child")
+            dest="$ARTIFACTS_PATH/$name"
+            if [ -e "$dest" ]; then
+              echo "::error::Cannot flatten reused artifact '$name'; destination already exists"
+              exit 1
+            fi
+            mv "$child" "$dest"
+            echo "  $name"
+          done
+          rmdir "$bundle"
+
+          echo "Artifacts after flattening:"
+          ls "$ARTIFACTS_PATH/"
+
       - name: Ingest results to DB
         env:
           DATABASE_WRITE_URL: ${{ secrets.DATABASE_WRITE_URL }}
@@ -127,7 +154,7 @@ jobs:
 
       - name: Notify Slack on unmapped entities
         if: steps.unmapped.outputs.found == 'true'
-        uses: slackapi/slack-github-action@03ea5433c137af7c0495bc0cad1af10403fc800c # v3.0.2
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -138,7 +165,7 @@ jobs:
 
       - name: Notify Slack on failure
         if: failure()
-        uses: slackapi/slack-github-action@03ea5433c137af7c0495bc0cad1af10403fc800c # v3.0.2
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook

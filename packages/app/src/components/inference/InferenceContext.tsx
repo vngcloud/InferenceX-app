@@ -48,7 +48,7 @@ import {
   MtpEngineConflictToast,
   type MtpEngineConflictDetail,
 } from '@/components/mtp-engine-conflict-toast';
-import { clearAllMtpFamilies, resolveMtpToggle } from '@/lib/mtp-exclusion';
+import { clearAllMtpFamilies, effectiveLegendItems, resolveMtpToggle } from '@/lib/mtp-exclusion';
 import { filterRunsByModel, getDisplayLabel } from '@/lib/utils';
 
 import { useChartData } from './hooks/useChartData';
@@ -141,6 +141,10 @@ export function InferenceProvider({
     () => getUrlParam('i_gradlabel') === '1',
   );
   const [showLineLabels, setShowLineLabels] = useState(() => getUrlParam('i_linelabel') === '1');
+  const [showSpeedOverlay, setShowSpeedOverlay] = useState(() => getUrlParam('i_speed') === '1');
+  const [showMinecraftOverlay, setShowMinecraftOverlay] = useState(
+    () => getUrlParam('i_mc') === '1',
+  );
   const [userCosts, setUserCosts] = useState<Record<string, number | undefined> | null>(null);
   const [userPowers, setUserPowers] = useState<Record<string, number | undefined> | null>(null);
 
@@ -307,7 +311,7 @@ export function InferenceProvider({
   const presetGuardRef = useRef(false);
   const clearPresetOnChange = useCallback(() => {
     if (presetGuardRef.current) return;
-    setActivePresetId((prev) => (prev !== null ? null : prev));
+    setActivePresetId((prev) => (prev === null ? prev : null));
     presetHwFilterRef.current = null;
   }, []);
   const setSelectedModelAndClear = useCallback(
@@ -450,8 +454,15 @@ export function InferenceProvider({
   const mtpExclusion = hasMtpEngineExclusion(selectedModel);
   const toggleHwType = useCallback(
     (hw: string) => {
+      // Under MTP exclusion, hide MTP keys from inactive families when
+      // computing the toggle "universe". This makes the default-deselected
+      // state (DSv4 on first load) count as "all selected", so clicking a
+      // legend entry solos it instead of just removing it.
+      const toggleUniverse = mtpExclusion
+        ? effectiveLegendItems(hwTypesWithData, activeHwTypes)
+        : hwTypesWithData;
       if (mtpExclusion) {
-        const decision = resolveMtpToggle(activeHwTypes, hw, hwTypesWithData);
+        const decision = resolveMtpToggle(activeHwTypes, hw, toggleUniverse);
         if (decision.kind === 'block') {
           setMtpConflict({
             kind: 'blocked',
@@ -467,7 +478,7 @@ export function InferenceProvider({
           return;
         }
       }
-      toggleHwRaw(hw, hwTypesWithData);
+      toggleHwRaw(hw, toggleUniverse);
       setActivePresetId(null);
       presetHwFilterRef.current = null;
     },
@@ -643,9 +654,9 @@ export function InferenceProvider({
   }, [allDateIds, setActiveDates]);
 
   useEffect(() => {
-    if (selectedYAxisMetric !== 'y_costUser') setUserCosts((prev) => (prev !== null ? null : prev));
+    if (selectedYAxisMetric !== 'y_costUser') setUserCosts((prev) => (prev === null ? prev : null));
     if (selectedYAxisMetric !== 'y_powerUser')
-      setUserPowers((prev) => (prev !== null ? null : prev));
+      setUserPowers((prev) => (prev === null ? prev : null));
   }, [selectedModel, effectiveSequence, effectivePrecisions, selectedYAxisMetric]);
 
   const modelPrefixes = useMemo(
@@ -750,6 +761,8 @@ export function InferenceProvider({
       i_advlabel: useAdvancedLabels ? '1' : '',
       i_gradlabel: showGradientLabels ? '1' : '',
       i_linelabel: showLineLabels ? '1' : '',
+      i_speed: showSpeedOverlay ? '1' : '',
+      i_mc: showMinecraftOverlay ? '1' : '',
       i_active: iActiveStr,
     },
     [
@@ -768,6 +781,8 @@ export function InferenceProvider({
       useAdvancedLabels,
       showGradientLabels,
       showLineLabels,
+      showSpeedOverlay,
+      showMinecraftOverlay,
       iActiveStr,
     ],
   );
@@ -966,6 +981,10 @@ export function InferenceProvider({
       setShowGradientLabels,
       showLineLabels,
       setShowLineLabels,
+      showSpeedOverlay,
+      setShowSpeedOverlay,
+      showMinecraftOverlay,
+      setShowMinecraftOverlay,
       trackedConfigs,
       addTrackedConfig,
       removeTrackedConfig,
@@ -1018,6 +1037,8 @@ export function InferenceProvider({
       useAdvancedLabels,
       showGradientLabels,
       showLineLabels,
+      showSpeedOverlay,
+      showMinecraftOverlay,
       userCosts,
       userPowers,
       trackedConfigs,

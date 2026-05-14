@@ -5,10 +5,9 @@ import { track } from '@/lib/analytics';
 import { BarChart3, Radar, Table2 } from 'lucide-react';
 
 import { Card } from '@/components/ui/card';
+import { ChartShareActions } from '@/components/ui/chart-display-helpers';
 import { SegmentedToggle, type SegmentedToggleOption } from '@/components/ui/segmented-toggle';
-import { ShareButton } from '@/components/ui/share-button';
 import { UnofficialDomainNotice } from '@/components/ui/unofficial-domain-notice';
-import { ShareTwitterButton, ShareLinkedInButton } from '@/components/share-buttons';
 import {
   formatTflops,
   getScaleUpDomainMemory,
@@ -321,13 +320,7 @@ export function GpuSpecsContent() {
                 compute performance, memory bandwidth, and interconnect details.
               </p>
             </div>
-            <div className="flex items-center gap-1.5">
-              <ShareButton />
-              <div className="hidden sm:flex items-center gap-1.5">
-                <ShareTwitterButton />
-                <ShareLinkedInButton />
-              </div>
-            </div>
+            <ChartShareActions />
           </div>
         </Card>
       </section>
@@ -379,7 +372,7 @@ export function GpuSpecsContent() {
               <div
                 key={spec.name}
                 className="border border-border/50 rounded-lg p-4"
-                data-testid={`topology-${spec.name.toLowerCase().replaceAll(/\s+/g, '-')}`}
+                data-testid={`topology-${spec.name.toLowerCase().replaceAll(/\s+/gu, '-')}`}
               >
                 <TopologyDiagram
                   ref={(el) => {
@@ -405,7 +398,7 @@ export function GpuSpecsContent() {
               <div
                 key={spec.name}
                 className="border border-border/50 rounded-lg p-4"
-                data-testid={`scaleup-topology-${spec.name.toLowerCase().replaceAll(/\s+/g, '-')}`}
+                data-testid={`scaleup-topology-${spec.name.toLowerCase().replaceAll(/\s+/gu, '-')}`}
               >
                 <ScaleUpTopologyDiagram
                   ref={(el) => {

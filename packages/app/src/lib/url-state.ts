@@ -38,6 +38,8 @@ const URL_STATE_KEYS = [
   'i_advlabel',
   'i_gradlabel',
   'i_linelabel',
+  'i_speed',
+  'i_mc',
   'i_active',
   // Evaluation
   'e_rundate',
@@ -81,6 +83,8 @@ export const PARAM_DEFAULTS: Record<UrlStateKey, string> = {
   i_advlabel: '',
   i_gradlabel: '',
   i_linelabel: '',
+  i_speed: '',
+  i_mc: '',
   i_active: '',
   e_rundate: '',
   e_bench: '',
@@ -190,7 +194,7 @@ function flushPendingParams(): void {
  * a shared link reflects the currently-loaded set of unofficial runs, including
  * after per-run dismissals.
  */
-const UNOFFICIAL_RUN_PARAM_RE = /^unofficialruns?$/i;
+const UNOFFICIAL_RUN_PARAM_RE = /^unofficialruns?$/iu;
 
 export function buildShareUrl(): string {
   flushPendingParams();

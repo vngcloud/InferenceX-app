@@ -11,6 +11,7 @@ import { Footer } from '@/components/footer/footer';
 import { Header } from '@/components/header/header';
 import { CircuitBackground } from '@/components/circuit-background';
 import { MinecraftBackgroundLazy } from '@/components/minecraft/minecraft-background-lazy';
+import { MinecraftDecorations } from '@/components/minecraft/minecraft-decorations';
 import { ThemeProvider } from '@/components/ui/theme-provider';
 import {
   AUTHOR_HANDLE,
@@ -25,6 +26,7 @@ import {
 import { fetchStarCount } from '@/lib/github-stars.server';
 import { QueryProvider } from '@/providers/query-provider';
 import { PostHogProvider, PostHogPageView } from '@/providers/posthog-provider';
+import { VisitTracker } from '@/providers/visit-tracker';
 
 const dm_sans = DM_Sans({
   subsets: ['latin'],
@@ -178,6 +180,7 @@ export default async function RootLayout({
       <body className={`${dm_sans.variable} antialiased relative min-h-screen flex flex-col`}>
         <CircuitBackground />
         <MinecraftBackgroundLazy />
+        <MinecraftDecorations />
         <PostHogProvider>
           <script type="application/ld+json">{JSON.stringify(jsonLd)}</script>
           <QueryProvider>
@@ -189,6 +192,7 @@ export default async function RootLayout({
               disableTransitionOnChange
             >
               <PostHogPageView />
+              <VisitTracker />
               <Header starCount={starCount} />
               <div className="grow flex flex-col">{children}</div>
               <Footer starCount={starCount} />
