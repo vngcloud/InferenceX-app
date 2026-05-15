@@ -248,19 +248,16 @@ export function useChartData(
         }
 
         // Agentic: rewrite the resolved x metric to the chosen percentile,
-        // and relabel accordingly. naturalX is already percentile-adjusted,
-        // so the per-metric override path is the only one that actually
-        // changes here.
+        // and relabel accordingly. Both have to be updated unconditionally —
+        // xAxisField may already be percentile-adjusted (via naturalX) while
+        // xAxisLabel still carries the raw chartDef.x_label prefix.
         if (isAgentic) {
-          const adjusted = withPercentile(
+          xAxisField = withPercentile(
             xAxisField as string,
             selectedPercentile,
           ) as keyof AggDataEntry;
-          if (adjusted !== xAxisField) {
-            const pctlWord = selectedPercentile.toUpperCase();
-            xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
-            xAxisField = adjusted;
-          }
+          const pctlWord = selectedPercentile.toUpperCase();
+          xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
         }
 
         // The x-axis is "flipped" only when the good-direction reverses
