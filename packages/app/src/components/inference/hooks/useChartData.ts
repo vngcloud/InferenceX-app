@@ -251,6 +251,10 @@ export function useChartData(
         // and relabel accordingly. Both have to be updated unconditionally —
         // xAxisField may already be percentile-adjusted (via naturalX) while
         // xAxisLabel still carries the raw chartDef.x_label prefix.
+        // The chart heading ("vs. <latency>") is also rewritten to include
+        // the percentile so the title above the plot reflects what's drawn.
+        const headingKey = `${selectedYAxisMetric}_heading` as keyof ChartDefinition;
+        let chartHeading = (chartDef[headingKey] as string) || chartDef.heading;
         if (isAgentic) {
           xAxisField = withPercentile(
             xAxisField as string,
@@ -258,6 +262,10 @@ export function useChartData(
           ) as keyof AggDataEntry;
           const pctlWord = selectedPercentile.toUpperCase();
           xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
+          chartHeading = chartHeading.replace(
+            /^(vs\.\s+)(?:(Median|Mean|P90|P99(?:\.9)?)\s+)?/iu,
+            `$1${pctlWord} `,
+          );
         }
 
         // The x-axis is "flipped" only when the good-direction reverses
@@ -288,6 +296,7 @@ export function useChartData(
           chartDefinition: {
             ...chartDef,
             ...rooflineOverrides,
+            heading: chartHeading,
             x_label: xAxisLabel,
             y_label: dynamicYLabel === null ? undefined : String(dynamicYLabel),
           },

@@ -449,12 +449,10 @@ export default function ChartDisplay() {
                               );
                             }
 
-                            // Fall back to configured heading
-                            return (
-                              graph.chartDefinition[
-                                `${selectedYAxisMetric}_heading` as keyof typeof graph.chartDefinition
-                              ] || graph.chartDefinition.heading
-                            );
+                            // Fall back to the heading baked into chartDefinition
+                            // by useChartData (already resolves per-metric overrides
+                            // and applies the agentic percentile rewrite).
+                            return graph.chartDefinition.heading;
                           })()}
                         </h2>
                         <p className="text-sm text-muted-foreground mb-2">
