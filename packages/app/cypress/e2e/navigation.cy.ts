@@ -67,6 +67,11 @@ describe('First-load navigation', () => {
     cy.location('pathname').should('eq', '/inference');
   });
 
+  it('navigates to comparisons from the header with one click', () => {
+    cy.get('[data-testid="nav-link-compare"]').click();
+    cy.location('pathname').should('eq', '/compare');
+  });
+
   it('navigates to dashboard from the landing CTA with one click', () => {
     cy.contains('a', 'Open Dashboard').click();
     cy.location('pathname').should('eq', '/inference');

@@ -113,6 +113,19 @@ export function isKnownGpu(hwKey: string): boolean {
   return hwKey.split('_')[0] in HW_REGISTRY;
 }
 
+/**
+ * True when `hwKey` is exactly this registry GPU key or a framework / disagg /
+ * spec variant (`{base}_…`), matching the legend prefix rules used elsewhere.
+ */
+export function hardwareKeyMatchesBase(hwKey: string, baseGpuKey: string): boolean {
+  return hwKey === baseGpuKey || hwKey.startsWith(`${baseGpuKey}_`);
+}
+
+/** True when `hwKey` matches any of the given base registry keys (e.g. compare pages). */
+export function hardwareKeyMatchesAnyBase(hwKey: string, baseGpuKeys: readonly string[]): boolean {
+  return baseGpuKeys.some((b) => hardwareKeyMatchesBase(hwKey, b));
+}
+
 /** Cache for buildHardwareEntry results. */
 const hwCache = new Map<string, HardwareEntry>();
 
