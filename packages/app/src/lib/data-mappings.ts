@@ -191,12 +191,10 @@ export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
  */
 export enum Percentile {
   P90 = 'p90',
-  P99 = 'p99',
 }
 
 const PERCENTILE_CONFIG: Record<Percentile, { label: string }> = {
   [Percentile.P90]: { label: 'p90' },
-  [Percentile.P99]: { label: 'p99' },
 };
 
 export const PERCENTILE_OPTIONS = Object.keys(PERCENTILE_CONFIG) as Percentile[];

@@ -136,7 +136,7 @@ export function InferenceProvider({
   // Latency percentile applied to the chart x-axis for agentic scenarios.
   // Values: 'median' | 'p90' | 'p99' | 'p99.9'. Non-agentic charts ignore.
   const [selectedPercentile, setSelectedPercentile] = useState<string>(
-    () => getUrlParam('i_pctl') || 'p99',
+    () => getUrlParam('i_pctl') || 'p90',
   );
   const [scaleType, setScaleType] = useState<'auto' | 'linear' | 'log'>(
     () => (getUrlParam('i_scale') as 'auto' | 'linear' | 'log') || 'auto',
