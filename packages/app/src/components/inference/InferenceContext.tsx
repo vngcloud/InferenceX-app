@@ -131,7 +131,7 @@ export function InferenceProvider({
     () => getUrlParam('i_xmetric') || 'p90_ttft',
   );
   const [selectedE2eXAxisMetric, setSelectedE2eXAxisMetric] = useState<string | null>(
-    () => getUrlParam('i_e2e_xmetric') || null,
+    () => getUrlParam('i_e2e_xmetric') || 'p90_ttft',
   );
   // Latency percentile applied to the chart x-axis for agentic scenarios.
   // Values: 'p90' | 'p99'. Non-agentic charts ignore.

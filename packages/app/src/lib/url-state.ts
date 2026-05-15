@@ -69,7 +69,7 @@ export const PARAM_DEFAULTS: Record<UrlStateKey, string> = {
   i_metric: 'y_tpPerGpu',
   i_pctl: 'p90',
   i_xmetric: 'p90_ttft',
-  i_e2e_xmetric: '',
+  i_e2e_xmetric: 'p90_ttft',
   i_scale: 'auto',
   i_gpus: '',
   i_dates: '',
