@@ -186,16 +186,14 @@ export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
 /**
  * Percentile of the latency distribution used for the chart x-axis when
  * viewing agentic traces. Agentic rows carry median/p90/p99/p99.9 variants
- * for ttft, ttlt (=e2el), and itl (and intvty derived from itl); only the
- * two most commonly read slices (p50, p99) are surfaced in the UI.
+ * for ttft, ttlt (=e2el), and itl (and intvty derived from itl); only p99
+ * is surfaced in the UI.
  */
 export enum Percentile {
-  Median = 'median',
   P99 = 'p99',
 }
 
 const PERCENTILE_CONFIG: Record<Percentile, { label: string }> = {
-  [Percentile.Median]: { label: 'p50 (median)' },
   [Percentile.P99]: { label: 'p99' },
 };
 
