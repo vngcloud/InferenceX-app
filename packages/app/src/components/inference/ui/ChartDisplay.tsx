@@ -40,6 +40,7 @@ import {
   getModelLabel,
   getPrecisionLabel,
   getSequenceLabel,
+  sequenceKind,
 } from '@/lib/data-mappings';
 import { useComparisonChangelogs } from '@/hooks/api/use-comparison-changelogs';
 import { useTrendData } from '@/components/inference/hooks/useTrendData';
@@ -152,6 +153,7 @@ export default function ChartDisplay() {
     activeHwTypes,
     activeDates,
     setSelectedE2eXAxisMetric,
+    selectedPercentile,
     compareGpuPair,
   } = useInference();
 
@@ -415,12 +417,15 @@ export default function ChartDisplay() {
 
                             // For e2e chart: render clickable inline dropdown for x-axis
                             if (graph.chartDefinition.chartType === 'e2e') {
+                              const isAgentic = sequenceKind(selectedSequence) === 'agentic';
+                              const pctlWord = selectedPercentile.toUpperCase();
+                              const e2elLabel = isAgentic
+                                ? `${pctlWord} End-to-end Latency`
+                                : 'End-to-end Latency';
                               const xAxisLabel =
-                                selectedE2eXAxisMetric === 'p90_ttft'
-                                  ? 'P90 TTFT'
-                                  : 'End-to-end Latency';
+                                selectedE2eXAxisMetric === 'p90_ttft' ? 'P90 TTFT' : e2elLabel;
                               const xAxisOptions = [
-                                { value: null, label: 'End-to-end Latency' },
+                                { value: null, label: e2elLabel },
                                 { value: 'p90_ttft', label: 'P90 TTFT' },
                               ];
                               const zoomPrefix =
