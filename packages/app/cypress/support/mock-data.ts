@@ -189,7 +189,7 @@ export function createMockInferenceContext(
     workflowInfo: null,
     selectedYAxisMetric: 'y_tpPerGpu',
     setSelectedYAxisMetric: namedStub('setSelectedYAxisMetric'),
-    selectedPercentile: 'median',
+    selectedPercentile: 'p90',
     setSelectedPercentile: namedStub('setSelectedPercentile'),
     selectedXAxisMetric: null,
     setSelectedXAxisMetric: namedStub('setSelectedXAxisMetric'),

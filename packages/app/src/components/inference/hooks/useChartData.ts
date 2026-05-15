@@ -83,7 +83,7 @@ export function useChartData(
   selectedRunDate?: string,
   enabled = true,
   latestAvailableDate?: string,
-  selectedPercentile = 'median',
+  selectedPercentile = 'p90',
   /** When set, only series for these two registry GPU keys are shown (compare pages). */
   compareGpuPair?: readonly [string, string] | null,
 ) {
@@ -261,12 +261,7 @@ export function useChartData(
             selectedPercentile,
           ) as keyof AggDataEntry;
           if (adjusted !== xAxisField) {
-            const pctlWord =
-              selectedPercentile === 'median'
-                ? 'Median'
-                : selectedPercentile === 'p99.9'
-                  ? 'P99.9'
-                  : selectedPercentile.toUpperCase();
+            const pctlWord = selectedPercentile.toUpperCase();
             xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
             xAxisField = adjusted;
           }

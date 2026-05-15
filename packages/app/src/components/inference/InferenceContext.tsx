@@ -134,7 +134,7 @@ export function InferenceProvider({
     () => getUrlParam('i_e2e_xmetric') || null,
   );
   // Latency percentile applied to the chart x-axis for agentic scenarios.
-  // Values: 'median' | 'p90' | 'p99' | 'p99.9'. Non-agentic charts ignore.
+  // Values: 'p90' | 'p99'. Non-agentic charts ignore.
   const [selectedPercentile, setSelectedPercentile] = useState<string>(
     () => getUrlParam('i_pctl') || 'p90',
   );
