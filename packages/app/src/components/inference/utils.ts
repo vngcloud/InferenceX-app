@@ -88,8 +88,7 @@ export function processOverlayChartData(
   let xAxisField: string = chartDef.x;
   // selectedXAxisMetric is already the effective metric for this chart type
   // (interactivity uses selectedXAxisMetric, e2e uses selectedE2eXAxisMetric)
-  const isTtftOverride =
-    selectedXAxisMetric === 'p99_ttft' || selectedXAxisMetric === 'median_ttft';
+  const isTtftOverride = selectedXAxisMetric === 'p90_ttft';
 
   if (selectedXAxisMetric && chartDef.chartType === 'interactivity' && isInputMetric) {
     xAxisField = selectedXAxisMetric;

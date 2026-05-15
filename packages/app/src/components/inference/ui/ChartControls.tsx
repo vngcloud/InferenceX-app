@@ -275,11 +275,11 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
                 <LabelWithTooltip
                   htmlFor="x-axis-select"
                   label="X-Axis Metric"
-                  tooltip="The latency metric displayed on the chart's X-axis. Options include P99 Time To First Token and Median Time To First Token."
+                  tooltip="The latency metric displayed on the chart's X-axis: P90 Time To First Token."
                 />
                 <Select
                   onValueChange={handleXAxisMetricChange}
-                  value={selectedXAxisMetric ?? 'p99_ttft'}
+                  value={selectedXAxisMetric ?? 'p90_ttft'}
                 >
                   <SelectTrigger
                     id="x-axis-select"
@@ -289,8 +289,7 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent portalled={false}>
-                    <SelectItem value="p99_ttft">P99 TTFT</SelectItem>
-                    <SelectItem value="median_ttft">Median TTFT</SelectItem>
+                    <SelectItem value="p90_ttft">P90 TTFT</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

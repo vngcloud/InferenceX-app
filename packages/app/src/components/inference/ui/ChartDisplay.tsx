@@ -408,27 +408,20 @@ export default function ChartDisplay() {
                             if (
                               graph.chartDefinition.chartType === 'interactivity' &&
                               isInputMetric &&
-                              selectedXAxisMetric
+                              selectedXAxisMetric === 'p90_ttft'
                             ) {
-                              if (selectedXAxisMetric === 'p99_ttft') {
-                                return 'vs. P99 Time To First Token';
-                              } else if (selectedXAxisMetric === 'median_ttft') {
-                                return 'vs. Median Time To First Token';
-                              }
+                              return 'vs. P90 Time To First Token';
                             }
 
                             // For e2e chart: render clickable inline dropdown for x-axis
                             if (graph.chartDefinition.chartType === 'e2e') {
                               const xAxisLabel =
-                                selectedE2eXAxisMetric === 'p99_ttft'
-                                  ? 'P99 TTFT'
-                                  : selectedE2eXAxisMetric === 'median_ttft'
-                                    ? 'Median TTFT'
-                                    : 'End-to-end Latency';
+                                selectedE2eXAxisMetric === 'p90_ttft'
+                                  ? 'P90 TTFT'
+                                  : 'End-to-end Latency';
                               const xAxisOptions = [
                                 { value: null, label: 'End-to-end Latency' },
-                                { value: 'p99_ttft', label: 'P99 TTFT' },
-                                { value: 'median_ttft', label: 'Median TTFT' },
+                                { value: 'p90_ttft', label: 'P90 TTFT' },
                               ];
                               const zoomPrefix =
                                 selectedDateRange.startDate &&

@@ -215,12 +215,8 @@ export function useChartData(
         // Resolve the effective x-axis override per chart type
         const effectiveXMetric =
           chartDef.chartType === 'e2e' ? selectedE2eXAxisMetric : selectedXAxisMetric;
-        const isTtftOverride =
-          effectiveXMetric === 'p99_ttft' || effectiveXMetric === 'median_ttft';
-        const ttftLabel =
-          effectiveXMetric === 'p99_ttft'
-            ? 'P99 Time To First Token (s)'
-            : 'Median Time To First Token (s)';
+        const isTtftOverride = effectiveXMetric === 'p90_ttft';
+        const ttftLabel = 'P90 Time To First Token (s)';
 
         const isAgentic = selectedSequence === Sequence.AgenticTraces;
 
@@ -340,7 +336,7 @@ export function useChartData(
 
         // Filter to points that have the selected metric, then remap x/y
         const hasMetric = filteredData.some((d) => metricKey in d);
-        const isTtftX = xAxisField === 'p99_ttft' || xAxisField === 'median_ttft';
+        const isTtftX = xAxisField === 'p90_ttft';
         const processedData = hasMetric
           ? filteredData
               .filter((d) => metricKey in d)

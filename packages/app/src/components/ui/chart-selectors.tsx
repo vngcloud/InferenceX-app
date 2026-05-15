@@ -315,7 +315,7 @@ export function PercentileSelector({
       <LabelWithTooltip
         htmlFor={id}
         label="Latency Percentile"
-        tooltip="Percentile of the latency distribution used for the chart x-axis. Switch between p90 and p99 to see tail-latency behavior on agentic runs."
+        tooltip="Percentile of the latency distribution used for the chart x-axis on agentic runs."
       />
       <Select
         value={value}

@@ -128,7 +128,7 @@ export function InferenceProvider({
     () => getUrlParam('i_metric') || 'y_tpPerGpu',
   );
   const [selectedXAxisMetric, setSelectedXAxisMetric] = useState<string | null>(
-    () => getUrlParam('i_xmetric') || 'p99_ttft',
+    () => getUrlParam('i_xmetric') || 'p90_ttft',
   );
   const [selectedE2eXAxisMetric, setSelectedE2eXAxisMetric] = useState<string | null>(
     () => getUrlParam('i_e2e_xmetric') || null,
