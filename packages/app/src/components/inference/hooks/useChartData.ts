@@ -242,7 +242,7 @@ export function useChartData(
           const xLabelOverrideKey = `${selectedYAxisMetric}_x_label` as keyof ChartDefinition;
           xAxisField = (chartDef[xOverrideKey] as keyof AggDataEntry) || chartDef.x;
           xAxisLabel = (chartDef[xLabelOverrideKey] as string) || chartDef.x_label;
-        } else if (chartDef.chartType === 'e2e' && isTtftOverride && !isAgentic) {
+        } else if (chartDef.chartType === 'e2e' && isTtftOverride) {
           xAxisField = effectiveXMetric as keyof AggDataEntry;
           xAxisLabel = ttftLabel;
         }
