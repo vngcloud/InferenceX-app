@@ -91,6 +91,14 @@ const tooltipLine = (label: string, value: string | number) =>
 const formatPct = (v: number | undefined): string | null =>
   v === undefined || v === null || Number.isNaN(v) ? null : `${(v * 100).toFixed(1)}%`;
 
+/** Tooltip numeric values are capped at 3 decimal places (trailing zeros stripped). */
+const fmt = (v: number): string => {
+  if (!Number.isFinite(v)) return String(v);
+  const rounded = parseFloat(v.toFixed(3));
+  if (Math.abs(rounded) >= 10000) return new Intl.NumberFormat('en-US').format(rounded);
+  return String(rounded);
+};
+
 /**
  * Agentic-only tooltip rows: offload mode, KV cache hit rates, request
  * success, token totals. Returns an empty string for non-agentic rows.
@@ -201,16 +209,16 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
           : ''
       }
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${formatNumber(d.x)}
+        <strong>${xLabel}:</strong> ${fmt(d.x)}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${formatNumber(d.y)}
+        <strong>${yLabel}:</strong> ${fmt(d.y)}
       </div>
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per GPU:</strong> ${formatNumber(d['inputTputPerGpu'].y)}
+            <strong>Input Token Throughput per GPU:</strong> ${fmt(d['inputTputPerGpu'].y)}
           </div>`
           : ''
       }
@@ -218,7 +226,7 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per GPU:</strong> ${formatNumber(d['outputTputPerGpu'].y)}
+            <strong>Output Token Throughput per GPU:</strong> ${fmt(d['outputTputPerGpu'].y)}
           </div>`
           : ''
       }
@@ -274,10 +282,10 @@ export const generateOverlayTooltipContent = (config: OverlayTooltipConfig): str
         <strong>Date:</strong> ${d.actualDate ?? d.date}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${formatNumber(d.x)}
+        <strong>${xLabel}:</strong> ${fmt(d.x)}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${formatNumber(d.y)}
+        <strong>${yLabel}:</strong> ${fmt(d.y)}
       </div>
       ${tooltipLine('Total GPUs', d.tp)}
       ${generateParallelismHTML(d)}
@@ -318,16 +326,16 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
           : ''
       }
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${formatNumber(d.x)}
+        <strong>${xLabel}:</strong> ${fmt(d.x)}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${formatNumber(d.y)}
+        <strong>${yLabel}:</strong> ${fmt(d.y)}
       </div>
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per GPU:</strong> ${formatNumber(d['inputTputPerGpu'].y)}
+            <strong>Input Token Throughput per GPU:</strong> ${fmt(d['inputTputPerGpu'].y)}
           </div>`
           : ''
       }
@@ -335,7 +343,7 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per GPU:</strong> ${formatNumber(d['outputTputPerGpu'].y)}
+            <strong>Output Token Throughput per GPU:</strong> ${fmt(d['outputTputPerGpu'].y)}
           </div>`
           : ''
       }
