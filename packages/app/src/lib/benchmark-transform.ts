@@ -25,7 +25,7 @@ import type { BenchmarkRow } from '@/lib/api';
  */
 function agenticAliases(m: Record<string, number>): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const suffix of ['mean', 'median', 'p90', 'p99']) {
+  for (const suffix of ['mean', 'median', 'p90', 'p99', 'p99.9']) {
     const itl = m[`${suffix}_itl`];
     const ttlt = m[`${suffix}_ttlt`];
     if (m[`${suffix}_e2el`] === undefined && ttlt !== undefined) out[`${suffix}_e2el`] = ttlt;
@@ -62,23 +62,33 @@ export function rowToAggDataEntry(row: BenchmarkRow): AggDataEntry {
     mean_ttft: m.mean_ttft ?? 0,
     median_ttft: m.median_ttft ?? 0,
     std_ttft: m.std_ttft ?? 0,
+    p90_ttft: m.p90_ttft ?? 0,
     p99_ttft: m.p99_ttft ?? 0,
+    'p99.9_ttft': m['p99.9_ttft'] ?? 0,
     mean_tpot: m.mean_tpot ?? 0,
     median_tpot: m.median_tpot ?? 0,
     std_tpot: m.std_tpot ?? 0,
+    p90_tpot: m.p90_tpot ?? 0,
     p99_tpot: m.p99_tpot ?? 0,
+    'p99.9_tpot': m['p99.9_tpot'] ?? 0,
     mean_intvty: m.mean_intvty ?? 0,
     median_intvty: m.median_intvty ?? 0,
     std_intvty: m.std_intvty ?? 0,
+    p90_intvty: m.p90_intvty ?? 0,
     p99_intvty: m.p99_intvty ?? 0,
+    'p99.9_intvty': m['p99.9_intvty'] ?? 0,
     mean_itl: m.mean_itl ?? 0,
     median_itl: m.median_itl ?? 0,
     std_itl: m.std_itl ?? 0,
+    p90_itl: m.p90_itl ?? 0,
     p99_itl: m.p99_itl ?? 0,
+    'p99.9_itl': m['p99.9_itl'] ?? 0,
     mean_e2el: m.mean_e2el ?? 0,
     median_e2el: m.median_e2el ?? 0,
     std_e2el: m.std_e2el ?? 0,
+    p90_e2el: m.p90_e2el ?? 0,
     p99_e2el: m.p99_e2el ?? 0,
+    'p99.9_e2el': m['p99.9_e2el'] ?? 0,
     disagg: row.disagg,
     num_prefill_gpu: row.num_prefill_gpu,
     num_decode_gpu: row.num_decode_gpu,

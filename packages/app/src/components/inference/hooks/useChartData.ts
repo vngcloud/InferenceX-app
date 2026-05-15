@@ -16,7 +16,7 @@ import { filterDataByCostLimit } from '@/components/inference/utils';
 import { useBenchmarks, benchmarkQueryOptions } from '@/hooks/api/use-benchmarks';
 import { GPU_ALIAS_TO_CANONICAL, getModelSortIndex } from '@/lib/constants';
 import { transformBenchmarkRows, withPercentile } from '@/lib/benchmark-transform';
-import type { Model, Sequence } from '@/lib/data-mappings';
+import { Sequence, type Model } from '@/lib/data-mappings';
 import { calculateCostsForGpus, calculatePowerForGpus } from '@/lib/utils';
 
 /** Build deduplicated comparison dates, excluding the main run date. */
@@ -216,7 +216,14 @@ export function useChartData(
             ? 'P99 Time To First Token (s)'
             : 'Median Time To First Token (s)';
 
-        if (effectiveXMetric && chartDef.chartType === 'interactivity' && isInputMetric) {
+        const isAgentic = selectedSequence === Sequence.AgenticTraces;
+
+        if (
+          effectiveXMetric &&
+          chartDef.chartType === 'interactivity' &&
+          isInputMetric &&
+          !isAgentic
+        ) {
           xAxisField = effectiveXMetric as keyof AggDataEntry;
           const labelKey = `${selectedYAxisMetric}_x_label` as keyof ChartDefinition;
           if (effectiveXMetric === chartDef[`${selectedYAxisMetric}_x` as keyof ChartDefinition]) {
@@ -225,13 +232,38 @@ export function useChartData(
             xAxisLabel = isTtftOverride ? ttftLabel : chartDef.x_label;
           }
         } else if (chartDef.chartType === 'interactivity' && isInputMetric) {
+          // Agentic falls through here too — the manual X-axis dropdown is
+          // hidden in agentic mode (would double up with the percentile
+          // selector), so the config default + percentile post-processing
+          // below drives the x axis.
           const xOverrideKey = `${selectedYAxisMetric}_x` as keyof ChartDefinition;
           const xLabelOverrideKey = `${selectedYAxisMetric}_x_label` as keyof ChartDefinition;
           xAxisField = (chartDef[xOverrideKey] as keyof AggDataEntry) || chartDef.x;
           xAxisLabel = (chartDef[xLabelOverrideKey] as string) || chartDef.x_label;
-        } else if (chartDef.chartType === 'e2e' && isTtftOverride) {
+        } else if (chartDef.chartType === 'e2e' && isTtftOverride && !isAgentic) {
           xAxisField = effectiveXMetric as keyof AggDataEntry;
           xAxisLabel = ttftLabel;
+        }
+
+        // Agentic: rewrite the resolved x metric to the chosen percentile,
+        // and relabel accordingly. naturalX is already percentile-adjusted,
+        // so the per-metric override path is the only one that actually
+        // changes here.
+        if (isAgentic) {
+          const adjusted = withPercentile(
+            xAxisField as string,
+            selectedPercentile,
+          ) as keyof AggDataEntry;
+          if (adjusted !== xAxisField) {
+            const pctlWord =
+              selectedPercentile === 'median'
+                ? 'Median'
+                : selectedPercentile === 'p99.9'
+                  ? 'P99.9'
+                  : selectedPercentile.toUpperCase();
+            xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
+            xAxisField = adjusted;
+          }
         }
 
         // The x-axis is "flipped" only when the good-direction reverses
@@ -269,7 +301,13 @@ export function useChartData(
           xAxisField,
         };
       }),
-    [selectedYAxisMetric, selectedXAxisMetric, selectedE2eXAxisMetric, selectedPercentile],
+    [
+      selectedYAxisMetric,
+      selectedXAxisMetric,
+      selectedE2eXAxisMetric,
+      selectedPercentile,
+      selectedSequence,
+    ],
   );
 
   // Build renderable graphs (data processing + stable chart definitions)

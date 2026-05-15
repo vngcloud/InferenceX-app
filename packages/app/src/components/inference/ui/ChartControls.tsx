@@ -269,7 +269,8 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
           </div>
 
           {graphs.some((g) => g.chartDefinition?.chartType === 'interactivity') &&
-            isInputMetric && (
+            isInputMetric &&
+            selectedSequence !== Sequence.AgenticTraces && (
               <div className="flex flex-col space-y-1.5 lg:col-span-1">
                 <LabelWithTooltip
                   htmlFor="x-axis-select"
