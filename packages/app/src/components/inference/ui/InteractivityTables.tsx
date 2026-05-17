@@ -78,14 +78,20 @@ function relativeLuminance(r: number, g: number, b: number): number {
   return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
 }
 
+const RATIO_CAP_HI = 3;
+const RATIO_CAP_LO = 1 / 3;
+
 /**
- * Map a percent-diff in [-200, +200] to a red→white→green color.
- * Beyond ±200 we clamp. Returns { background, color } where `color` is the
- * WCAG-derived text color (white when background is dark, black when light).
+ * Map a ratio (other / baseline) to a red→white→green color, centered at 1.0×
+ * and log-symmetric. ratio = 1   → white; ratio ≥ 3   → fully green; ratio ≤
+ * 1/3 → fully red. Anything between interpolates linearly in log space so that
+ * "2×" and "0.5×" land at symmetric saturations. Returns { background, color }
+ * with the WCAG-derived text color.
  */
-function percentDiffColor(pct: number): { background: string; color: string } {
-  // Clamp to ±200.
-  const t = Math.max(-1, Math.min(1, pct / 200));
+function ratioColor(ratio: number): { background: string; color: string } {
+  const clamped = Math.max(RATIO_CAP_LO, Math.min(RATIO_CAP_HI, ratio));
+  // log-symmetric t in [-1, 1]: t=0 at 1.0, t=+1 at cap-hi, t=-1 at cap-lo.
+  const t = Math.log(clamped) / Math.log(RATIO_CAP_HI);
   let r: number;
   let g: number;
   let b: number;
@@ -108,8 +114,8 @@ function percentDiffColor(pct: number): { background: string; color: string } {
   return { background: `rgb(${r}, ${g}, ${b})`, color };
 }
 
-const INFINITY_BG_POS = '#14532d'; // dark green (green-900) for ∞
-const INFINITY_BG_NEG = '#7f1d1d'; // dark red (red-900) for −∞
+const INFINITY_BG_POS = '#14532d'; // dark green (green-900) for ∞ (other defined, baseline missing)
+const ZERO_BG = '#7f1d1d'; // dark red (red-900) for 0× (other missing, baseline defined)
 const SELF_BG = '#fbbf24'; // amber-400 for baseline-vs-self
 const COL_MAX_BG = '#bbf7d0'; // green-200 for best per column in throughput
 
@@ -205,14 +211,16 @@ function InfoIcon({ text }: { text: string }) {
 
 /** Per-interactivity throughput table + linked percent-diff heatmap. */
 function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
-  // Compute buckets: every 10 from 10 up through ceil(globalMax / 10) * 10.
+  // Compute buckets: every 10 from 10 up through floor(globalMax / 10) * 10.
+  // (Using floor ensures the last bucket is always one a config actually reaches,
+  // not a bucket beyond every config's reachable interactivity.)
   const buckets = useMemo(() => {
     let globalMax = 0;
     for (const c of configs) {
       const maxX = c.frontier.at(-1)?.x ?? 0;
       if (maxX > globalMax) globalMax = maxX;
     }
-    const hi = Math.ceil(globalMax / 10) * 10;
+    const hi = Math.floor(globalMax / 10) * 10;
     const out: number[] = [];
     for (let v = 10; v <= hi; v += 10) out.push(v);
     return out;
@@ -339,10 +347,10 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
         <div className="mt-6">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
             <div className="flex items-center gap-2">
-              <h3 className="text-base font-semibold">% advantage vs baseline</h3>
+              <h3 className="text-base font-semibold">Ratio vs baseline</h3>
               <InfoIcon
                 text={
-                  '(other − baseline) / baseline × 100 at each bucket. "∞" means the baseline cannot reach that interactivity but the other config can; "−∞" the reverse; "—" means neither can. Cells clamp to ±200% for the color scale.'
+                  'other / baseline at each bucket, rendered as Nx. "∞" means the baseline cannot reach that interactivity but the other config can; "0×" the reverse; "—" means neither can. Color scale is centered at 1.00× and log-symmetric, saturating at 3.00× (green) and 0.33× (red).'
                 }
               />
             </div>
@@ -392,7 +400,7 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                             className="text-right px-2 py-1.5 tabular-nums"
                             style={{ backgroundColor: SELF_BG, color: '#0a0a0a' }}
                           >
-                            0.0%
+                            1.00×
                           </td>
                         );
                       }
@@ -423,22 +431,21 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                           <td
                             key={b}
                             className="text-right px-2 py-1.5 tabular-nums font-semibold"
-                            style={{ backgroundColor: INFINITY_BG_NEG, color: '#ffffff' }}
+                            style={{ backgroundColor: ZERO_BG, color: '#ffffff' }}
                           >
-                            −∞
+                            0×
                           </td>
                         );
                       }
-                      const pct = ((other! - baseline!) / baseline!) * 100;
-                      const { background, color } = percentDiffColor(pct);
+                      const ratio = other! / baseline!;
+                      const { background, color } = ratioColor(ratio);
                       return (
                         <td
                           key={b}
                           className="text-right px-2 py-1.5 tabular-nums"
                           style={{ backgroundColor: background, color }}
                         >
-                          {pct >= 0 ? '+' : ''}
-                          {pct.toFixed(0)}%
+                          {ratio.toFixed(2)}×
                         </td>
                       );
                     })}
@@ -461,7 +468,7 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
       const maxX = c.frontier.at(-1)?.x ?? 0;
       if (maxX > globalMax) globalMax = maxX;
     }
-    return Math.ceil(globalMax / 10) * 10;
+    return Math.floor(globalMax / 10) * 10;
   }, [configs]);
 
   const aucs = useMemo(
@@ -504,8 +511,7 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
         style: { backgroundColor: SELF_BG, color: '#0a0a0a' },
       };
     }
-    const pctDiff = (ratio - 1) * 100;
-    const { background, color } = percentDiffColor(pctDiff);
+    const { background, color } = ratioColor(ratio);
     return {
       text: `${ratio.toFixed(2)}×`,
       style: { backgroundColor: background, color },
@@ -576,9 +582,6 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
                     Ratio vs primary
                   </th>
                   <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
-                    % vs primary
-                  </th>
-                  <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
                     Ratio vs secondary
                   </th>
                   <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
@@ -592,20 +595,6 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
                   const primaryR = ratioCell(auc, primaryAuc, ePrimary, c.hwKey);
                   const secondaryR = ratioCell(auc, secondaryAuc, eSecondary, c.hwKey);
                   const tertiaryR = ratioCell(auc, tertiaryAuc, eTertiary, c.hwKey);
-                  let pctText: string;
-                  let pctStyle: React.CSSProperties | undefined;
-                  if (primaryAuc === null || primaryAuc === 0) {
-                    pctText = '—';
-                    pctStyle = undefined;
-                  } else if (c.hwKey === ePrimary) {
-                    pctText = '+0.0%';
-                    pctStyle = { backgroundColor: SELF_BG, color: '#0a0a0a' };
-                  } else {
-                    const pct = (auc / primaryAuc - 1) * 100;
-                    const { background, color } = percentDiffColor(pct);
-                    pctText = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
-                    pctStyle = { backgroundColor: background, color };
-                  }
                   return (
                     <tr key={c.hwKey} className="border-b border-border last:border-b-0">
                       <td className="text-left font-medium px-2 py-1.5 whitespace-nowrap">
@@ -614,9 +603,6 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
                       <td className="text-right tabular-nums px-2 py-1.5">{formatInt(auc)}</td>
                       <td className="text-right tabular-nums px-2 py-1.5" style={primaryR.style}>
                         {primaryR.text}
-                      </td>
-                      <td className="text-right tabular-nums px-2 py-1.5" style={pctStyle}>
-                        {pctText}
                       </td>
                       <td className="text-right tabular-nums px-2 py-1.5" style={secondaryR.style}>
                         {secondaryR.text}
