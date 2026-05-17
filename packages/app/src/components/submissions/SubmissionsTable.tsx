@@ -1,12 +1,14 @@
 'use client';
 
-import { ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitCompare, Info } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
 import { track } from '@/lib/analytics';
 import { MODEL_PREFIX_MAPPING, getModelLabel } from '@/lib/data-mappings';
 import type { SubmissionSummaryRow } from '@/lib/submissions-types';
 import { getFrameworkLabel } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import {
   TooltipProvider,
   TooltipRoot,
@@ -14,7 +16,13 @@ import {
   TooltipContent,
 } from '@/components/ui/tooltip';
 
-import { computePreviousImages, getVendor, submissionRowKey } from './submissions-utils';
+import {
+  buildInferenceCompareUrl,
+  computePreviousImages,
+  computePreviousRuns,
+  getVendor,
+  submissionRowKey,
+} from './submissions-utils';
 
 function DetailItem({
   label,
@@ -69,6 +77,7 @@ export default function SubmissionsTable({ data }: SubmissionsTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   const previousImages = useMemo(() => computePreviousImages(data), [data]);
+  const previousRuns = useMemo(() => computePreviousRuns(data), [data]);
 
   const handleSort = useCallback(
     (key: SortKey) => {
@@ -160,6 +169,12 @@ export default function SubmissionsTable({ data }: SubmissionsTableProps) {
               <SortHeader label="Framework" field="framework" />
               <SortHeader label="Date" field="date" />
               <SortHeader label="Datapoints" field="total_datapoints" />
+              <th
+                className="px-3 py-2 text-left text-xs font-medium text-muted-foreground select-none"
+                scope="col"
+              >
+                Compare
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -172,13 +187,14 @@ export default function SubmissionsTable({ data }: SubmissionsTableProps) {
                   row={row}
                   isExpanded={isExpanded}
                   previousImage={previousImages.get(key) ?? null}
+                  previousRun={previousRuns.get(key) ?? null}
                   onToggle={() => toggleRow(key)}
                 />
               );
             })}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
+                <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
                   {search ? 'No matching submissions found.' : 'No submission data available.'}
                 </td>
               </tr>
@@ -198,14 +214,17 @@ function SubmissionRow({
   row,
   isExpanded,
   previousImage,
+  previousRun,
   onToggle,
 }: {
   row: SubmissionSummaryRow;
   isExpanded: boolean;
   previousImage: string | null;
+  previousRun: SubmissionSummaryRow | null;
   onToggle: () => void;
 }) {
   const vendor = getVendor(row.hardware);
+  const compareUrl = previousRun ? buildInferenceCompareUrl(row, previousRun) : null;
 
   return (
     <>
@@ -233,11 +252,55 @@ function SubmissionRow({
         <td className="px-3 py-2">{getFrameworkLabel(row.framework)}</td>
         <td className="px-3 py-2 tabular-nums">{row.date}</td>
         <td className="px-3 py-2 tabular-nums">{row.total_datapoints.toLocaleString()}</td>
+        <td className="px-3 py-2">
+          {compareUrl && previousRun ? (
+            <TooltipProvider>
+              <TooltipRoot>
+                <TooltipTrigger asChild>
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 gap-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Link
+                      href={compareUrl}
+                      data-testid="submissions-compare-runs-link-inline"
+                      onClick={() => {
+                        track('submissions_compare_runs_clicked', {
+                          source: 'inline',
+                          config: submissionRowKey(row),
+                          model: row.model,
+                          hardware: row.hardware,
+                          framework: row.framework,
+                          previous_date: previousRun.date,
+                          new_date: row.date,
+                          image_changed: previousImage !== null,
+                        });
+                      }}
+                    >
+                      <GitCompare className="size-3.5" />
+                      <span className="hidden lg:inline">vs prev</span>
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left" collisionPadding={10}>
+                  <span className="text-xs">
+                    Compare {previousRun.date} → {row.date} on chart
+                  </span>
+                </TooltipContent>
+              </TooltipRoot>
+            </TooltipProvider>
+          ) : (
+            <span className="text-muted-foreground text-xs">—</span>
+          )}
+        </td>
       </tr>
       {isExpanded && (
         <tr className="bg-muted/20">
           <td />
-          <td colSpan={7} className="px-3 py-3">
+          <td colSpan={8} className="px-3 py-3">
             <TooltipProvider>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-2 text-sm">
                 <DetailItem label="Vendor:" tip="GPU manufacturer">
@@ -328,6 +391,31 @@ function SubmissionRow({
                     )}
                   </DetailItem>
                 </div>
+                {compareUrl && previousRun && (
+                  <div className="col-span-2 md:col-span-4 flex justify-end">
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        href={compareUrl}
+                        data-testid="submissions-compare-runs-link"
+                        onClick={() => {
+                          track('submissions_compare_runs_clicked', {
+                            source: 'expanded',
+                            config: submissionRowKey(row),
+                            model: row.model,
+                            hardware: row.hardware,
+                            framework: row.framework,
+                            previous_date: previousRun.date,
+                            new_date: row.date,
+                            image_changed: previousImage !== null,
+                          });
+                        }}
+                      >
+                        <GitCompare className="size-3.5" />
+                        Compare {previousRun.date} → {row.date} on chart
+                      </Link>
+                    </Button>
+                  </div>
+                )}
               </div>
             </TooltipProvider>
           </td>
