@@ -21,7 +21,15 @@ import {
 } from '@/components/ui/tooltip';
 import { track } from '@/lib/analytics';
 import { getHardwareConfig } from '@/lib/constants';
-import { aucUnderFrontier, interpAlongFrontier, paretoFrontier, type Point2D } from '@/lib/pareto';
+import { getMetricParetoDirection } from '@/lib/metric-direction';
+import {
+  aucUnderFrontier,
+  aucWindow,
+  interpAlongFrontier,
+  paretoFrontier,
+  type ParetoDirection,
+  type Point2D,
+} from '@/lib/pareto';
 import { cn, getDisplayLabel } from '@/lib/utils';
 
 /**
@@ -63,9 +71,17 @@ function pickDefaultBaseline(
   return null;
 }
 
-/** Format a non-negative integer with thousands separators. */
-function formatInt(n: number): string {
-  return Math.round(n).toLocaleString();
+/** Format a number with the right scale for the chosen metric. */
+function formatValue(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs === 0) return '0';
+  if (abs >= 1000) return Math.round(n).toLocaleString();
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10) return n.toFixed(1);
+  if (abs >= 1) return n.toFixed(2);
+  if (abs >= 0.01) return n.toFixed(3);
+  return n.toExponential(2);
 }
 
 function srgbToLinear(c: number): number {
@@ -83,15 +99,25 @@ const RATIO_CAP_LO = 1 / 3;
 
 /**
  * Map a ratio (other / baseline) to a red→white→green color, centered at 1.0×
- * and log-symmetric. ratio = 1   → white; ratio ≥ 3   → fully green; ratio ≤
- * 1/3 → fully red. Anything between interpolates linearly in log space so that
- * "2×" and "0.5×" land at symmetric saturations. Returns { background, color }
- * with the WCAG-derived text color.
+ * and log-symmetric.
+ *
+ * For 'higher' (default): ratio = 1 → white; ratio ≥ 3 → fully green; ratio ≤
+ * 1/3 → fully red.
+ *
+ * For 'lower': INVERT — ratio = 1 → white; ratio ≤ 1/3 → fully green (other
+ * uses 1/3 of baseline = great); ratio ≥ 3 → fully red.
+ *
+ * Returns { background, color } with the WCAG-derived text color.
  */
-function ratioColor(ratio: number): { background: string; color: string } {
+function ratioColor(
+  ratio: number,
+  direction: ParetoDirection = 'higher',
+): { background: string; color: string } {
   const clamped = Math.max(RATIO_CAP_LO, Math.min(RATIO_CAP_HI, ratio));
   // log-symmetric t in [-1, 1]: t=0 at 1.0, t=+1 at cap-hi, t=-1 at cap-lo.
-  const t = Math.log(clamped) / Math.log(RATIO_CAP_HI);
+  let t = Math.log(clamped) / Math.log(RATIO_CAP_HI);
+  // For lower-is-better, flip the sign so ratio > 1 → red and ratio < 1 → green.
+  if (direction === 'lower') t = -t;
   let r: number;
   let g: number;
   let b: number;
@@ -114,21 +140,33 @@ function ratioColor(ratio: number): { background: string; color: string } {
   return { background: `rgb(${r}, ${g}, ${b})`, color };
 }
 
-const INFINITY_BG_POS = '#14532d'; // dark green (green-900) for ∞ (other defined, baseline missing)
-const ZERO_BG = '#7f1d1d'; // dark red (red-900) for 0× (other missing, baseline defined)
+const INFINITY_GREEN_BG = '#14532d'; // dark green (green-900)
+const INFINITY_RED_BG = '#7f1d1d'; // dark red (red-900)
 const SELF_BG = '#fbbf24'; // amber-400 for baseline-vs-self
-const COL_MAX_BG = '#bbf7d0'; // green-200 for best per column in throughput
+const COL_BEST_BG = '#bbf7d0'; // green-200 for best per column in main table
 
 /**
  * Build per-config Pareto frontiers from filtered InferenceData. Filters by
  * selected precisions + active legend toggles, then groups by hwKey and runs
- * the shared 2-D Pareto algorithm on (x, y) = (interactivity, tok/s/gpu).
+ * the shared 2-D Pareto algorithm on (x, y) = (interactivity, selected metric).
+ * Direction is taken from the active y-metric's roofline direction.
  */
-function useConfigSeries(): ConfigSeries[] {
-  const { graphs, activeHwTypes, selectedPrecisions, hardwareConfig } = useInference();
+function useConfigSeries(direction: ParetoDirection): {
+  configs: ConfigSeries[];
+  yLabel: string;
+  yTitle: string;
+} {
+  const { graphs, activeHwTypes, selectedPrecisions, hardwareConfig, selectedYAxisMetric } =
+    useInference();
   return useMemo(() => {
     const interactivityGraph = graphs.find((g) => g.chartDefinition.chartType === 'interactivity');
-    if (!interactivityGraph) return [];
+    if (!interactivityGraph) return { configs: [], yLabel: '', yTitle: '' };
+
+    const chartDef = interactivityGraph.chartDefinition;
+    const yLabel =
+      (chartDef[`${selectedYAxisMetric}_label` as keyof typeof chartDef] as string) || '';
+    const yTitle =
+      (chartDef[`${selectedYAxisMetric}_title` as keyof typeof chartDef] as string) || '';
 
     // Group filtered points by hwKey.
     const byHw = new Map<string, InferenceData[]>();
@@ -145,7 +183,10 @@ function useConfigSeries(): ConfigSeries[] {
     const result: ConfigSeries[] = [];
     for (const [hwKey, points] of byHw) {
       if (points.length < 2) continue;
-      const frontier = paretoFrontier(points.map((p) => ({ x: p.x, y: p.y })));
+      const frontier = paretoFrontier(
+        points.map((p) => ({ x: p.x, y: p.y })),
+        direction,
+      );
       if (frontier.length < 2) continue;
       const hwConfig = hardwareConfig[hwKey] ?? getHardwareConfig(hwKey);
       result.push({ hwKey, label: getDisplayLabel(hwConfig), frontier });
@@ -158,8 +199,8 @@ function useConfigSeries(): ConfigSeries[] {
       const bi = order.indexOf(b.hwKey);
       return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
     });
-    return result;
-  }, [graphs, activeHwTypes, selectedPrecisions, hardwareConfig]);
+    return { configs: result, yLabel, yTitle };
+  }, [graphs, activeHwTypes, selectedPrecisions, hardwareConfig, selectedYAxisMetric, direction]);
 }
 
 interface BaselineSelectProps {
@@ -209,11 +250,20 @@ function InfoIcon({ text }: { text: string }) {
   );
 }
 
-/** Per-interactivity throughput table + linked percent-diff heatmap. */
-function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
+/** Per-interactivity value table + linked ratio heatmap. */
+function ValueAndDiffTable({
+  configs,
+  direction,
+  yLabel,
+  yTitle,
+}: {
+  configs: ConfigSeries[];
+  direction: ParetoDirection;
+  yLabel: string;
+  yTitle: string;
+}) {
+  const higherBetter = direction === 'higher';
   // Compute buckets: every 10 from 10 up through floor(globalMax / 10) * 10.
-  // (Using floor ensures the last bucket is always one a config actually reaches,
-  // not a bucket beyond every config's reachable interactivity.)
   const buckets = useMemo(() => {
     let globalMax = 0;
     for (const c of configs) {
@@ -226,23 +276,28 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
     return out;
   }, [configs]);
 
-  // Per-(config, bucket) throughput cell, with the column-max highlight.
-  const tputCells = useMemo(() => {
+  // Per-(config, bucket) value cell, with the column-best highlight.
+  const valueCells = useMemo(() => {
     const grid: (number | null)[][] = configs.map((c) =>
-      buckets.map((b) => interpAlongFrontier(c.frontier, b)),
+      buckets.map((b) => interpAlongFrontier(c.frontier, b, direction)),
     );
-    const colMaxRow: (number | null)[] = buckets.map((_, ci) => {
-      let m: number | null = null;
+    const colBestRow: (number | null)[] = buckets.map((_, ci) => {
+      let best: number | null = null;
       for (const row of grid) {
         const v = row[ci];
-        if (v !== null && (m === null || v > m)) m = v;
+        if (v === null) continue;
+        if (best === null) {
+          best = v;
+          continue;
+        }
+        if (higherBetter ? v > best : v < best) best = v;
       }
-      return m;
+      return best;
     });
-    return { grid, colMaxRow };
-  }, [configs, buckets]);
+    return { grid, colBestRow };
+  }, [configs, buckets, direction, higherBetter]);
 
-  // Baseline selection for the percent-diff sub-table.
+  // Baseline selection for the ratio sub-table.
   const enabledKeys = configs.map((c) => c.hwKey);
   const defaultBaseline =
     pickDefaultBaseline(enabledKeys, DEFAULT_THROUGHPUT_BASELINE_HINTS) ?? enabledKeys[0] ?? '';
@@ -252,26 +307,30 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
   const baselineRow = useMemo(() => {
     const idx = configs.findIndex((c) => c.hwKey === effectiveBaseline);
     if (idx === -1) return null;
-    return tputCells.grid[idx];
-  }, [configs, tputCells, effectiveBaseline]);
+    return valueCells.grid[idx];
+  }, [configs, valueCells, effectiveBaseline]);
+
+  const directionHint = higherBetter ? 'Higher is better.' : 'Lower is better.';
+  const valueTooltip =
+    `For each enabled config we compute the Pareto frontier of ${yTitle || 'the selected metric'} vs interactivity, ` +
+    `then read off the value at every 10 tok/s/user step. Em-dash means that interactivity is outside the config's reachable range. ` +
+    `Best value per column is highlighted in green. ${directionHint}`;
+
+  const ratioTooltip = higherBetter
+    ? 'other / baseline at each bucket, rendered as Nx. "∞" means the baseline cannot reach that interactivity but the other config can (green = good for other); "0×" the reverse (red); "—" means neither can. Color scale is centered at 1.00× and log-symmetric, saturating at 3.00× (green) and 0.33× (red).'
+    : 'other / baseline at each bucket, rendered as Nx. Since lower is better, color is INVERTED: ratios < 1 are green (other uses less than baseline = good) and ratios > 1 are red. "∞" means the baseline cannot reach that interactivity but the other config can — colored red (other is way worse / infinite cost relative to baseline); "0×" the reverse — colored green (other achieves zero relative to baseline = great); "—" means neither can. Saturation caps at 3.00× and 0.33×.';
 
   return (
     <Card>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold">Per-GPU throughput at each interactivity bucket</h2>
-          <InfoIcon
-            text={
-              'For each enabled config we compute the Pareto frontier of token throughput per GPU vs interactivity, ' +
-              "then read off the throughput at every 10 tok/s/user step. Em-dash means that interactivity is outside the config's reachable range. " +
-              'Best value per column is highlighted in green.'
-            }
-          />
+          <h2 className="text-lg font-semibold">Per-GPU value at each interactivity bucket</h2>
+          <InfoIcon text={valueTooltip} />
         </div>
       </div>
       <p className="text-muted-foreground text-sm mt-1 mb-4">
-        Linearly interpolated tok/s/gpu along each config&apos;s Pareto frontier. Reactive to model,
-        precision, sequence and the legend on/off toggles above.
+        Linearly interpolated {yLabel || 'metric value'} along each config&apos;s Pareto frontier.
+        Reactive to model, precision, sequence and the legend on/off toggles above. {directionHint}
       </p>
 
       {configs.length === 0 ? (
@@ -312,7 +371,7 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                     {c.label}
                   </td>
                   {buckets.map((b, ci) => {
-                    const v = tputCells.grid[ri][ci];
+                    const v = valueCells.grid[ri][ci];
                     if (v === null) {
                       return (
                         <td
@@ -323,16 +382,16 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                         </td>
                       );
                     }
-                    const isMax = tputCells.colMaxRow[ci] === v;
+                    const isBest = valueCells.colBestRow[ci] === v;
                     return (
                       <td
                         key={b}
-                        className={cn('text-right px-2 py-1.5 tabular-nums', isMax && 'font-bold')}
+                        className={cn('text-right px-2 py-1.5 tabular-nums', isBest && 'font-bold')}
                         style={
-                          isMax ? { backgroundColor: COL_MAX_BG, color: '#0a0a0a' } : undefined
+                          isBest ? { backgroundColor: COL_BEST_BG, color: '#0a0a0a' } : undefined
                         }
                       >
-                        {formatInt(v)}
+                        {formatValue(v)}
                       </td>
                     );
                   })}
@@ -348,11 +407,7 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
           <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
             <div className="flex items-center gap-2">
               <h3 className="text-base font-semibold">Ratio vs baseline</h3>
-              <InfoIcon
-                text={
-                  'other / baseline at each bucket, rendered as Nx. "∞" means the baseline cannot reach that interactivity but the other config can; "0×" the reverse; "—" means neither can. Color scale is centered at 1.00× and log-symmetric, saturating at 3.00× (green) and 0.33× (red).'
-                }
-              />
+              <InfoIcon text={ratioTooltip} />
             </div>
             <BaselineSelect
               label="Baseline"
@@ -389,7 +444,7 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                       {c.label}
                     </td>
                     {buckets.map((b, ci) => {
-                      const other = tputCells.grid[ri][ci];
+                      const other = valueCells.grid[ri][ci];
                       const baseline = baselineRow ? baselineRow[ci] : null;
                       const isSelf = c.hwKey === effectiveBaseline;
 
@@ -415,30 +470,38 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
                           </td>
                         );
                       }
+                      // Baseline can't reach, other can:
+                      //   - higher-better: "infinite multiplier of throughput" → great for other → green
+                      //   - lower-better: "infinite multiplier of cost" → bad for other → red
                       if (other !== null && baseline === null) {
+                        const bg = higherBetter ? INFINITY_GREEN_BG : INFINITY_RED_BG;
                         return (
                           <td
                             key={b}
                             className="text-right px-2 py-1.5 tabular-nums font-semibold"
-                            style={{ backgroundColor: INFINITY_BG_POS, color: '#ffffff' }}
+                            style={{ backgroundColor: bg, color: '#ffffff' }}
                           >
                             ∞
                           </td>
                         );
                       }
+                      // Other can't reach, baseline can:
+                      //   - higher-better: other is 0× → bad for other → red
+                      //   - lower-better: other is 0× cost → great for other → green
                       if (other === null && baseline !== null) {
+                        const bg = higherBetter ? INFINITY_RED_BG : INFINITY_GREEN_BG;
                         return (
                           <td
                             key={b}
                             className="text-right px-2 py-1.5 tabular-nums font-semibold"
-                            style={{ backgroundColor: ZERO_BG, color: '#ffffff' }}
+                            style={{ backgroundColor: bg, color: '#ffffff' }}
                           >
                             0×
                           </td>
                         );
                       }
                       const ratio = other! / baseline!;
-                      const { background, color } = ratioColor(ratio);
+                      const { background, color } = ratioColor(ratio, direction);
                       return (
                         <td
                           key={b}
@@ -461,7 +524,16 @@ function ThroughputAndDiffTable({ configs }: { configs: ConfigSeries[] }) {
 }
 
 /** AUC summary table with three baseline columns. */
-function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
+function AucSummaryTable({
+  configs,
+  direction,
+  yLabel,
+}: {
+  configs: ConfigSeries[];
+  direction: ParetoDirection;
+  yLabel: string;
+}) {
+  const higherBetter = direction === 'higher';
   const hi = useMemo(() => {
     let globalMax = 0;
     for (const c of configs) {
@@ -472,8 +544,15 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
   }, [configs]);
 
   const aucs = useMemo(
-    () => configs.map((c) => aucUnderFrontier(c.frontier, 10, hi)),
-    [configs, hi],
+    () => configs.map((c) => aucUnderFrontier(c.frontier, 10, hi, direction)),
+    [configs, hi, direction],
+  );
+
+  // Per-config integration window — for lower-is-better this may shrink to
+  // the reachable x-range; for higher-is-better it's always [10, hi].
+  const aucWindows = useMemo(
+    () => configs.map((c) => aucWindow(c.frontier, 10, hi, direction)),
+    [configs, hi, direction],
   );
 
   const enabledKeys = configs.map((c) => c.hwKey);
@@ -511,27 +590,33 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
         style: { backgroundColor: SELF_BG, color: '#0a0a0a' },
       };
     }
-    const { background, color } = ratioColor(ratio);
+    const { background, color } = ratioColor(ratio, direction);
     return {
       text: `${ratio.toFixed(2)}×`,
       style: { backgroundColor: background, color },
     };
   };
 
+  const directionHint = higherBetter
+    ? 'Higher is better — a config that reaches both high interactivity AND high throughput-like value scores best.'
+    : 'Lower is better — a config that achieves low cost / energy across the reachable interactivity range scores best.';
+
+  const outOfRangeHint = higherBetter
+    ? "Outside a config's reachable interactivity range the integrand is treated as 0 (worst case for higher-is-better)."
+    : "Integration is restricted to each config's reachable interactivity range. The per-row window is shown below the AUC.";
+
+  const aucTooltip =
+    `Trapezoidal area under each config's ${yLabel || 'selected metric'} vs interactivity Pareto frontier, integrated from 10 to ${hi} tok/s/user. ` +
+    `${outOfRangeHint} ${directionHint}`;
+
   return (
     <Card>
       <div className="flex items-center gap-2">
         <h2 className="text-lg font-semibold">Area under Pareto frontier (AUC summary)</h2>
-        <InfoIcon
-          text={
-            `Trapezoidal area under each config's tok/s/gpu vs interactivity Pareto frontier, integrated from 10 to ${hi} tok/s/user. ` +
-            "Outside a config's reachable interactivity range the integrand is treated as 0. " +
-            'Units: (tok/s/gpu) × (tok/s/user). Higher is better — a config that reaches both high interactivity AND high throughput scores best.'
-          }
-        />
+        <InfoIcon text={aucTooltip} />
       </div>
       <p className="text-muted-foreground text-sm mt-1 mb-4">
-        Integration window: 10 → {hi} tok/s/user.
+        Integration window: 10 → {hi} tok/s/user. {directionHint}
       </p>
 
       {configs.length === 0 ? (
@@ -578,6 +663,9 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
                 <tr className="border-b border-border">
                   <th className="text-left font-medium px-2 py-1.5 whitespace-nowrap">Config</th>
                   <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">AUC</th>
+                  {!higherBetter && (
+                    <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Window</th>
+                  )}
                   <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
                     Ratio vs primary
                   </th>
@@ -592,6 +680,7 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
               <tbody>
                 {configs.map((c, i) => {
                   const auc = aucs[i];
+                  const win = aucWindows[i];
                   const primaryR = ratioCell(auc, primaryAuc, ePrimary, c.hwKey);
                   const secondaryR = ratioCell(auc, secondaryAuc, eSecondary, c.hwKey);
                   const tertiaryR = ratioCell(auc, tertiaryAuc, eTertiary, c.hwKey);
@@ -600,7 +689,12 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
                       <td className="text-left font-medium px-2 py-1.5 whitespace-nowrap">
                         {c.label}
                       </td>
-                      <td className="text-right tabular-nums px-2 py-1.5">{formatInt(auc)}</td>
+                      <td className="text-right tabular-nums px-2 py-1.5">{formatValue(auc)}</td>
+                      {!higherBetter && (
+                        <td className="text-right tabular-nums px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                          {win ? `${win.lo}→${win.hi}` : '—'}
+                        </td>
+                      )}
                       <td className="text-right tabular-nums px-2 py-1.5" style={primaryR.style}>
                         {primaryR.text}
                       </td>
@@ -624,19 +718,26 @@ function AucSummaryTable({ configs }: { configs: ConfigSeries[] }) {
 
 /**
  * Section that renders the two summary tables below the Pareto chart on the
- * inference page. Only shown when the active y-axis metric is "Token
- * Throughput per GPU" — the AUC + interactivity framing assumes that metric.
+ * inference page. Renders for all y-axis metrics; the "is higher better"
+ * direction is taken from the active metric's roofline direction on the
+ * interactivity chart definition.
  */
 export default function InteractivityTables() {
-  const { selectedYAxisMetric } = useInference();
-  const configs = useConfigSeries();
+  const { selectedYAxisMetric, graphs } = useInference();
 
-  if (selectedYAxisMetric !== 'y_tpPerGpu') return null;
+  const interactivityGraph = graphs.find((g) => g.chartDefinition.chartType === 'interactivity');
+  const direction: ParetoDirection = interactivityGraph
+    ? getMetricParetoDirection(interactivityGraph.chartDefinition, selectedYAxisMetric)
+    : 'higher';
+
+  const { configs, yLabel, yTitle } = useConfigSeries(direction);
+
+  if (!interactivityGraph) return null;
 
   return (
     <>
-      <ThroughputAndDiffTable configs={configs} />
-      <AucSummaryTable configs={configs} />
+      <ValueAndDiffTable configs={configs} direction={direction} yLabel={yLabel} yTitle={yTitle} />
+      <AucSummaryTable configs={configs} direction={direction} yLabel={yLabel} />
     </>
   );
 }

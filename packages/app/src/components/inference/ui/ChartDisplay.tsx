@@ -643,10 +643,11 @@ export default function ChartDisplay() {
       )}
       <div className="flex flex-col gap-4">{displayGraphs}</div>
 
-      {/* Summary tables below the Pareto chart — only shown for the
-          tok/s/gpu y-axis since the interactivity-bucketing / AUC framing
-          assumes that metric. Tables react to model, precision, sequence and
-          the legend on/off toggles via useInference() context. */}
+      {/* Summary tables below the Pareto chart. Render for every y-axis
+          metric; the tables auto-pick higher/lower-is-better semantics from
+          the active metric's roofline direction on the interactivity chart
+          definition. Reactive to model, precision, sequence and the legend
+          on/off toggles via useInference() context. */}
       <InteractivityTables />
 
       {/* Performance Over Time — Modal Drill-Down */}
