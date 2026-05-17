@@ -94,22 +94,74 @@ function relativeLuminance(r: number, g: number, b: number): number {
   return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
 }
 
-const RATIO_CAP_HI = 3;
-const RATIO_CAP_LO = 1 / 3;
+// Saturation endpoints for the ratio→color ramp. The dataset can show ratios
+// up to ~30× between best and worst configs (e.g. GB300 vs MI355X SGL), so
+// caps must be wide enough that common ratios (2×, 5×, 10×, 20×) sit at
+// visibly different points on the ramp rather than all clamping to the same
+// extreme. Stays log-symmetric: t=+1 at RATIO_CAP_HI, t=-1 at RATIO_CAP_LO.
+export const RATIO_CAP_HI = 30;
+export const RATIO_CAP_LO = 1 / 30;
+
+/** HSL → RGB. h in [0, 360), s/l in [0, 1]. Returns integer [0,255] channels. */
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = h / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (hp < 1) {
+    r1 = c;
+    g1 = x;
+  } else if (hp < 2) {
+    r1 = x;
+    g1 = c;
+  } else if (hp < 3) {
+    g1 = c;
+    b1 = x;
+  } else if (hp < 4) {
+    g1 = x;
+    b1 = c;
+  } else if (hp < 5) {
+    r1 = x;
+    b1 = c;
+  } else {
+    r1 = c;
+    b1 = x;
+  }
+  const m = l - c / 2;
+  return {
+    r: Math.round((r1 + m) * 255),
+    g: Math.round((g1 + m) * 255),
+    b: Math.round((b1 + m) * 255),
+  };
+}
+
+// HSL endpoints. Lightness ramps 0.97 (near-white at t=0) down to 0.28 (deep
+// color at |t|=1); saturation eases up so the deep end stays vivid. RGB
+// interpolation collapses perceptually between green-300 and green-700, so we
+// drive the ramp in HSL instead — this is what gives 5× / 10× / 20× / 33×
+// visibly different greens.
+const HUE_GREEN = 142; // tailwind green-ish
+const HUE_RED = 0;
+const L_NEUTRAL = 0.97;
+const L_DEEP = 0.28;
+const S_NEUTRAL = 0.6;
+const S_DEEP = 0.78;
 
 /**
  * Map a ratio (other / baseline) to a red→white→green color, centered at 1.0×
  * and log-symmetric.
  *
- * For 'higher' (default): ratio = 1 → white; ratio ≥ 3 → fully green; ratio ≤
- * 1/3 → fully red.
+ * For 'higher' (default): ratio = 1 → near-white; ratio ≥ RATIO_CAP_HI → deep
+ * green; ratio ≤ RATIO_CAP_LO → deep red.
  *
- * For 'lower': INVERT — ratio = 1 → white; ratio ≤ 1/3 → fully green (other
- * uses 1/3 of baseline = great); ratio ≥ 3 → fully red.
+ * For 'lower': INVERT — ratio ≤ RATIO_CAP_LO → deep green; ratio ≥
+ * RATIO_CAP_HI → deep red.
  *
  * Returns { background, color } with the WCAG-derived text color.
  */
-function ratioColor(
+export function ratioColor(
   ratio: number,
   direction: ParetoDirection = 'higher',
 ): { background: string; color: string } {
@@ -118,23 +170,11 @@ function ratioColor(
   let t = Math.log(clamped) / Math.log(RATIO_CAP_HI);
   // For lower-is-better, flip the sign so ratio > 1 → red and ratio < 1 → green.
   if (direction === 'lower') t = -t;
-  let r: number;
-  let g: number;
-  let b: number;
-  if (t >= 0) {
-    // white → green
-    // green target: #15803d (rgb 21, 128, 61) — Tailwind green-700
-    r = Math.round(255 + (21 - 255) * t);
-    g = Math.round(255 + (128 - 255) * t);
-    b = Math.round(255 + (61 - 255) * t);
-  } else {
-    // white → red
-    // red target: #b91c1c (rgb 185, 28, 28) — Tailwind red-700
-    const u = -t;
-    r = Math.round(255 + (185 - 255) * u);
-    g = Math.round(255 + (28 - 255) * u);
-    b = Math.round(255 + (28 - 255) * u);
-  }
+  const magnitude = Math.abs(t);
+  const hue = t >= 0 ? HUE_GREEN : HUE_RED;
+  const lightness = L_NEUTRAL + (L_DEEP - L_NEUTRAL) * magnitude;
+  const saturation = S_NEUTRAL + (S_DEEP - S_NEUTRAL) * magnitude;
+  const { r, g, b } = hslToRgb(hue, saturation, lightness);
   const lum = relativeLuminance(r, g, b);
   const color = lum > 0.45 ? '#0a0a0a' : '#ffffff';
   return { background: `rgb(${r}, ${g}, ${b})`, color };
