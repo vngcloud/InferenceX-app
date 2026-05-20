@@ -6,6 +6,8 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { GRADIENT_NUDGE_EVENT } from '@/lib/nudges/registry';
 import { useInference } from '@/components/inference/InferenceContext';
+import { useTraceHistograms } from '@/hooks/api/use-trace-histograms';
+import { useRouter } from 'next/navigation';
 import ChartLegend from '@/components/ui/chart-legend';
 import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import { computeToggle } from '@/hooks/useTogglableSet';
@@ -348,6 +350,10 @@ const ScatterGraph = React.memo(
     );
 
     const rooflines = useMemo(() => {
+      // Frontier scope is (hw, precision, date) — points from different dates
+      // can never share a frontier (a May 15 point can't dominate a May 17 plot).
+      // The legend grouping is still by (hw, precision); we just split the
+      // pareto compute per date and re-merge into the legend bucket.
       const result: Record<string, InferenceData[]> = {};
       const rooflineKey = `${selectedYAxisMetric}_roofline` as keyof ChartDefinition;
       const dir = chartDefinition[rooflineKey] as
@@ -356,17 +362,31 @@ const ScatterGraph = React.memo(
         | 'lower_left'
         | 'lower_right'
         | undefined;
-      for (const hw of Object.keys(groupedData)) {
-        const front =
-          dir === 'upper_right'
-            ? paretoFrontUpperRight(groupedData[hw])
-            : dir === 'upper_left'
-              ? paretoFrontUpperLeft(groupedData[hw])
-              : dir === 'lower_left'
-                ? paretoFrontLowerLeft(groupedData[hw])
-                : paretoFrontLowerRight(groupedData[hw]);
-        front.sort((a, b) => a.x - b.x);
-        result[hw] = front;
+      const frontierFn =
+        dir === 'upper_right'
+          ? paretoFrontUpperRight
+          : dir === 'upper_left'
+            ? paretoFrontUpperLeft
+            : dir === 'lower_left'
+              ? paretoFrontLowerLeft
+              : paretoFrontLowerRight;
+      for (const hwKey of Object.keys(groupedData)) {
+        const byDate = new Map<string, InferenceData[]>();
+        for (const p of groupedData[hwKey]) {
+          const d = p.date;
+          let bucket = byDate.get(d);
+          if (!bucket) {
+            bucket = [];
+            byDate.set(d, bucket);
+          }
+          bucket.push(p);
+        }
+        const combined: InferenceData[] = [];
+        for (const datePoints of byDate.values()) {
+          combined.push(...frontierFn(datePoints));
+        }
+        combined.sort((a, b) => a.x - b.x);
+        result[hwKey] = combined;
       }
       return result;
     }, [groupedData, selectedYAxisMetric, chartDefinition]);
@@ -374,7 +394,7 @@ const ScatterGraph = React.memo(
     const optimalPointKeys = useMemo(() => {
       const keys = new Set<string>();
       Object.values(rooflines).forEach((pts) =>
-        pts.forEach((p) => keys.add(`${p.hwKey}_${p.precision}-${p.x}-${p.y}`)),
+        pts.forEach((p) => keys.add(`${p.hwKey}_${p.precision}_${p.date}-${p.x}-${p.y}`)),
       );
       return keys;
     }, [rooflines]);
@@ -477,6 +497,18 @@ const ScatterGraph = React.memo(
     // All official points for rendering (unfiltered — visibility via opacity)
     const pointsData = useMemo(() => Object.values(groupedData).flat(), [groupedData]);
 
+    // Trace-replay histograms (ISL / OSL distributions) for agentic points.
+    // Pre-fetch the whole visible set so tooltip render stays synchronous.
+    const agenticIds = useMemo(() => {
+      const ids: number[] = [];
+      for (const p of pointsData) {
+        if (p.benchmark_type === 'agentic_traces' && typeof p.id === 'number') ids.push(p.id);
+      }
+      return ids;
+    }, [pointsData]);
+    const { data: traceHistograms } = useTraceHistograms(agenticIds);
+    const router = useRouter();
+
     // Gradient label data
     const allPointLabelsByKey = useMemo(() => {
       const globalLabelColorMap = new Map<string, string>();
@@ -516,7 +548,9 @@ const ScatterGraph = React.memo(
     const visiblePoints = useMemo(() => {
       let pts = filteredData;
       if (hideNonOptimal) {
-        pts = pts.filter((d) => optimalPointKeys.has(`${d.hwKey}_${d.precision}-${d.x}-${d.y}`));
+        pts = pts.filter((d) =>
+          optimalPointKeys.has(`${d.hwKey}_${d.precision}_${d.date}-${d.x}-${d.y}`),
+        );
       }
       return processedOverlayData.length > 0 ? [...pts, ...processedOverlayData] : pts;
     }, [filteredData, processedOverlayData, hideNonOptimal, optimalPointKeys]);
@@ -601,7 +635,8 @@ const ScatterGraph = React.memo(
       (d: InferenceData) =>
         effectiveActiveHwTypes.has(d.hwKey as string) &&
         selectedPrecisions.includes(d.precision) &&
-        (!hideNonOptimal || optimalPointKeys.has(`${d.hwKey}_${d.precision}-${d.x}-${d.y}`)),
+        (!hideNonOptimal ||
+          optimalPointKeys.has(`${d.hwKey}_${d.precision}_${d.date}-${d.x}-${d.y}`)),
       [effectiveActiveHwTypes, selectedPrecisions, hideNonOptimal, optimalPointKeys],
     );
 
@@ -739,6 +774,8 @@ const ScatterGraph = React.memo(
             hardwareConfig,
             isTracked: trackedConfigIdsRef.current.has(buildPointConfigId(d)),
             runUrl: d.run_url ? updateRepoUrl(d.run_url) : undefined,
+            traceHistogram:
+              typeof d.id === 'number' ? (traceHistograms?.[d.id] ?? undefined) : undefined,
           }),
         getRulerX: (d: InferenceData, xScale: any) => (xScale as ContinuousScale)(d.x),
         getRulerY: (d: InferenceData, yScale: any) => (yScale as ContinuousScale)(d.y),
@@ -754,26 +791,43 @@ const ScatterGraph = React.memo(
           ),
         onPointClick: (d: InferenceData) => {
           track('latency_data_point_clicked', { hw: String(d.hwKey), x: d.x, y: d.y });
-          // Attach track-over-time button handler in the tooltip
           const tooltipEl = chartRef.current?.getTooltipElement();
-          if (tooltipEl) {
-            const btn = tooltipEl.querySelector('[data-action="track-over-time"]');
-            if (btn) {
-              btn.addEventListener('click', (btnEvent) => {
-                btnEvent.stopPropagation();
-                const configId = buildPointConfigId(d);
-                if (trackedConfigIdsRef.current.has(configId)) removeTrackedConfig(configId);
-                else addTrackedConfig(d, chartDefinition.chartType);
-                chartRef.current?.dismissTooltip();
-                chartRef.current?.hideTooltip();
-                track('latency_point_tracked_via_tooltip', {
-                  hwKey: String(d.hwKey),
-                  tp: d.tp,
-                  conc: d.conc,
-                  precision: d.precision,
-                });
+          if (!tooltipEl) return;
+
+          // ── Summary-page actions ──────────────────────────────────────────
+          const trackBtn = tooltipEl.querySelector('[data-action="track-over-time"]');
+          if (trackBtn) {
+            trackBtn.addEventListener('click', (btnEvent) => {
+              btnEvent.stopPropagation();
+              const configId = buildPointConfigId(d);
+              if (trackedConfigIdsRef.current.has(configId)) removeTrackedConfig(configId);
+              else addTrackedConfig(d, chartDefinition.chartType);
+              chartRef.current?.dismissTooltip();
+              chartRef.current?.hideTooltip();
+              track('latency_point_tracked_via_tooltip', {
+                hwKey: String(d.hwKey),
+                tp: d.tp,
+                conc: d.conc,
+                precision: d.precision,
               });
-            }
+            });
+          }
+
+          // ── "View charts" → navigate to dedicated detail page ────────────
+          const viewBtn = tooltipEl.querySelector('[data-action="view-charts"]');
+          if (viewBtn && typeof d.id === 'number') {
+            const pointId = d.id;
+            viewBtn.addEventListener('click', (btnEvent) => {
+              btnEvent.stopPropagation();
+              track('latency_view_charts_opened', {
+                id: pointId,
+                hwKey: String(d.hwKey),
+                conc: d.conc,
+              });
+              chartRef.current?.dismissTooltip();
+              chartRef.current?.hideTooltip();
+              router.push(`/inference/agentic/${pointId}`);
+            });
           }
         },
         attachToLayer: 1, // scatter layer is index 1 (after rooflines at 0)
@@ -788,6 +842,11 @@ const ScatterGraph = React.memo(
         removeTrackedConfig,
         chartDefinition.chartType,
         selectedPrecisions,
+        // Tooltip content closure reads traceHistograms to decide whether to
+        // show the "View charts" button — rebuild config when the histogram
+        // fetch resolves so the button appears for points that have data.
+        traceHistograms,
+        router,
       ],
     );
 
@@ -838,35 +897,64 @@ const ScatterGraph = React.memo(
             const precision = key.split('_').pop()!;
             const visible =
               effectiveActiveHwTypes.has(hw) && selectedPrecisions.includes(precision);
-            let stroke = getCssColor(resolveColor(hw));
+            const baseStroke = getCssColor(resolveColor(hw));
 
-            if (showGradientLabels) {
-              const pointLabels = allPointLabelsByKey[key];
-              if (pointLabels) {
-                const stops = computeGradientStops(pointLabels, xScale);
-                if (stops) {
-                  const gid = `roofline-gradient-${chartId}-${key}`;
-                  activeGradientIds.add(gid);
-                  let gradient = defs.select<SVGLinearGradientElement>(`#${CSS.escape(gid)}`);
-                  if (gradient.empty()) gradient = defs.append('linearGradient').attr('id', gid);
-                  gradient
-                    .attr('gradientUnits', 'userSpaceOnUse')
-                    .attr('x1', xScale(pts[0].x))
-                    .attr('y1', 0)
-                    .attr('x2', xScale(pts.at(-1)!.x))
-                    .attr('y2', 0);
-                  gradient
-                    .selectAll('stop')
-                    .data(stops)
-                    .join('stop')
-                    .attr('offset', (s) => `${(s.offset * 100).toFixed(2)}%`)
-                    .attr('stop-color', (s) => s.color);
-                  stroke = `url(#${gid})`;
+            // Split into per-date sub-paths so the line never crosses dates.
+            // (When only one date is present the loop runs once with the full set.)
+            const byDate = new Map<string, InferenceData[]>();
+            for (const p of pts) {
+              let bucket = byDate.get(p.date);
+              if (!bucket) {
+                bucket = [];
+                byDate.set(p.date, bucket);
+              }
+              bucket.push(p);
+            }
+            const singleDate = byDate.size === 1;
+
+            for (const [date, datePoints] of byDate) {
+              if (datePoints.length <= 1) continue;
+              const entryKey = singleDate ? key : `${key}__${date}`;
+              let stroke = baseStroke;
+
+              // Gradient labels only apply in the single-date case; mapping the
+              // (key-wide) ParetoPointLabel array onto per-date sub-segments is
+              // ambiguous and the comparison-date overlay is a rare combo.
+              if (singleDate && showGradientLabels) {
+                const pointLabels = allPointLabelsByKey[key];
+                if (pointLabels) {
+                  const stops = computeGradientStops(pointLabels, xScale);
+                  if (stops) {
+                    const gid = `roofline-gradient-${chartId}-${entryKey}`;
+                    activeGradientIds.add(gid);
+                    let gradient = defs.select<SVGLinearGradientElement>(`#${CSS.escape(gid)}`);
+                    if (gradient.empty()) gradient = defs.append('linearGradient').attr('id', gid);
+                    gradient
+                      .attr('gradientUnits', 'userSpaceOnUse')
+                      .attr('x1', xScale(datePoints[0].x))
+                      .attr('y1', 0)
+                      .attr('x2', xScale(datePoints.at(-1)!.x))
+                      .attr('y2', 0);
+                    gradient
+                      .selectAll('stop')
+                      .data(stops)
+                      .join('stop')
+                      .attr('offset', (s) => `${(s.offset * 100).toFixed(2)}%`)
+                      .attr('stop-color', (s) => s.color);
+                    stroke = `url(#${gid})`;
+                  }
                 }
               }
-            }
 
-            entries.push({ key, hw, precision, points: pts, stroke, visible });
+              entries.push({
+                key: entryKey,
+                hw,
+                precision,
+                points: datePoints,
+                stroke,
+                visible,
+              });
+            }
           });
 
           // Remove stale gradients
@@ -1271,11 +1359,26 @@ const ScatterGraph = React.memo(
             .y((d) => newYScale(d.y))
             .curve(d3.curveMonotoneX);
 
-          // Update roofline paths
+          // Update roofline paths — must split per-date so the zoom redraw
+          // matches the per-date sub-paths created in the initial render.
           Object.entries(rooflines).forEach(([key, pts]) => {
             if (pts.length < 2) return;
-            const sel = zoomGroup.select<SVGPathElement>(`.roofline-${key}`);
-            if (!sel.empty()) sel.attr('d', lineGen(pts) as string);
+            const byDate = new Map<string, InferenceData[]>();
+            for (const p of pts) {
+              let bucket = byDate.get(p.date);
+              if (!bucket) {
+                bucket = [];
+                byDate.set(p.date, bucket);
+              }
+              bucket.push(p);
+            }
+            const singleDate = byDate.size === 1;
+            for (const [date, datePoints] of byDate) {
+              if (datePoints.length < 2) continue;
+              const cls = singleDate ? `roofline-${key}` : `roofline-${key}__${date}`;
+              const sel = zoomGroup.select<SVGPathElement>(`.${CSS.escape(cls)}`);
+              if (!sel.empty()) sel.attr('d', lineGen(datePoints) as string);
+            }
           });
 
           // Update gradient coordinates

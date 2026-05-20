@@ -273,6 +273,7 @@ function toBenchmarkRow(
   metrics?: Record<string, number>,
 ): BenchmarkRow {
   return {
+    id: br.id,
     hardware: c.hardware,
     framework: c.framework,
     model: c.model,

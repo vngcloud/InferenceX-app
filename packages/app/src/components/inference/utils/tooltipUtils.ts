@@ -19,6 +19,13 @@ export interface TooltipConfig {
   isTracked?: boolean;
   /** URL to the GitHub Actions workflow run */
   runUrl?: string;
+  /**
+   * Per-request ISL/OSL arrays for agentic points, sourced from the stored
+   * aiperf `profile_export.jsonl`. Used to detect whether the point has any
+   * trace data (so the "View charts" button can appear); the actual
+   * distributions are rendered on the detail page, not inline.
+   */
+  traceHistogram?: { isl: number[]; osl: number[] } | undefined;
 }
 
 export interface OverlayTooltipConfig extends TooltipConfig {
@@ -138,7 +145,22 @@ const generateAgenticHTML = (d: InferenceData): string => {
     parts.push(tooltipLine('Generated Tokens', formatNumber(d.total_generation_tokens)));
   }
 
+  // Histograms + time-series live on the dedicated detail page now; the
+  // "View charts" button (rendered by the wrapper when pinned + has trace
+  // data) takes the user there.
+
   return parts.join('');
+};
+
+/** "View charts" button — only visible when the tooltip is pinned and the
+ *  point has stored trace data. Wired up by the ScatterGraph click handler. */
+const viewChartsButtonHTML = (isPinned: boolean, hasTraceData: boolean): string => {
+  if (!isPinned || !hasTraceData) return '';
+  return `<button data-action="view-charts" style="
+    margin-top: 8px; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 500;
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: var(--accent-foreground);
+  ">View charts &rarr;</button>`;
 };
 
 const shortenSha = (image: string) => image.replaceAll(/(sha256:[a-f0-9]{7})[a-f0-9]+/giu, '$1…');
@@ -191,7 +213,16 @@ const generateParallelismHTML = (d: InferenceData): string => {
  * @returns HTML string for the tooltip content
  */
 export const generateTooltipContent = (config: TooltipConfig): string => {
-  const { data: d, isPinned, xLabel, yLabel, selectedYAxisMetric, hardwareConfig, runUrl } = config;
+  const {
+    data: d,
+    isPinned,
+    xLabel,
+    yLabel,
+    selectedYAxisMetric,
+    hardwareConfig,
+    runUrl,
+    traceHistogram,
+  } = config;
 
   return `
     <div style="background: var(--popover); border: 1px solid var(--border); border-radius: 8px; padding: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); user-select: ${isPinned ? 'text' : 'none'};">
@@ -240,6 +271,7 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
       </div>
       ${generateAgenticHTML(d)}
       ${runLinkHTML(runUrl)}
+      ${viewChartsButtonHTML(isPinned, Boolean(traceHistogram))}
       ${
         isPinned
           ? `<button data-action="track-over-time" style="

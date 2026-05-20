@@ -6,6 +6,8 @@
 import type { SubmissionsResponse } from './submissions-types';
 
 export interface BenchmarkRow {
+  /** Stable per-point id from benchmark_results; used to look up trace histograms. */
+  id: number;
   hardware: string;
   framework: string;
   model: string;

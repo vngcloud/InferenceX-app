@@ -45,6 +45,7 @@ import {
   bulkUpsertAvailability,
   insertServerLog,
 } from './etl/benchmark-ingest';
+import { insertTraceReplay } from './etl/trace-replay-ingest';
 import { mapAggEvalRow, mapEvalRow } from './etl/eval-mapper';
 import { ingestEvalRow } from './etl/eval-ingest';
 import { mapEvalSamples } from './etl/eval-samples-mapper';
@@ -209,6 +210,14 @@ const ARTIFACT_NAMES = {
   changelog: 'changelog-metadata',
 } as const;
 
+/**
+ * Strip the `bmk_` and/or `agentic_` prefixes from an artifact directory name
+ * so the bare suffix becomes a shared key between `bmk_agentic_<suffix>` and
+ * its sibling `agentic_<suffix>` artifact.
+ */
+const stripBmkAndAgenticPrefix = (s: string): string =>
+  s.replace(/^bmk_/u, '').replace(/^agentic_/u, '');
+
 function readJson(filePath: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -327,6 +336,7 @@ async function main(): Promise<void> {
   let totalSamples = 0;
   let totalSampleFiles = 0;
   let totalChangelogs = 0;
+  let totalTraceReplayLinked = 0;
 
   // ── Check for evals-only flag in changelog ────────────────────────────
   const changelogDir = path.join(artifactsDir, ARTIFACT_NAMES.changelog);
@@ -379,6 +389,56 @@ async function main(): Promise<void> {
     }
     if (serverLogPaths.size > 0) {
       console.log(`  Found ${serverLogPaths.size} server log artifact(s)`);
+    }
+
+    // Sibling aiperf artifacts: each `bmk_agentic_<suffix>` is paired with an
+    // `agentic_<suffix>` dir holding `profile_export.jsonl` and
+    // `server_metrics_export.csv`. The harness emits these under either a
+    // `trace_replay/` subdir (older layout) or `aiperf_artifacts/` (current).
+    // Older non-aiperf agentic runs don't ship this sibling. Key on the bare
+    // suffix so both names map to the same Map entry.
+    const TRACE_SUBDIRS = ['aiperf_artifacts', 'trace_replay'];
+    const traceReplayPaths = new Map<
+      string,
+      {
+        profileJsonl: string | null;
+        serverMetricsCsv: string | null;
+        serverMetricsJson: string | null;
+      }
+    >();
+    if (fs.existsSync(artifactsDir)) {
+      for (const d of fs.readdirSync(artifactsDir)) {
+        if (!d.startsWith('agentic_')) continue;
+        let profile: string | null = null;
+        let metrics: string | null = null;
+        let metricsJson: string | null = null;
+        for (const sub of TRACE_SUBDIRS) {
+          const dir = path.join(artifactsDir, d, sub);
+          if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+          if (!profile) {
+            const p = path.join(dir, 'profile_export.jsonl');
+            if (fs.existsSync(p)) profile = p;
+          }
+          if (!metrics) {
+            const m = path.join(dir, 'server_metrics_export.csv');
+            if (fs.existsSync(m)) metrics = m;
+          }
+          if (!metricsJson) {
+            const j = path.join(dir, 'server_metrics_export.json');
+            if (fs.existsSync(j)) metricsJson = j;
+          }
+        }
+        if (!profile && !metrics && !metricsJson) continue;
+        const suffix = stripBmkAndAgenticPrefix(d);
+        traceReplayPaths.set(suffix, {
+          profileJsonl: profile,
+          serverMetricsCsv: metrics,
+          serverMetricsJson: metricsJson,
+        });
+      }
+    }
+    if (traceReplayPaths.size > 0) {
+      console.log(`  Found ${traceReplayPaths.size} trace_replay sibling artifact(s)`);
     }
 
     const allBmkFiles = [...bmkFiles, ...allBmkDirs.flatMap((d) => findJsonFiles(d))];
@@ -448,12 +508,42 @@ async function main(): Promise<void> {
               }
             }
           }
+
+          // Trace-replay sibling lookup for agentic points only. The aiperf
+          // harness emits `agentic_<suffix>/trace_replay/...` next to the
+          // `bmk_agentic_<suffix>` artifact we just ingested.
+          if (parentDir.startsWith('bmk_agentic_') && insertedIds.length > 0) {
+            const suffix = stripBmkAndAgenticPrefix(parentDir);
+            const trace = traceReplayPaths.get(suffix);
+            if (trace) {
+              try {
+                const profile = trace.profileJsonl ? fs.readFileSync(trace.profileJsonl) : null;
+                const metrics = trace.serverMetricsCsv
+                  ? fs.readFileSync(trace.serverMetricsCsv)
+                  : null;
+                const metricsJson = trace.serverMetricsJson
+                  ? fs.readFileSync(trace.serverMetricsJson)
+                  : null;
+                await insertTraceReplay(sql, insertedIds, profile, metrics, metricsJson);
+                totalTraceReplayLinked += insertedIds.length;
+              } catch (error: any) {
+                tracker.recordDbError(`trace_replay for ${suffix}`, error);
+              }
+            } else {
+              tracker.skips.traceReplayMissing++;
+            }
+          }
         } catch (error: any) {
           tracker.recordDbError(path.basename(file), error);
         }
       }
     }
     console.log(`  Benchmarks: +${totalNewBmk} new, ${totalDupBmk} dup`);
+    if (totalTraceReplayLinked > 0 || tracker.skips.traceReplayMissing > 0) {
+      console.log(
+        `  Trace replay: ${totalTraceReplayLinked} rows linked, ${tracker.skips.traceReplayMissing} agentic point(s) missing sibling artifact`,
+      );
+    }
 
     if (availRows.length > 0) {
       try {

@@ -33,6 +33,10 @@ export function normalizeArtifactRows(
     if (!params) continue;
     const { config } = params;
     results.push({
+      // Synthetic id — overlay rows aren't persisted, so trace_replay lookups
+      // (keyed on benchmark_results.id) will always miss, which is the
+      // intended behaviour: overlays never have stored trace_replay blobs.
+      id: 0,
       hardware: config.hardware,
       framework: config.framework,
       model: config.model,

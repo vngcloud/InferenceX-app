@@ -36,6 +36,8 @@ import type { Model, Sequence } from '@/lib/data-mappings';
  * @property {number} p99_e2el - 99th percentile of End-to-End Latency.
  */
 export interface AggDataEntry {
+  /** Stable per-point id from benchmark_results — for trace_replay lookups. */
+  id?: number;
   hw: string;
   mtp?: string;
   hwKey: string;

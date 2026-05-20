@@ -458,6 +458,8 @@ async function mapWorkflowDir(
       unmappedHw: local.skips.unmappedHw,
       noIslOsl: local.skips.noIslOsl,
       failedRun: local.skips.failedRun,
+      // GCS backup doesn't ingest aiperf trace files; counter stays 0.
+      traceReplayMissing: local.skips.traceReplayMissing,
     },
     localUnmappedModels: new Set(local.unmappedModels),
     localUnmappedHws: new Set(local.unmappedHws),

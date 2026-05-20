@@ -1,6 +1,13 @@
 import type { DbClient } from '../connection.js';
 
 export interface BenchmarkRow {
+  /**
+   * Stable per-point id from benchmark_results. Used by the frontend to look
+   * up associated detail blobs (e.g. trace_replay histograms).
+   * Number is fine in TS but it's a Postgres bigint — Date arithmetic on huge
+   * runs is hypothetically lossy, in practice well below Number.MAX_SAFE_INTEGER.
+   */
+  id: number;
   hardware: string;
   framework: string;
   model: string;
@@ -55,6 +62,7 @@ export async function getLatestBenchmarks(
     const dateFilter = exact ? sql`br.date = ${date}::date` : sql`br.date <= ${date}::date`;
     const rows = await sql`
       SELECT DISTINCT ON (br.config_id, br.conc, br.isl, br.osl)
+        br.id,
         c.hardware,
         c.framework,
         c.model,
@@ -95,6 +103,7 @@ export async function getLatestBenchmarks(
   // No date filter: use materialized view for instant lookups
   const rows = await sql`
     SELECT
+      lb.id,
       c.hardware,
       c.framework,
       c.model,

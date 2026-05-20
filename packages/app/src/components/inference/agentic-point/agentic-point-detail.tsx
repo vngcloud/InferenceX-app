@@ -1,0 +1,308 @@
+'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft } from 'lucide-react';
+
+import { useTraceHistograms } from '@/hooks/api/use-trace-histograms';
+import {
+  useTraceServerMetrics,
+  type PointMeta,
+  type QueueDepthPoint,
+  type TimeSeriesPoint,
+} from '@/hooks/api/use-trace-server-metrics';
+import { useBenchmarkSiblings } from '@/hooks/api/use-benchmark-siblings';
+
+import { Distribution } from './distribution';
+import { SiblingNav } from './sibling-nav';
+import {
+  StackedAreaChart,
+  TimeSeriesChart,
+  cumulativeAverage,
+  rollingAverage,
+  sumSeries,
+} from './time-series-chart';
+
+interface Props {
+  id: number;
+}
+
+const fmtPct = (v: number | null | undefined): string =>
+  v === null || v === undefined || Number.isNaN(v) ? '—' : `${(v * 100).toFixed(2)}%`;
+
+function MetaLine({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-sm font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function PointSummary({ meta }: { meta: PointMeta }) {
+  return (
+    <div className="mb-4">
+      <div className="flex items-baseline justify-between gap-3 mb-2">
+        <p className="text-sm text-muted-foreground">
+          Selected point
+          {meta.disagg ? ' · disagg' : ''}
+          {meta.spec_method && meta.spec_method !== 'none' ? ` · spec=${meta.spec_method}` : ''}
+        </p>
+        {meta.run_url && (
+          <a
+            href={meta.run_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            GitHub Actions run →
+          </a>
+        )}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <MetaLine label="Offload" value={(meta.offload_mode ?? 'off').toUpperCase()} />
+        <MetaLine label="Concurrency" value={meta.conc} />
+        <MetaLine label="GPU cache hit" value={fmtPct(meta.server_gpu_cache_hit_rate)} />
+        <MetaLine label="CPU cache hit" value={fmtPct(meta.server_cpu_cache_hit_rate)} />
+        {meta.isl !== null && <MetaLine label="ISL" value={meta.isl} />}
+        {meta.osl !== null && <MetaLine label="OSL" value={meta.osl} />}
+      </div>
+    </div>
+  );
+}
+
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border/40 bg-card/40 p-4">
+      <h2 className="text-sm font-semibold text-foreground mb-3">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
+export function AgenticPointDetail({ id }: Props) {
+  const router = useRouter();
+  const histQuery = useTraceHistograms([id], true);
+  const metricsQuery = useTraceServerMetrics(id, true);
+  const siblingsQuery = useBenchmarkSiblings(id);
+
+  const hist = histQuery.data?.[id];
+  const metrics = metricsQuery.data;
+  const siblingsData = siblingsQuery.data;
+
+  return (
+    <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4 py-6">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" /> Back
+        </button>
+        <span className="text-sm text-muted-foreground">·</span>
+        <Link href="/inference" className="text-sm text-muted-foreground hover:text-foreground">
+          Inference chart
+        </Link>
+      </div>
+
+      {siblingsData ? (
+        <SiblingNav sku={siblingsData.sku} siblings={siblingsData.siblings} />
+      ) : siblingsQuery.isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading SKU navigator…</div>
+      ) : null}
+
+      {metrics ? (
+        <PointSummary meta={metrics.meta} />
+      ) : metricsQuery.isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading point metadata…</div>
+      ) : null}
+
+      {metricsQuery.isError && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          Failed to load trace data for benchmark point #{id}.
+        </div>
+      )}
+      {metricsQuery.data === null && !metricsQuery.isLoading && (
+        <div className="rounded-lg border border-border/40 bg-card/40 p-4 text-sm text-muted-foreground">
+          No stored trace_replay blob for benchmark point #{id}. This point predates the aiperf
+          time-series capture, or its source artifacts have expired on GitHub.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ChartCard title="Input sequence length distribution">
+          {hist ? (
+            <Distribution values={hist.isl} unit="tokens" />
+          ) : histQuery.isLoading ? (
+            <Skeleton />
+          ) : (
+            <Empty />
+          )}
+        </ChartCard>
+        <ChartCard title="Output sequence length distribution">
+          {hist ? (
+            <Distribution values={hist.osl} unit="tokens" />
+          ) : histQuery.isLoading ? (
+            <Skeleton />
+          ) : (
+            <Empty />
+          )}
+        </ChartCard>
+
+        <ChartCard title="KV cache utilization over time">
+          {metrics ? (
+            <TimeSeriesChart
+              series={[
+                {
+                  name: 'GPU KV cache (avg n=50)',
+                  data: rollingAverage(metrics.kvCacheUsage, 50),
+                  rawData: metrics.kvCacheUsage,
+                  color: '#3b82f6',
+                  strokeWidth: 2,
+                },
+              ]}
+              durationS={metrics.durationS}
+              yMax={1}
+              yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+              yAxisLabel="KV cache (%)"
+            />
+          ) : (
+            <Skeleton />
+          )}
+        </ChartCard>
+
+        <ChartCard title="Request queue depth">
+          {metrics ? (
+            <TimeSeriesChart
+              series={[
+                {
+                  name: 'Running (avg n=50)',
+                  data: rollingAverage(
+                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                      t: p.t,
+                      value: p.running,
+                    })),
+                    50,
+                  ),
+                  color: '#22c55e',
+                  strokeWidth: 2,
+                },
+                {
+                  name: 'Waiting (avg n=50)',
+                  data: rollingAverage(
+                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                      t: p.t,
+                      value: p.waiting,
+                    })),
+                    50,
+                  ),
+                  color: '#ef4444',
+                  strokeWidth: 2,
+                },
+                {
+                  name: 'Total (avg n=50)',
+                  data: rollingAverage(
+                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                      t: p.t,
+                      value: p.total,
+                    })),
+                    50,
+                  ),
+                  color: '#3b82f6',
+                  strokeWidth: 2,
+                },
+              ]}
+              durationS={metrics.durationS}
+              yAxisLabel="Requests"
+            />
+          ) : (
+            <Skeleton />
+          )}
+        </ChartCard>
+
+        <ChartCard title="Prefix cache hit rate per interval">
+          {metrics ? (
+            <TimeSeriesChart
+              series={[
+                {
+                  name: 'GPU (HBM, avg n=50)',
+                  data: rollingAverage(metrics.prefixCacheHitRate, 50),
+                  rawData: metrics.prefixCacheHitRate,
+                  color: '#a855f7',
+                  strokeWidth: 2,
+                },
+              ]}
+              durationS={metrics.durationS}
+              yMax={1}
+              yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+              yAxisLabel="Hit rate (%)"
+            />
+          ) : (
+            <Skeleton />
+          )}
+        </ChartCard>
+
+        <ChartCard title="Throughput (total & decode)">
+          {metrics ? (
+            (() => {
+              const total = sumSeries(metrics.prefillTps, metrics.decodeTps);
+              return (
+                <TimeSeriesChart
+                  series={[
+                    {
+                      name: 'Total (avg n=50)',
+                      data: rollingAverage(total, 50),
+                      color: '#3b82f6',
+                      strokeWidth: 1.6,
+                    },
+                    {
+                      name: 'Decode (avg n=50)',
+                      data: rollingAverage(metrics.decodeTps, 50),
+                      color: '#f97316',
+                      strokeWidth: 1.6,
+                    },
+                    {
+                      name: 'Total running avg',
+                      data: cumulativeAverage(total),
+                      color: '#ef4444',
+                      strokeWidth: 3,
+                    },
+                  ]}
+                  durationS={metrics.durationS}
+                  yAxisLabel="Tokens / sec"
+                />
+              );
+            })()
+          ) : (
+            <Skeleton />
+          )}
+        </ChartCard>
+
+        <ChartCard title="Cumulative prompt token source breakdown">
+          {metrics ? (
+            <StackedAreaChart
+              sourceSeries={metrics.promptTokensBySource}
+              durationS={metrics.durationS}
+            />
+          ) : (
+            <Skeleton />
+          )}
+        </ChartCard>
+      </div>
+    </div>
+  );
+}
+
+function Skeleton() {
+  return <div className="h-[260px] rounded-md bg-muted/30 animate-pulse" />;
+}
+
+function Empty() {
+  return (
+    <div className="h-[260px] grid place-items-center text-xs text-muted-foreground">No data</div>
+  );
+}
+
+// Re-export type for use by sub-components
+export type { TimeSeriesPoint, QueueDepthPoint };

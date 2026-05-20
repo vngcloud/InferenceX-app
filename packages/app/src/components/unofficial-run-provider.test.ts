@@ -12,6 +12,7 @@ import { buildChartData, parseAvailableModelsAndSequences } from './unofficial-r
 /** Minimal BenchmarkRow stub — only fields used by buildChartData key logic. */
 function stubRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
   return {
+    id: 1,
     hardware: 'h200',
     framework: 'sglang',
     model: 'dsr1',

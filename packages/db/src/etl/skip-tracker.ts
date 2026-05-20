@@ -10,6 +10,8 @@ export interface Skips {
   noIslOsl: number;
   failedRun: number;
   dbError: number;
+  /** Agentic point whose sibling `agentic_<suffix>` artifact had no trace_replay files. */
+  traceReplayMissing: number;
 }
 
 export interface SkipSnapshot {
@@ -74,6 +76,7 @@ export function createSkipTracker(): SkipTracker {
     noIslOsl: 0,
     failedRun: 0,
     dbError: 0,
+    traceReplayMissing: 0,
   };
   const unmappedModels = new Set<string>();
   const unmappedHws = new Set<string>();

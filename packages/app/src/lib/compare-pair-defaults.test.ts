@@ -6,6 +6,7 @@ import { pickPairDefaults } from './compare-pair-defaults';
 
 function makeRow(overrides: Partial<BenchmarkRow>): BenchmarkRow {
   return {
+    id: 1,
     hardware: 'h100',
     framework: 'sglang',
     model: 'dsr1',

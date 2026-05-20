@@ -49,6 +49,8 @@ export function rowToAggDataEntry(row: BenchmarkRow): AggDataEntry {
     row.offload_mode ??
     (typeof rawMetrics.offload_mode === 'string' ? rawMetrics.offload_mode : undefined);
   return {
+    // Coerce: Postgres bigint comes through the SQL client as a string.
+    id: typeof row.id === 'number' ? row.id : Number(row.id),
     hw: row.hardware,
     framework: row.framework,
     model: DB_MODEL_TO_DISPLAY[row.model] ?? row.model,

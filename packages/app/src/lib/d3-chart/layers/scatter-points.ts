@@ -289,7 +289,21 @@ export function attachScatterTooltipHandlers<
     });
 }
 
-/** Compute tooltip left/top, flipping when it would overflow the chart container. */
+/**
+ * Compute tooltip left/top **in viewport coordinates** so the tooltip can be
+ * rendered via portal with `position: fixed`. Callers still pass cursor coords
+ * relative to `container` (matching `d3.pointer(event, container)`).
+ *
+ * Why viewport coords: the chart cards use `backdrop-filter`, which creates
+ * a stacking context. A tooltip painted inside the upper card's stacking
+ * context cannot rise above the lower card's stacking context regardless of
+ * its z-index. Portalling to document.body + `position: fixed` sidesteps the
+ * whole problem; we just need the coordinates in viewport space.
+ *
+ * Strategy: pick preferred side (right/below cursor), flip if it overflows the
+ * container, then clamp to container bounds. Tall tooltips that don't fit get
+ * clamped to the container edges.
+ */
 export function computeTooltipPosition(
   mx: number,
   my: number,
@@ -308,13 +322,21 @@ export function computeTooltipPosition(
   // Force reflow so we get real dimensions
   const tw = node.getBoundingClientRect().width || node.offsetWidth;
   const th = node.getBoundingClientRect().height || node.offsetHeight;
+  const rect = container.getBoundingClientRect();
   const cw = container.clientWidth;
   const ch = container.clientHeight;
+  const EDGE_PAD = 4;
 
-  const left = mx + offset + tw > cw ? mx - offset - tw : mx + offset;
-  const top = my + offset + th > ch ? my - offset - th : my + offset;
+  // Prefer right of cursor; flip to left if no room.
+  let left = mx + offset + tw <= cw ? mx + offset : mx - offset - tw;
+  left = Math.max(EDGE_PAD, Math.min(cw - tw - EDGE_PAD, left));
 
-  return { left, top };
+  // Prefer below cursor; flip above if no room.
+  let top = my + offset + th <= ch ? my + offset : my - offset - th;
+  top = Math.max(EDGE_PAD, Math.min(ch - th - EDGE_PAD, top));
+
+  // Convert container-local coords → viewport coords for `position: fixed`.
+  return { left: left + rect.left, top: top + rect.top };
 }
 
 /** Update scatter point positions on zoom. */
