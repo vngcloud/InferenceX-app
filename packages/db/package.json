@@ -30,11 +30,14 @@
     "@neondatabase/serverless": "^1.1.0",
     "@noble/ciphers": "^2.2.0",
     "@semianalysisai/inferencex-constants": "workspace:*",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "stream-chain": "^3.4.0",
+    "stream-json": "^2.1.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/node": "^25.7.0",
+    "@types/stream-json": "^1.7.8",
     "@vitest/coverage-v8": "^4.1.6",
     "adm-zip": "^0.5.17",
     "dotenv-cli": "^11.0.0",

@@ -188,10 +188,10 @@ export function AggregateChart({
           opacity={0.25}
         />
 
-        {/* Percentile polylines + markers */}
+        {/* Horizontal connecting lines per percentile — faint backdrop so the
+            eye can follow how each percentile changes across configs. */}
         {PERCENTILE_LINES.map((line) => {
           const segments: { x1: number; y1: number; x2: number; y2: number }[] = [];
-          const markers: { x: number; y: number }[] = [];
           let prev: { x: number; y: number } | null = null;
           for (let i = 0; i < points.length; i++) {
             const v = points[i]!.values[line.key];
@@ -201,12 +201,11 @@ export function AggregateChart({
             }
             const x = xOf(i);
             const y = yOf(v);
-            markers.push({ x, y });
             if (prev) segments.push({ x1: prev.x, y1: prev.y, x2: x, y2: y });
             prev = { x, y };
           }
           return (
-            <g key={line.key}>
+            <g key={`hline-${line.key}`} opacity={0.35}>
               {segments.map((s, j) => (
                 <line
                   key={`s${j}`}
@@ -215,12 +214,69 @@ export function AggregateChart({
                   x2={s.x2}
                   y2={s.y2}
                   stroke={line.color}
-                  strokeWidth={1.5}
+                  strokeWidth={1}
                 />
               ))}
-              {markers.map((m, j) => (
-                <circle key={`m${j}`} cx={m.x} cy={m.y} r={3} fill={line.color} />
-              ))}
+            </g>
+          );
+        })}
+
+        {/* Per-sibling vertical bar spanning the percentile range, with a
+            colored tick at each percentile level. Mean rendered as a small
+            diamond to distinguish from the percentile ticks. */}
+        {points.map((p, i) => {
+          const x = xOf(i);
+          // Collect percentile values present for this sibling.
+          const present = PERCENTILE_LINES.filter(
+            (line) =>
+              typeof p.values[line.key] === 'number' && Number.isFinite(p.values[line.key]!),
+          ).map((line) => ({ ...line, value: p.values[line.key]! }));
+          if (present.length === 0) return null;
+          // Only the *percentile* values define the bar extent; mean might be
+          // outside the percentile span on weird distributions.
+          const pctlOnly = present.filter((p2) => p2.key !== 'mean');
+          const bandValues = pctlOnly.length > 0 ? pctlOnly : present;
+          const bandYs = bandValues.map((b) => yOf(b.value));
+          const yLo = Math.min(...bandYs);
+          const yHi = Math.max(...bandYs);
+          return (
+            <g key={`bar-${i}`}>
+              <line
+                x1={x}
+                x2={x}
+                y1={yLo}
+                y2={yHi}
+                stroke="currentColor"
+                strokeWidth={1}
+                opacity={0.35}
+              />
+              {present.map((b) => {
+                const ty = yOf(b.value);
+                if (b.key === 'mean') {
+                  // Diamond marker for mean.
+                  const s = 4;
+                  return (
+                    <polygon
+                      key={`m-${b.key}`}
+                      points={`${x},${ty - s} ${x + s},${ty} ${x},${ty + s} ${x - s},${ty}`}
+                      fill={b.color}
+                      stroke={b.color}
+                    />
+                  );
+                }
+                // Horizontal tick at each percentile.
+                return (
+                  <line
+                    key={`tk-${b.key}`}
+                    x1={x - 6}
+                    x2={x + 6}
+                    y1={ty}
+                    y2={ty}
+                    stroke={b.color}
+                    strokeWidth={2.5}
+                  />
+                );
+              })}
             </g>
           );
         })}

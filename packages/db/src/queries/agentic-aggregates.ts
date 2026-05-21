@@ -13,7 +13,14 @@
  * or has no usable samples — frontend treats those as "no data".
  */
 
-import { gunzipSync } from 'node:zlib';
+import { Readable } from 'node:stream';
+import { createGunzip, gunzipSync } from 'node:zlib';
+
+import { chain } from 'stream-chain';
+
+import { parser } from 'stream-json';
+import { pick } from 'stream-json/filters/pick.js';
+import { streamObject } from 'stream-json/streamers/stream-object.js';
 
 import type { DbClient } from '../connection.js';
 
@@ -38,12 +45,15 @@ export interface AgenticAggregate {
 export type AgenticAggregateMap = Record<number, AgenticAggregate>;
 
 /**
- * Each row pulls TWO compressed blobs (profile_export + server_metrics).
- * `server_metrics_json_gz` can be up to ~17 MB compressed for high-conc
- * runs, so even 3 rows can clear Neon's 64 MB cap. Stay conservative at 2.
- * Chunks are issued in parallel below, so the wall-clock impact is small.
+ * `profile_export_jsonl_gz` is small (~1-3 MB) so we can batch many per
+ * round-trip. `server_metrics_json_gz` is much bigger (~17 MB compressed
+ * for high-conc TP+EP runs; Neon encodes bytea over HTTP at ~1.6× wire
+ * size, so two of those = ~50 MB and three already trips the 64 MB cap).
+ * We fetch the two blob types in separate queries with different chunk
+ * sizes.
  */
-const QUERY_CHUNK_SIZE = 2;
+const PROFILE_CHUNK_SIZE = 8;
+const SERVER_CHUNK_SIZE = 1;
 
 /** Linear-interpolated percentile (matches numpy default). */
 function quantile(sortedAsc: number[], q: number): number {
@@ -162,9 +172,14 @@ export function extractServerMetricSamples(json: string): {
 
   // Prefix cache hit rate per interval = hits.rate / queries.rate.
   // Matches the derivation in queries/trace-server-metrics.ts.
+  // Metric names: vllm exposes these as `vllm:prefix_cache_*` (no `gpu_`
+  // prefix); falls back to the `gpu_`-prefixed names in case a future
+  // vllm version renames them.
   const prefixCacheHitRate: number[] = [];
-  const hitsSeries = firstSeries('vllm:gpu_prefix_cache_hits');
-  const queriesSeries = firstSeries('vllm:gpu_prefix_cache_queries');
+  const hitsSeries =
+    firstSeries('vllm:prefix_cache_hits') ?? firstSeries('vllm:gpu_prefix_cache_hits');
+  const queriesSeries =
+    firstSeries('vllm:prefix_cache_queries') ?? firstSeries('vllm:gpu_prefix_cache_queries');
   if (hitsSeries && queriesSeries) {
     const qByStart = new Map<number, TimeSlice>();
     for (const q of queriesSeries.timeslices ?? []) {
@@ -181,75 +196,135 @@ export function extractServerMetricSamples(json: string): {
   return { kvCacheUtil, prefixCacheHitRate };
 }
 
+/** Metrics our aggregates pipeline cares about. Anything else in the blob is skipped. */
+const TARGET_METRIC_KEYS = new Set([
+  'vllm:kv_cache_usage_perc',
+  'vllm:gpu_cache_usage_perc', // older fallback name
+  'vllm:prefix_cache_hits',
+  'vllm:prefix_cache_queries',
+  'vllm:gpu_prefix_cache_hits', // legacy alias (used in pre-fix code paths)
+  'vllm:gpu_prefix_cache_queries',
+]);
+
+/**
+ * Stream-parse the gzipped server_metrics_json and collect ONLY the metrics
+ * we need. Avoids the Node 512 MB string cap that JSON.parse hits on
+ * server_metrics blobs from high-conc TP+EP runs (which can decompress to
+ * >500 MB because vllm dumps `cache_config_info` every scrape interval).
+ *
+ * Pipeline: Buffer → gunzip → JSON parser → Pick('metrics') →
+ * StreamObject (one metric per chunk) → keep only the keys we care about.
+ *
+ * Returns the same `{ kvCacheUtil, prefixCacheHitRate }` shape as the
+ * synchronous fast path so callers can use either interchangeably.
+ */
+async function streamExtractServerMetricSamples(
+  buffer: Buffer,
+): Promise<{ kvCacheUtil: number[]; prefixCacheHitRate: number[] }> {
+  const collected: Record<string, MetricMeta> = {};
+  // stream-json's TypeScript types don't compose cleanly with node:stream's
+  // pipeline() generic, and several `.pipe()`/event APIs are typed loosely —
+  // cast to any for this local pipe chain. It works at runtime.
+  // stream-json composes transforms via stream-chain. `pick`/`streamObject`
+  // each return a Transform when called; `chain([...])` wires them.
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const pipeline = chain([
+    Readable.from(buffer),
+    createGunzip(),
+    parser(),
+    pick({ filter: 'metrics' }),
+    streamObject(),
+  ]);
+  await new Promise<void>((resolve, reject) => {
+    (pipeline as any).on('data', (chunk: unknown) => {
+      const { key, value } = chunk as { key: string; value: MetricMeta };
+      if (TARGET_METRIC_KEYS.has(key)) collected[key] = value;
+    });
+    (pipeline as any).on('end', resolve);
+    (pipeline as any).on('error', reject);
+  });
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  return extractServerMetricSamples(JSON.stringify({ metrics: collected }));
+}
+
 export async function getAgenticAggregates(
   sql: DbClient,
   benchmarkResultIds: number[],
 ): Promise<AgenticAggregateMap> {
   if (benchmarkResultIds.length === 0) return {};
 
-  // Serial chunks so we never have more than ~`QUERY_CHUNK_SIZE` blobs in
-  // memory at once. Some `server_metrics` blobs decompress to >100 MB; running
-  // all chunks in parallel OOMs the Node process. The aggregator is fronted by
-  // a blob cache (`blobOnly: true`), so the slow path runs at most once per
-  // sibling set.
   const result: AgenticAggregateMap = {};
-  for (let i = 0; i < benchmarkResultIds.length; i += QUERY_CHUNK_SIZE) {
-    const chunk = benchmarkResultIds.slice(i, i + QUERY_CHUNK_SIZE);
-    const chunkRows = (await sql`
+  // ── Pass 1: profile_export blobs (cheap; large batches). ────────────────
+  for (let i = 0; i < benchmarkResultIds.length; i += PROFILE_CHUNK_SIZE) {
+    const chunk = benchmarkResultIds.slice(i, i + PROFILE_CHUNK_SIZE);
+    const rows = (await sql`
       select
         br.id as benchmark_result_id,
-        atr.profile_export_jsonl_gz as profile_blob,
+        atr.profile_export_jsonl_gz as profile_blob
+      from benchmark_results br
+      join agentic_trace_replay atr on atr.id = br.trace_replay_id
+      where br.id = any(${chunk}::bigint[])
+    `) as { benchmark_result_id: number; profile_blob: Buffer | null }[];
+    for (const row of rows) {
+      const id = Number(row.benchmark_result_id);
+      result[id] ??= blankAggregate(id);
+      if (row.profile_blob) {
+        try {
+          const jsonl = gunzipSync(row.profile_blob).toString('utf8');
+          const { isl, osl } = extractIslOsl(jsonl);
+          result[id].isl = percentilesOf(isl);
+          result[id].osl = percentilesOf(osl);
+        } catch {
+          // ignore malformed blob
+        }
+      }
+    }
+  }
+  // ── Pass 2: server_metrics blobs (huge; one at a time). ────────────────
+  // Serial to avoid OOM on the decompressed JSON of a high-conc TP+EP row
+  // (>500 MB raw). The aggregator is fronted by a blob cache, so the slow
+  // path runs at most once per sibling set.
+  for (let i = 0; i < benchmarkResultIds.length; i += SERVER_CHUNK_SIZE) {
+    const chunk = benchmarkResultIds.slice(i, i + SERVER_CHUNK_SIZE);
+    const rows = (await sql`
+      select
+        br.id as benchmark_result_id,
         atr.server_metrics_json_gz as server_blob
       from benchmark_results br
       join agentic_trace_replay atr on atr.id = br.trace_replay_id
       where br.id = any(${chunk}::bigint[])
-    `) as {
-      benchmark_result_id: number;
-      profile_blob: Buffer | null;
-      server_blob: Buffer | null;
-    }[];
-    for (const row of chunkRows) {
-      processRow(row, result);
+    `) as { benchmark_result_id: number; server_blob: Buffer | null }[];
+    for (const row of rows) {
+      const id = Number(row.benchmark_result_id);
+      result[id] ??= blankAggregate(id);
+      if (!row.server_blob) continue;
+      let parsed: { kvCacheUtil: number[]; prefixCacheHitRate: number[] } | null = null;
+      try {
+        const json = gunzipSync(row.server_blob).toString('utf8');
+        parsed = extractServerMetricSamples(json);
+      } catch (error) {
+        // ERR_STRING_TOO_LONG (>512 MB) hits on high-conc TP+EP rows whose
+        // server_metrics_json decompresses past Node's max string length.
+        // Stream-parse to extract just the metric subtrees we care about.
+        const code = error && (error as NodeJS.ErrnoException).code;
+        const msg = error instanceof Error ? error.message : String(error);
+        if (code === 'ERR_STRING_TOO_LONG' || msg.includes('longer than 0x1fffffe8')) {
+          try {
+            parsed = await streamExtractServerMetricSamples(row.server_blob);
+          } catch {
+            // stream fallback failed too — leave nulls
+          }
+        }
+      }
+      if (parsed) {
+        result[id].kvCacheUtil = percentilesOf(parsed.kvCacheUtil);
+        result[id].prefixCacheHitRate = percentilesOf(parsed.prefixCacheHitRate);
+      }
     }
   }
   return result;
 }
 
-function processRow(
-  row: { benchmark_result_id: number; profile_blob: Buffer | null; server_blob: Buffer | null },
-  result: AgenticAggregateMap,
-): void {
-  let islPct: MetricPercentiles | null = null;
-  let oslPct: MetricPercentiles | null = null;
-  let kvPct: MetricPercentiles | null = null;
-  let prefixPct: MetricPercentiles | null = null;
-
-  if (row.profile_blob) {
-    try {
-      const jsonl = gunzipSync(row.profile_blob).toString('utf8');
-      const { isl, osl } = extractIslOsl(jsonl);
-      islPct = percentilesOf(isl);
-      oslPct = percentilesOf(osl);
-    } catch {
-      // ignore malformed blob
-    }
-  }
-  if (row.server_blob) {
-    try {
-      const json = gunzipSync(row.server_blob).toString('utf8');
-      const { kvCacheUtil, prefixCacheHitRate } = extractServerMetricSamples(json);
-      kvPct = percentilesOf(kvCacheUtil);
-      prefixPct = percentilesOf(prefixCacheHitRate);
-    } catch {
-      // ignore malformed blob
-    }
-  }
-
-  result[Number(row.benchmark_result_id)] = {
-    id: Number(row.benchmark_result_id),
-    isl: islPct,
-    osl: oslPct,
-    kvCacheUtil: kvPct,
-    prefixCacheHitRate: prefixPct,
-  };
+function blankAggregate(id: number): AgenticAggregate {
+  return { id, isl: null, osl: null, kvCacheUtil: null, prefixCacheHitRate: null };
 }

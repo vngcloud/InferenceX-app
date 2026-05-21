@@ -76,7 +76,7 @@ describe('extractServerMetricSamples', () => {
             },
           ],
         },
-        'vllm:gpu_prefix_cache_hits': {
+        'vllm:prefix_cache_hits': {
           series: [
             {
               timeslices: [
@@ -87,7 +87,7 @@ describe('extractServerMetricSamples', () => {
             },
           ],
         },
-        'vllm:gpu_prefix_cache_queries': {
+        'vllm:prefix_cache_queries': {
           series: [
             {
               timeslices: [
