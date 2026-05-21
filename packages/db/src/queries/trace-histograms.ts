@@ -27,21 +27,34 @@ export interface TraceHistogramPoint {
 
 export type TraceHistogramMap = Record<number, TraceHistogramPoint>;
 
+/**
+ * Cap the number of blobs we pull in a single Neon HTTP query — the serverless
+ * driver returns 507 ("response is too large, max 64 MB") if the combined gzip
+ * payload exceeds that. Each profile_export.jsonl blob can be ~1-2 MB
+ * compressed, so we stay well below the cap at 12.
+ */
+const QUERY_CHUNK_SIZE = 12;
+
 export async function getTraceHistograms(
   sql: DbClient,
   benchmarkResultIds: number[],
 ): Promise<TraceHistogramMap> {
   if (benchmarkResultIds.length === 0) return {};
 
-  const rows = (await sql`
-    select
-      br.id as benchmark_result_id,
-      atr.profile_export_jsonl_gz as blob
-    from benchmark_results br
-    join agentic_trace_replay atr on atr.id = br.trace_replay_id
-    where br.id = any(${benchmarkResultIds}::bigint[])
-      and atr.profile_export_jsonl_gz is not null
-  `) as { benchmark_result_id: number; blob: Buffer }[];
+  const rows: { benchmark_result_id: number; blob: Buffer }[] = [];
+  for (let i = 0; i < benchmarkResultIds.length; i += QUERY_CHUNK_SIZE) {
+    const chunk = benchmarkResultIds.slice(i, i + QUERY_CHUNK_SIZE);
+    const chunkRows = (await sql`
+      select
+        br.id as benchmark_result_id,
+        atr.profile_export_jsonl_gz as blob
+      from benchmark_results br
+      join agentic_trace_replay atr on atr.id = br.trace_replay_id
+      where br.id = any(${chunk}::bigint[])
+        and atr.profile_export_jsonl_gz is not null
+    `) as { benchmark_result_id: number; blob: Buffer }[];
+    rows.push(...chunkRows);
+  }
 
   const result: TraceHistogramMap = {};
   for (const row of rows) {

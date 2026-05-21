@@ -10,9 +10,14 @@ import { cachedJson, cachedQuery } from '@/lib/api-cache';
 
 export const dynamic = 'force-dynamic';
 
+// blobOnly: a 50-id histogram payload can easily exceed Next.js's 2MB
+// unstable_cache limit (each point carries one int per request, ~500-1000+
+// requests for agentic), which manifests as a 500 from the route. Blob
+// storage lets us cache the larger response without losing the warm-cache hit.
 const getCachedTraceHistograms = cachedQuery(
   (ids: number[]): Promise<TraceHistogramMap> => getTraceHistograms(getDb(), ids),
   'trace-histograms',
+  { blobOnly: true },
 );
 
 const MAX_IDS_PER_REQUEST = 200;
