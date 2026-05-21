@@ -21,7 +21,7 @@
 import { gunzipSync } from 'node:zlib';
 
 import type { DbClient } from '../connection.js';
-import { STATS_VERSION } from './agentic-aggregates.js';
+import { STATS_VERSION } from './agentic-aggregates';
 
 export interface DerivedAgenticMetric {
   /** benchmark_results.id this entry belongs to. */
