@@ -48,7 +48,7 @@ function frameworkLabel(fw: string) {
 }
 
 /** Short label for a sibling chip: parallelism + concurrency. */
-function chipLabel(s: BenchmarkSibling): string {
+export function chipLabel(s: BenchmarkSibling): string {
   const parallel = s.disagg
     ? `${s.num_prefill_gpu}P+${s.num_decode_gpu}D`
     : `TP${s.decode_tp}${s.decode_ep > 1 ? `EP${s.decode_ep}` : ''}`;

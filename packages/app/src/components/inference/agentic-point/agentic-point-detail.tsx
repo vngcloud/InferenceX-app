@@ -2,8 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
+import { useAgenticAggregates, type AgenticAggregateMap } from '@/hooks/api/use-agentic-aggregates';
 import { useTraceHistograms } from '@/hooks/api/use-trace-histograms';
 import {
   useTraceServerMetrics,
@@ -12,10 +14,12 @@ import {
   type TimeSeriesPoint,
 } from '@/hooks/api/use-trace-server-metrics';
 import { useBenchmarkSiblings } from '@/hooks/api/use-benchmark-siblings';
+import { SegmentedToggle, type SegmentedToggleOption } from '@/components/ui/segmented-toggle';
 
+import { AggregateChart, type AggregatePoint, type PercentileKey } from './aggregate-chart';
 import { Distribution } from './distribution';
 import { ExpandableChart } from './expandable-chart';
-import { SiblingNav } from './sibling-nav';
+import { SiblingNav, chipLabel } from './sibling-nav';
 import {
   StackedAreaChart,
   TimeSeriesChart,
@@ -78,6 +82,28 @@ const CHART_SIZES = {
   expanded: { width: 1300, height: 520 },
 };
 
+type DetailView = 'point' | 'aggregates';
+const VIEW_OPTIONS: SegmentedToggleOption<DetailView>[] = [
+  { value: 'point', label: 'Per-point', testId: 'detail-view-point' },
+  { value: 'aggregates', label: 'Aggregates across configs', testId: 'detail-view-aggregates' },
+];
+
+/** Bundle per-percentile values for one sibling into the shape AggregateChart wants. */
+function toAggPoint(
+  sibling: { id: number; label: string },
+  pct: { mean: number; p50: number; p75: number; p90: number; p99: number } | null | undefined,
+): AggregatePoint {
+  const values: Partial<Record<PercentileKey, number>> = {};
+  if (pct) {
+    values.mean = pct.mean;
+    values.p50 = pct.p50;
+    values.p75 = pct.p75;
+    values.p90 = pct.p90;
+    values.p99 = pct.p99;
+  }
+  return { id: sibling.id, label: sibling.label, values };
+}
+
 export function AgenticPointDetail({ id }: Props) {
   const router = useRouter();
   const histQuery = useTraceHistograms([id], true);
@@ -87,6 +113,13 @@ export function AgenticPointDetail({ id }: Props) {
   const hist = histQuery.data?.[id];
   const metrics = metricsQuery.data;
   const siblingsData = siblingsQuery.data;
+
+  const [view, setView] = useState<DetailView>('point');
+  // Fetch aggregates only when the aggregates view is active. Uses the full
+  // sibling set (across parallelism + concurrency configs) so each chart
+  // shows how the metric varies across the SKU.
+  const siblingIds = siblingsData?.siblings.map((s) => s.id) ?? [];
+  const aggregatesQuery = useAgenticAggregates(siblingIds, view === 'aggregates');
 
   return (
     <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4 py-6">
@@ -128,180 +161,292 @@ export function AgenticPointDetail({ id }: Props) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ExpandableChart
-          title="Input sequence length distribution"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (hist) return <Distribution values={hist.isl} unit="tokens" {...size} />;
-            return histQuery.isLoading ? <Skeleton /> : <Empty />;
-          }}
+      <div className="flex items-center justify-between gap-3">
+        <SegmentedToggle
+          value={view}
+          options={VIEW_OPTIONS}
+          onValueChange={setView}
+          ariaLabel="Detail view"
+          testId="detail-view-toggle"
+          buttonClassName="px-3 py-1.5 text-sm"
         />
-        <ExpandableChart
-          title="Output sequence length distribution"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (hist) return <Distribution values={hist.osl} unit="tokens" {...size} />;
-            return histQuery.isLoading ? <Skeleton /> : <Empty />;
-          }}
-        />
-
-        <ExpandableChart
-          title="KV cache utilization over time"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (!metrics) return <Skeleton />;
-            return (
-              <TimeSeriesChart
-                series={[
-                  {
-                    name: 'GPU KV cache (avg n=50)',
-                    data: rollingAverage(metrics.kvCacheUsage, 50),
-                    rawData: metrics.kvCacheUsage,
-                    color: '#3b82f6',
-                    strokeWidth: 2,
-                  },
-                ]}
-                durationS={metrics.durationS}
-                yMax={1}
-                yFmt={(v) => `${(v * 100).toFixed(0)}%`}
-                yAxisLabel="KV cache (%)"
-                {...size}
-              />
-            );
-          }}
-        />
-
-        <ExpandableChart
-          title="Request queue depth"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (!metrics) return <Skeleton />;
-            return (
-              <TimeSeriesChart
-                series={[
-                  {
-                    name: 'Running (avg n=50)',
-                    data: rollingAverage(
-                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                        t: p.t,
-                        value: p.running,
-                      })),
-                      50,
-                    ),
-                    color: '#22c55e',
-                    strokeWidth: 2,
-                  },
-                  {
-                    name: 'Waiting (avg n=50)',
-                    data: rollingAverage(
-                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                        t: p.t,
-                        value: p.waiting,
-                      })),
-                      50,
-                    ),
-                    color: '#ef4444',
-                    strokeWidth: 2,
-                  },
-                  {
-                    name: 'Total (avg n=50)',
-                    data: rollingAverage(
-                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                        t: p.t,
-                        value: p.total,
-                      })),
-                      50,
-                    ),
-                    color: '#3b82f6',
-                    strokeWidth: 2,
-                  },
-                ]}
-                durationS={metrics.durationS}
-                yAxisLabel="Requests"
-                {...size}
-              />
-            );
-          }}
-        />
-
-        <ExpandableChart
-          title="Prefix cache hit rate per interval"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (!metrics) return <Skeleton />;
-            return (
-              <TimeSeriesChart
-                series={[
-                  {
-                    name: 'GPU (HBM, avg n=50)',
-                    data: rollingAverage(metrics.prefixCacheHitRate, 50),
-                    rawData: metrics.prefixCacheHitRate,
-                    color: '#a855f7',
-                    strokeWidth: 2,
-                  },
-                ]}
-                durationS={metrics.durationS}
-                yMax={1}
-                yFmt={(v) => `${(v * 100).toFixed(0)}%`}
-                yAxisLabel="Hit rate (%)"
-                {...size}
-              />
-            );
-          }}
-        />
-
-        <ExpandableChart
-          title="Throughput (total & decode)"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (!metrics) return <Skeleton />;
-            const total = sumSeries(metrics.prefillTps, metrics.decodeTps);
-            return (
-              <TimeSeriesChart
-                series={[
-                  {
-                    name: 'Total (avg n=50)',
-                    data: rollingAverage(total, 50),
-                    color: '#3b82f6',
-                    strokeWidth: 1.6,
-                  },
-                  {
-                    name: 'Decode (avg n=50)',
-                    data: rollingAverage(metrics.decodeTps, 50),
-                    color: '#f97316',
-                    strokeWidth: 1.6,
-                  },
-                  {
-                    name: 'Total running avg',
-                    data: cumulativeAverage(total),
-                    color: '#ef4444',
-                    strokeWidth: 3,
-                  },
-                ]}
-                durationS={metrics.durationS}
-                yAxisLabel="Tokens / sec"
-                {...size}
-              />
-            );
-          }}
-        />
-
-        <ExpandableChart
-          title="Cumulative prompt token source breakdown"
-          render={(expanded) => {
-            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
-            if (!metrics) return <Skeleton />;
-            return (
-              <StackedAreaChart
-                sourceSeries={metrics.promptTokensBySource}
-                durationS={metrics.durationS}
-                {...size}
-              />
-            );
-          }}
-        />
+        {view === 'aggregates' && (
+          <span className="text-xs text-muted-foreground">
+            {siblingIds.length} configs in SKU
+            {aggregatesQuery.isLoading ? ' · loading…' : ''}
+          </span>
+        )}
       </div>
+
+      {view === 'aggregates' ? (
+        <AggregatesGrid
+          siblings={siblingsData?.siblings ?? []}
+          aggregates={aggregatesQuery.data}
+          isLoading={aggregatesQuery.isLoading}
+        />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <ExpandableChart
+            title="Input sequence length distribution"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (hist) return <Distribution values={hist.isl} unit="tokens" {...size} />;
+              return histQuery.isLoading ? <Skeleton /> : <Empty />;
+            }}
+          />
+          <ExpandableChart
+            title="Output sequence length distribution"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (hist) return <Distribution values={hist.osl} unit="tokens" {...size} />;
+              return histQuery.isLoading ? <Skeleton /> : <Empty />;
+            }}
+          />
+
+          <ExpandableChart
+            title="KV cache utilization over time"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (!metrics) return <Skeleton />;
+              return (
+                <TimeSeriesChart
+                  series={[
+                    {
+                      name: 'GPU KV cache (avg n=50)',
+                      data: rollingAverage(metrics.kvCacheUsage, 50),
+                      rawData: metrics.kvCacheUsage,
+                      color: '#3b82f6',
+                      strokeWidth: 2,
+                    },
+                  ]}
+                  durationS={metrics.durationS}
+                  yMax={1}
+                  yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+                  yAxisLabel="KV cache (%)"
+                  {...size}
+                />
+              );
+            }}
+          />
+
+          <ExpandableChart
+            title="Request queue depth"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (!metrics) return <Skeleton />;
+              return (
+                <TimeSeriesChart
+                  series={[
+                    {
+                      name: 'Running (avg n=50)',
+                      data: rollingAverage(
+                        metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                          t: p.t,
+                          value: p.running,
+                        })),
+                        50,
+                      ),
+                      color: '#22c55e',
+                      strokeWidth: 2,
+                    },
+                    {
+                      name: 'Waiting (avg n=50)',
+                      data: rollingAverage(
+                        metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                          t: p.t,
+                          value: p.waiting,
+                        })),
+                        50,
+                      ),
+                      color: '#ef4444',
+                      strokeWidth: 2,
+                    },
+                    {
+                      name: 'Total (avg n=50)',
+                      data: rollingAverage(
+                        metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                          t: p.t,
+                          value: p.total,
+                        })),
+                        50,
+                      ),
+                      color: '#3b82f6',
+                      strokeWidth: 2,
+                    },
+                  ]}
+                  durationS={metrics.durationS}
+                  yAxisLabel="Requests"
+                  {...size}
+                />
+              );
+            }}
+          />
+
+          <ExpandableChart
+            title="Prefix cache hit rate per interval"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (!metrics) return <Skeleton />;
+              return (
+                <TimeSeriesChart
+                  series={[
+                    {
+                      name: 'GPU (HBM, avg n=50)',
+                      data: rollingAverage(metrics.prefixCacheHitRate, 50),
+                      rawData: metrics.prefixCacheHitRate,
+                      color: '#a855f7',
+                      strokeWidth: 2,
+                    },
+                  ]}
+                  durationS={metrics.durationS}
+                  yMax={1}
+                  yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+                  yAxisLabel="Hit rate (%)"
+                  {...size}
+                />
+              );
+            }}
+          />
+
+          <ExpandableChart
+            title="Throughput (total & decode)"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (!metrics) return <Skeleton />;
+              const total = sumSeries(metrics.prefillTps, metrics.decodeTps);
+              return (
+                <TimeSeriesChart
+                  series={[
+                    {
+                      name: 'Total (avg n=50)',
+                      data: rollingAverage(total, 50),
+                      color: '#3b82f6',
+                      strokeWidth: 1.6,
+                    },
+                    {
+                      name: 'Decode (avg n=50)',
+                      data: rollingAverage(metrics.decodeTps, 50),
+                      color: '#f97316',
+                      strokeWidth: 1.6,
+                    },
+                    {
+                      name: 'Total running avg',
+                      data: cumulativeAverage(total),
+                      color: '#ef4444',
+                      strokeWidth: 3,
+                    },
+                  ]}
+                  durationS={metrics.durationS}
+                  yAxisLabel="Tokens / sec"
+                  {...size}
+                />
+              );
+            }}
+          />
+
+          <ExpandableChart
+            title="Cumulative prompt token source breakdown"
+            render={(expanded) => {
+              const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+              if (!metrics) return <Skeleton />;
+              return (
+                <StackedAreaChart
+                  sourceSeries={metrics.promptTokensBySource}
+                  durationS={metrics.durationS}
+                  {...size}
+                />
+              );
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AggregatesGrid({
+  siblings,
+  aggregates,
+  isLoading,
+}: {
+  siblings: {
+    id: number;
+    conc: number;
+    decode_tp: number;
+    decode_ep: number;
+    disagg: boolean;
+    num_prefill_gpu: number;
+    num_decode_gpu: number;
+    offload_mode?: string | null;
+  }[];
+  aggregates: AgenticAggregateMap | undefined;
+  isLoading: boolean;
+}) {
+  if (siblings.length === 0) {
+    return (
+      <div className="rounded-lg border border-border/40 bg-card/40 p-4 text-sm text-muted-foreground">
+        SKU sibling list not loaded yet — open a point to populate.
+      </div>
+    );
+  }
+  if (isLoading && !aggregates) {
+    return (
+      <div className="rounded-lg border border-border/40 bg-card/40 p-4 text-sm text-muted-foreground">
+        Computing aggregates across {siblings.length} configs… (parsing trace blobs)
+      </div>
+    );
+  }
+  const labeled = siblings.map((s) => ({ id: s.id, label: chipLabel(s as any) }));
+  const islPoints = labeled.map((s) => toAggPoint(s, aggregates?.[s.id]?.isl));
+  const oslPoints = labeled.map((s) => toAggPoint(s, aggregates?.[s.id]?.osl));
+  const kvPoints = labeled.map((s) => toAggPoint(s, aggregates?.[s.id]?.kvCacheUtil));
+  const prefixPoints = labeled.map((s) => toAggPoint(s, aggregates?.[s.id]?.prefixCacheHitRate));
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <ExpandableChart
+        title="ISL distribution (across configs)"
+        render={(expanded) => (
+          <AggregateChart
+            points={islPoints}
+            unit="tokens"
+            {...(expanded ? CHART_SIZES.expanded : CHART_SIZES.inline)}
+          />
+        )}
+      />
+      <ExpandableChart
+        title="OSL distribution (across configs)"
+        render={(expanded) => (
+          <AggregateChart
+            points={oslPoints}
+            unit="tokens"
+            {...(expanded ? CHART_SIZES.expanded : CHART_SIZES.inline)}
+          />
+        )}
+      />
+      <ExpandableChart
+        title="KV cache utilization (across configs)"
+        render={(expanded) => (
+          <AggregateChart
+            points={kvPoints}
+            unit="%"
+            yMax={1}
+            yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+            {...(expanded ? CHART_SIZES.expanded : CHART_SIZES.inline)}
+          />
+        )}
+      />
+      <ExpandableChart
+        title="Prefix cache hit rate (across configs)"
+        render={(expanded) => (
+          <AggregateChart
+            points={prefixPoints}
+            unit="%"
+            yMax={1}
+            yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+            {...(expanded ? CHART_SIZES.expanded : CHART_SIZES.inline)}
+          />
+        )}
+      />
     </div>
   );
 }
