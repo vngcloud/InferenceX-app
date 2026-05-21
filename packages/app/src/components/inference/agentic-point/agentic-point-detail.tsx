@@ -14,6 +14,7 @@ import {
 import { useBenchmarkSiblings } from '@/hooks/api/use-benchmark-siblings';
 
 import { Distribution } from './distribution';
+import { ExpandableChart } from './expandable-chart';
 import { SiblingNav } from './sibling-nav';
 import {
   StackedAreaChart,
@@ -71,14 +72,11 @@ function PointSummary({ meta }: { meta: PointMeta }) {
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-border/40 bg-card/40 p-4">
-      <h2 className="text-sm font-semibold text-foreground mb-3">{title}</h2>
-      {children}
-    </div>
-  );
-}
+/** Sizes passed to charts for the inline (small) vs expanded (dialog) render. */
+const CHART_SIZES = {
+  inline: { width: 720, height: 260 },
+  expanded: { width: 1300, height: 520 },
+};
 
 export function AgenticPointDetail({ id }: Props) {
   const router = useRouter();
@@ -131,164 +129,178 @@ export function AgenticPointDetail({ id }: Props) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ChartCard title="Input sequence length distribution">
-          {hist ? (
-            <Distribution values={hist.isl} unit="tokens" />
-          ) : histQuery.isLoading ? (
-            <Skeleton />
-          ) : (
-            <Empty />
-          )}
-        </ChartCard>
-        <ChartCard title="Output sequence length distribution">
-          {hist ? (
-            <Distribution values={hist.osl} unit="tokens" />
-          ) : histQuery.isLoading ? (
-            <Skeleton />
-          ) : (
-            <Empty />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="Input sequence length distribution"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (hist) return <Distribution values={hist.isl} unit="tokens" {...size} />;
+            return histQuery.isLoading ? <Skeleton /> : <Empty />;
+          }}
+        />
+        <ExpandableChart
+          title="Output sequence length distribution"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (hist) return <Distribution values={hist.osl} unit="tokens" {...size} />;
+            return histQuery.isLoading ? <Skeleton /> : <Empty />;
+          }}
+        />
 
-        <ChartCard title="KV cache utilization over time">
-          {metrics ? (
-            <TimeSeriesChart
-              series={[
-                {
-                  name: 'GPU KV cache (avg n=50)',
-                  data: rollingAverage(metrics.kvCacheUsage, 50),
-                  rawData: metrics.kvCacheUsage,
-                  color: '#3b82f6',
-                  strokeWidth: 2,
-                },
-              ]}
-              durationS={metrics.durationS}
-              yMax={1}
-              yFmt={(v) => `${(v * 100).toFixed(0)}%`}
-              yAxisLabel="KV cache (%)"
-            />
-          ) : (
-            <Skeleton />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="KV cache utilization over time"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (!metrics) return <Skeleton />;
+            return (
+              <TimeSeriesChart
+                series={[
+                  {
+                    name: 'GPU KV cache (avg n=50)',
+                    data: rollingAverage(metrics.kvCacheUsage, 50),
+                    rawData: metrics.kvCacheUsage,
+                    color: '#3b82f6',
+                    strokeWidth: 2,
+                  },
+                ]}
+                durationS={metrics.durationS}
+                yMax={1}
+                yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+                yAxisLabel="KV cache (%)"
+                {...size}
+              />
+            );
+          }}
+        />
 
-        <ChartCard title="Request queue depth">
-          {metrics ? (
-            <TimeSeriesChart
-              series={[
-                {
-                  name: 'Running (avg n=50)',
-                  data: rollingAverage(
-                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                      t: p.t,
-                      value: p.running,
-                    })),
-                    50,
-                  ),
-                  color: '#22c55e',
-                  strokeWidth: 2,
-                },
-                {
-                  name: 'Waiting (avg n=50)',
-                  data: rollingAverage(
-                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                      t: p.t,
-                      value: p.waiting,
-                    })),
-                    50,
-                  ),
-                  color: '#ef4444',
-                  strokeWidth: 2,
-                },
-                {
-                  name: 'Total (avg n=50)',
-                  data: rollingAverage(
-                    metrics.queueDepth.map((p: QueueDepthPoint) => ({
-                      t: p.t,
-                      value: p.total,
-                    })),
-                    50,
-                  ),
-                  color: '#3b82f6',
-                  strokeWidth: 2,
-                },
-              ]}
-              durationS={metrics.durationS}
-              yAxisLabel="Requests"
-            />
-          ) : (
-            <Skeleton />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="Request queue depth"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (!metrics) return <Skeleton />;
+            return (
+              <TimeSeriesChart
+                series={[
+                  {
+                    name: 'Running (avg n=50)',
+                    data: rollingAverage(
+                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                        t: p.t,
+                        value: p.running,
+                      })),
+                      50,
+                    ),
+                    color: '#22c55e',
+                    strokeWidth: 2,
+                  },
+                  {
+                    name: 'Waiting (avg n=50)',
+                    data: rollingAverage(
+                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                        t: p.t,
+                        value: p.waiting,
+                      })),
+                      50,
+                    ),
+                    color: '#ef4444',
+                    strokeWidth: 2,
+                  },
+                  {
+                    name: 'Total (avg n=50)',
+                    data: rollingAverage(
+                      metrics.queueDepth.map((p: QueueDepthPoint) => ({
+                        t: p.t,
+                        value: p.total,
+                      })),
+                      50,
+                    ),
+                    color: '#3b82f6',
+                    strokeWidth: 2,
+                  },
+                ]}
+                durationS={metrics.durationS}
+                yAxisLabel="Requests"
+                {...size}
+              />
+            );
+          }}
+        />
 
-        <ChartCard title="Prefix cache hit rate per interval">
-          {metrics ? (
-            <TimeSeriesChart
-              series={[
-                {
-                  name: 'GPU (HBM, avg n=50)',
-                  data: rollingAverage(metrics.prefixCacheHitRate, 50),
-                  rawData: metrics.prefixCacheHitRate,
-                  color: '#a855f7',
-                  strokeWidth: 2,
-                },
-              ]}
-              durationS={metrics.durationS}
-              yMax={1}
-              yFmt={(v) => `${(v * 100).toFixed(0)}%`}
-              yAxisLabel="Hit rate (%)"
-            />
-          ) : (
-            <Skeleton />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="Prefix cache hit rate per interval"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (!metrics) return <Skeleton />;
+            return (
+              <TimeSeriesChart
+                series={[
+                  {
+                    name: 'GPU (HBM, avg n=50)',
+                    data: rollingAverage(metrics.prefixCacheHitRate, 50),
+                    rawData: metrics.prefixCacheHitRate,
+                    color: '#a855f7',
+                    strokeWidth: 2,
+                  },
+                ]}
+                durationS={metrics.durationS}
+                yMax={1}
+                yFmt={(v) => `${(v * 100).toFixed(0)}%`}
+                yAxisLabel="Hit rate (%)"
+                {...size}
+              />
+            );
+          }}
+        />
 
-        <ChartCard title="Throughput (total & decode)">
-          {metrics ? (
-            (() => {
-              const total = sumSeries(metrics.prefillTps, metrics.decodeTps);
-              return (
-                <TimeSeriesChart
-                  series={[
-                    {
-                      name: 'Total (avg n=50)',
-                      data: rollingAverage(total, 50),
-                      color: '#3b82f6',
-                      strokeWidth: 1.6,
-                    },
-                    {
-                      name: 'Decode (avg n=50)',
-                      data: rollingAverage(metrics.decodeTps, 50),
-                      color: '#f97316',
-                      strokeWidth: 1.6,
-                    },
-                    {
-                      name: 'Total running avg',
-                      data: cumulativeAverage(total),
-                      color: '#ef4444',
-                      strokeWidth: 3,
-                    },
-                  ]}
-                  durationS={metrics.durationS}
-                  yAxisLabel="Tokens / sec"
-                />
-              );
-            })()
-          ) : (
-            <Skeleton />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="Throughput (total & decode)"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (!metrics) return <Skeleton />;
+            const total = sumSeries(metrics.prefillTps, metrics.decodeTps);
+            return (
+              <TimeSeriesChart
+                series={[
+                  {
+                    name: 'Total (avg n=50)',
+                    data: rollingAverage(total, 50),
+                    color: '#3b82f6',
+                    strokeWidth: 1.6,
+                  },
+                  {
+                    name: 'Decode (avg n=50)',
+                    data: rollingAverage(metrics.decodeTps, 50),
+                    color: '#f97316',
+                    strokeWidth: 1.6,
+                  },
+                  {
+                    name: 'Total running avg',
+                    data: cumulativeAverage(total),
+                    color: '#ef4444',
+                    strokeWidth: 3,
+                  },
+                ]}
+                durationS={metrics.durationS}
+                yAxisLabel="Tokens / sec"
+                {...size}
+              />
+            );
+          }}
+        />
 
-        <ChartCard title="Cumulative prompt token source breakdown">
-          {metrics ? (
-            <StackedAreaChart
-              sourceSeries={metrics.promptTokensBySource}
-              durationS={metrics.durationS}
-            />
-          ) : (
-            <Skeleton />
-          )}
-        </ChartCard>
+        <ExpandableChart
+          title="Cumulative prompt token source breakdown"
+          render={(expanded) => {
+            const size = expanded ? CHART_SIZES.expanded : CHART_SIZES.inline;
+            if (!metrics) return <Skeleton />;
+            return (
+              <StackedAreaChart
+                sourceSeries={metrics.promptTokensBySource}
+                durationS={metrics.durationS}
+                {...size}
+              />
+            );
+          }}
+        />
       </div>
     </div>
   );
