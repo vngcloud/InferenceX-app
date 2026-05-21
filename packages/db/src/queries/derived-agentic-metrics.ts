@@ -21,6 +21,7 @@
 import { gunzipSync } from 'node:zlib';
 
 import type { DbClient } from '../connection.js';
+import { STATS_VERSION } from './agentic-aggregates.js';
 
 export interface DerivedAgenticMetric {
   /** benchmark_results.id this entry belongs to. */
@@ -190,9 +191,50 @@ export async function getDerivedAgenticMetrics(
 ): Promise<DerivedAgenticMetricMap> {
   if (benchmarkResultIds.length === 0) return {};
 
+  const result: DerivedAgenticMetricMap = {};
+
+  // Fast path: read the pre-computed values out of `aggregate_stats`. The
+  // ingest pipeline computes both metrics in the same pass that produces the
+  // percentile bundles, so a single SQL round-trip covers most ids without
+  // touching the gzipped profile blob.
+  const statsRows = (await sql`
+    select
+      br.id as benchmark_result_id,
+      atr.aggregate_stats as stats
+    from benchmark_results br
+    join agentic_trace_replay atr on atr.id = br.trace_replay_id
+    where br.id = any(${benchmarkResultIds}::bigint[])
+  `) as {
+    benchmark_result_id: number;
+    stats: {
+      version?: number;
+      normalizedSessionTimeS?: number | null;
+      p90PrefillTpsPerUser?: number | null;
+    } | null;
+  }[];
+
+  const idsNeedingBlob: number[] = [];
+  for (const row of statsRows) {
+    const id = Number(row.benchmark_result_id);
+    if (row.stats && Number(row.stats.version) === STATS_VERSION) {
+      result[id] = {
+        id,
+        normalized_session_time_s: row.stats.normalizedSessionTimeS ?? null,
+        p90_prefill_tps_per_user: row.stats.p90PrefillTpsPerUser ?? null,
+      };
+    } else {
+      idsNeedingBlob.push(id);
+    }
+  }
+
+  if (idsNeedingBlob.length === 0) return result;
+
+  // Fallback: parse the profile blob directly. Used for rows whose
+  // `aggregate_stats` is null or computed by an older STATS_VERSION; the
+  // backfill script drains the population so this path should be rare.
   const rows: { benchmark_result_id: number; blob: Buffer }[] = [];
-  for (let i = 0; i < benchmarkResultIds.length; i += QUERY_CHUNK_SIZE) {
-    const chunk = benchmarkResultIds.slice(i, i + QUERY_CHUNK_SIZE);
+  for (let i = 0; i < idsNeedingBlob.length; i += QUERY_CHUNK_SIZE) {
+    const chunk = idsNeedingBlob.slice(i, i + QUERY_CHUNK_SIZE);
     const chunkRows = (await sql`
       select
         br.id as benchmark_result_id,
@@ -205,7 +247,6 @@ export async function getDerivedAgenticMetrics(
     rows.push(...chunkRows);
   }
 
-  const result: DerivedAgenticMetricMap = {};
   for (const row of rows) {
     try {
       const jsonl = gunzipSync(row.blob).toString('utf8');

@@ -24,6 +24,14 @@ import { streamObject } from 'stream-json/streamers/stream-object.js';
 
 import type { DbClient } from '../connection.js';
 
+/**
+ * Bump when the aggregate-stats computation algorithm changes — the backfill
+ * script recomputes any row whose stored `aggregate_stats.version` is older.
+ * Lives here (rather than in compute-aggregate-stats.ts) to avoid a circular
+ * import: the compute helper depends on the percentile utilities below.
+ */
+export const STATS_VERSION = 1;
+
 export interface MetricPercentiles {
   mean: number;
   p50: number;
@@ -254,9 +262,55 @@ export async function getAgenticAggregates(
   if (benchmarkResultIds.length === 0) return {};
 
   const result: AgenticAggregateMap = {};
-  // ── Pass 1: profile_export blobs (cheap; large batches). ────────────────
-  for (let i = 0; i < benchmarkResultIds.length; i += PROFILE_CHUNK_SIZE) {
-    const chunk = benchmarkResultIds.slice(i, i + PROFILE_CHUNK_SIZE);
+
+  // Fast path: read the pre-computed `aggregate_stats` JSONB written by the
+  // ingest pipeline (and back-filled by `backfill-aggregate-stats.ts`). One
+  // round-trip pulls everything we need for every requested id with no blob
+  // decompression, so the slow blob-parsing fallback only runs for ids
+  // whose stats are missing or were produced by an older `STATS_VERSION`.
+  const statsRows = (await sql`
+    select
+      br.id as benchmark_result_id,
+      atr.aggregate_stats as stats
+    from benchmark_results br
+    join agentic_trace_replay atr on atr.id = br.trace_replay_id
+    where br.id = any(${benchmarkResultIds}::bigint[])
+  `) as {
+    benchmark_result_id: number;
+    stats: AggregateStatsRow | null;
+  }[];
+
+  const idsNeedingProfile: number[] = [];
+  const idsNeedingServer: number[] = [];
+  for (const row of statsRows) {
+    const id = Number(row.benchmark_result_id);
+    const agg = blankAggregate(id);
+    if (row.stats && Number(row.stats.version) === STATS_VERSION) {
+      agg.isl = row.stats.isl ?? null;
+      agg.osl = row.stats.osl ?? null;
+      agg.kvCacheUtil = row.stats.kvCacheUtil ?? null;
+      agg.prefixCacheHitRate = row.stats.prefixCacheHitRate ?? null;
+    } else {
+      // No stats (or stale version) — schedule the blob-parse fallback below
+      // so the response still surfaces data. Backfill should drain these.
+      idsNeedingProfile.push(id);
+      idsNeedingServer.push(id);
+    }
+    result[id] = agg;
+  }
+  // Also fall back for ids that didn't return a row at all (no trace_replay
+  // link) — keep the caller contract: every id we know about lands in the map.
+  for (const id of benchmarkResultIds) {
+    if (!(id in result)) result[id] = blankAggregate(id);
+  }
+
+  if (idsNeedingProfile.length === 0 && idsNeedingServer.length === 0) {
+    return result;
+  }
+
+  // ── Fallback Pass 1: profile_export blobs (cheap; large batches). ──────
+  for (let i = 0; i < idsNeedingProfile.length; i += PROFILE_CHUNK_SIZE) {
+    const chunk = idsNeedingProfile.slice(i, i + PROFILE_CHUNK_SIZE);
     const rows = (await sql`
       select
         br.id as benchmark_result_id,
@@ -280,12 +334,12 @@ export async function getAgenticAggregates(
       }
     }
   }
-  // ── Pass 2: server_metrics blobs (huge; one at a time). ────────────────
+  // ── Fallback Pass 2: server_metrics blobs (huge; one at a time). ───────
   // Serial to avoid OOM on the decompressed JSON of a high-conc TP+EP row
   // (>500 MB raw). The aggregator is fronted by a blob cache, so the slow
   // path runs at most once per sibling set.
-  for (let i = 0; i < benchmarkResultIds.length; i += SERVER_CHUNK_SIZE) {
-    const chunk = benchmarkResultIds.slice(i, i + SERVER_CHUNK_SIZE);
+  for (let i = 0; i < idsNeedingServer.length; i += SERVER_CHUNK_SIZE) {
+    const chunk = idsNeedingServer.slice(i, i + SERVER_CHUNK_SIZE);
     const rows = (await sql`
       select
         br.id as benchmark_result_id,
@@ -323,6 +377,17 @@ export async function getAgenticAggregates(
     }
   }
   return result;
+}
+
+/** Shape of the JSONB column when read back via postgres-js. */
+interface AggregateStatsRow {
+  version: number;
+  isl: MetricPercentiles | null;
+  osl: MetricPercentiles | null;
+  kvCacheUtil: MetricPercentiles | null;
+  prefixCacheHitRate: MetricPercentiles | null;
+  normalizedSessionTimeS: number | null;
+  p90PrefillTpsPerUser: number | null;
 }
 
 function blankAggregate(id: number): AgenticAggregate {

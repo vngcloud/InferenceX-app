@@ -12,6 +12,8 @@ import { gzipSync } from 'node:zlib';
 
 import type postgres from 'postgres';
 
+import { computeAggregateStats } from './compute-aggregate-stats.js';
+
 type Sql = ReturnType<typeof postgres>;
 
 /**
@@ -55,6 +57,15 @@ export async function insertTraceReplay(
   const metricsJsonGz = serverMetricsJson ? gzipSync(serverMetricsJson) : null;
   const metricsJsonSize = serverMetricsJson ? serverMetricsJson.length : null;
 
+  // Pre-compute the aggregate stats so the detail page / aggregates view
+  // doesn't have to re-parse these blobs on every request. The compute
+  // function tolerates one-or-both blobs being null and falls back to a
+  // streaming parser for oversized server_metrics blobs.
+  const aggregateStats = await computeAggregateStats({
+    profileBlob: profileGz,
+    serverBlob: metricsJsonGz,
+  });
+
   const [{ id: traceReplayId }] = await sql<{ id: number }[]>`
     insert into agentic_trace_replay (
       profile_export_jsonl_gz,
@@ -62,7 +73,8 @@ export async function insertTraceReplay(
       server_metrics_csv,
       server_metrics_csv_size,
       server_metrics_json_gz,
-      server_metrics_json_uncompressed_size
+      server_metrics_json_uncompressed_size,
+      aggregate_stats
     )
     values (
       ${profileGz},
@@ -70,7 +82,8 @@ export async function insertTraceReplay(
       ${serverMetricsCsv},
       ${csvSize},
       ${metricsJsonGz},
-      ${metricsJsonSize}
+      ${metricsJsonSize},
+      ${sql.json(structuredClone(aggregateStats) as unknown as Parameters<typeof sql.json>[0])}
     )
     returning id
   `;
