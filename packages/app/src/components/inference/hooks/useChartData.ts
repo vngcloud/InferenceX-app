@@ -86,10 +86,19 @@ export function useChartData(
   selectedPercentile = 'p90',
   /** When set, only series for these two registry GPU keys are shown (compare pages). */
   compareGpuPair?: readonly [string, string] | null,
+  /**
+   * GitHub run id (g_runid) from the run picker. When set, the benchmarks API
+   * scopes results to that workflow run instead of returning the latest per
+   * config — disambiguates when two runs land on the same date.
+   */
+  selectedRunId?: string,
 ) {
   // When the selected date is the latest available, use '' (empty string) to match
   // the initial no-date query key, reusing the eagerly-fetched benchmarks from the
   // materialized view instead of firing a redundant second fetch with identical data.
+  // When a specific run is selected, we always go through the runId branch and the
+  // date is effectively ignored — keep queryDate set so React Query still has a
+  // distinct cache key per date if the user navigates back to "latest".
   const queryDate =
     selectedRunDate && latestAvailableDate && selectedRunDate === latestAvailableDate
       ? ''
@@ -99,7 +108,7 @@ export function useChartData(
     data: allRows,
     isLoading: queryLoading,
     error: queryError,
-  } = useBenchmarks(selectedModel, queryDate, enabled);
+  } = useBenchmarks(selectedModel, queryDate, enabled, selectedRunId);
 
   // GPU comparison: fetch data for each additional comparison date
   const comparisonDates = useMemo(

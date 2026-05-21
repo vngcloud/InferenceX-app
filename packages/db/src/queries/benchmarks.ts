@@ -53,8 +53,56 @@ export async function getLatestBenchmarks(
   modelKey: string | string[],
   date?: string,
   exact?: boolean,
+  /**
+   * If set, filter to a specific GitHub Actions workflow run.
+   * Bypasses the "latest per config" logic — when two runs landed on the same
+   * date and the user picked one in the run selector, this scopes the chart
+   * data to that run only. Value matches the URL param `g_runid` (a
+   * stringified github_run_id, not the DB id).
+   */
+  runId?: string,
 ): Promise<BenchmarkRow[]> {
   const modelKeys = Array.isArray(modelKey) ? modelKey : [modelKey];
+  if (runId) {
+    const rows = await sql`
+      SELECT
+        br.id,
+        c.hardware,
+        c.framework,
+        c.model,
+        c.precision,
+        c.spec_method,
+        c.disagg,
+        c.is_multinode,
+        c.prefill_tp,
+        c.prefill_ep,
+        c.prefill_dp_attention,
+        c.prefill_num_workers,
+        c.decode_tp,
+        c.decode_ep,
+        c.decode_dp_attention,
+        c.decode_num_workers,
+        c.num_prefill_gpu,
+        c.num_decode_gpu,
+        br.benchmark_type,
+        br.offload_mode,
+        br.isl,
+        br.osl,
+        br.conc,
+        br.image,
+        br.metrics,
+        br.date::text,
+        CASE WHEN wr.html_url IS NOT NULL THEN wr.html_url || '/attempts/' || wr.run_attempt ELSE NULL END AS run_url
+      FROM benchmark_results br
+      JOIN configs c ON c.id = br.config_id
+      JOIN latest_workflow_runs wr ON wr.id = br.workflow_run_id
+      WHERE c.model = ANY(${modelKeys})
+        AND br.error IS NULL
+        AND wr.github_run_id = ${runId}::bigint
+      ORDER BY br.config_id, br.conc, br.isl, br.osl
+    `;
+    return rows as unknown as BenchmarkRow[];
+  }
   if (date) {
     // Date-filtered: use base table with DISTINCT ON (the view only has the absolute latest)
     // exact=true: only return data from this exact date (for GPU comparison)

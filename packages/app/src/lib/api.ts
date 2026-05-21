@@ -121,10 +121,13 @@ export function fetchBenchmarks(
   date?: string,
   exact?: boolean,
   signal?: AbortSignal,
+  /** Optional github_run_id to scope to a specific workflow run. */
+  runId?: string,
 ) {
   const params = new URLSearchParams({ model });
   if (date) params.set('date', date);
   if (exact) params.set('exact', 'true');
+  if (runId) params.set('runId', runId);
   return fetchJson<BenchmarkRow[]>(`/api/v1/benchmarks?${params}`, signal);
 }
 

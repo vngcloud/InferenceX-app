@@ -214,6 +214,14 @@ export function InferenceProvider({
   // ── Data fetching (gated by isActive) ──────────────────────────────────────
   const latestDate = availableDates.length > 0 ? availableDates.at(-1) : undefined;
 
+  // Run-selector scoping: only constrain benchmark data to a specific run when
+  // the current date has >1 runs (ambiguous case). When there's one run per
+  // date, the picker is informational and the SQL's latest-per-config logic
+  // already returns that run's data — passing runId would needlessly narrow
+  // the cross-date config view.
+  const multipleRunsOnDate = availableRuns && Object.keys(availableRuns).length > 1;
+  const benchmarkRunId = multipleRunsOnDate && selectedRunId ? String(selectedRunId) : undefined;
+
   const {
     graphs,
     loading: chartDataLoading,
@@ -236,6 +244,7 @@ export function InferenceProvider({
     latestDate,
     selectedPercentile,
     compareGpuPair ?? null,
+    benchmarkRunId,
   );
 
   // For GPU comparison date picker — use shared availability data from global filters
