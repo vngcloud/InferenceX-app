@@ -2,7 +2,7 @@
 import { track } from '@/lib/analytics';
 import dynamic from 'next/dynamic';
 import { useMemo, useRef, useState } from 'react';
-import { BarChart3, ChevronDown, Table2, X } from 'lucide-react';
+import { BarChart3, Table2, X } from 'lucide-react';
 
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
 import { useInference } from '@/components/inference/InferenceContext';
@@ -30,7 +30,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUnofficialRun } from '@/components/unofficial-run-provider';
 import {
@@ -60,53 +59,24 @@ const ModelArchitectureDiagram = dynamic(() => import('./ModelArchitectureDiagra
 });
 import WorkflowInfoDisplay from './WorkflowInfoDisplay';
 
-/** Controlled popover dropdown for the e2e chart x-axis toggle. */
-function E2eXAxisDropdown({
-  xAxisLabel,
-  xAxisOptions,
-  selectedValue,
-  onSelect,
-}: {
-  xAxisLabel: string;
-  xAxisOptions: { value: string | null; label: string }[];
-  selectedValue: string | null;
-  onSelect: (value: string | null) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          className="inline-flex items-center gap-1 hover:opacity-70 transition-opacity cursor-pointer"
-          onClick={(e) => e.stopPropagation()}
-        >
-          vs. {xAxisLabel}
-          <ChevronDown className="no-export size-3.5 shrink-0 opacity-60" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-48 p-1" align="start">
-        {xAxisOptions.map((opt) => (
-          <button
-            key={opt.label}
-            className={`w-full text-left px-3 py-1.5 text-sm rounded hover:bg-accent transition-colors ${
-              (opt.value === null && !selectedValue) || opt.value === selectedValue
-                ? 'font-medium'
-                : ''
-            }`}
-            onClick={() => {
-              onSelect(opt.value);
-              setOpen(false);
-            }}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 type InferenceViewMode = 'chart' | 'table';
+
+/**
+ * The three chart variants the user can choose with the big buttons above the
+ * chart card. Each maps to one entry in `inference-chart-config.json` plus a
+ * forced x-axis override for the E2E chartType.
+ */
+type XAxisMode = 'ttft' | 'e2e' | 'interactivity';
+
+interface XAxisModeButton {
+  value: XAxisMode;
+  label: string;
+}
+const X_AXIS_MODE_BUTTONS: XAxisModeButton[] = [
+  { value: 'ttft', label: 'TTFT' },
+  { value: 'e2e', label: 'E2E Latency' },
+  { value: 'interactivity', label: 'Interactivity' },
+];
 
 const VIEW_MODE_OPTIONS: SegmentedToggleOption<InferenceViewMode>[] = [
   {
@@ -152,9 +122,10 @@ export default function ChartDisplay() {
     logScale,
     activeHwTypes,
     activeDates,
-    setSelectedE2eXAxisMetric,
     selectedPercentile,
     compareGpuPair,
+    selectedXAxisMode,
+    setSelectedXAxisMode,
   } = useInference();
 
   const {
@@ -329,17 +300,26 @@ export default function ChartDisplay() {
     }));
   }, [graphs, overlayDataByChartType, selectedModel, selectedSequence]);
 
+  // Show one chart at a time, picked by the TTFT / E2E / Interactivity buttons.
+  // Both 'ttft' and 'e2e' modes render the e2e chart (the x-axis swap is handled
+  // upstream by `selectedE2eXAxisMetric`, which `setSelectedXAxisMode` keeps in sync).
+  const visibleGraphs = useMemo(() => {
+    const wantedType = selectedXAxisMode === 'interactivity' ? 'interactivity' : 'e2e';
+    const filtered = effectiveGraphs.filter((g) => g.chartDefinition.chartType === wantedType);
+    return filtered.length > 0 ? filtered : effectiveGraphs;
+  }, [effectiveGraphs, selectedXAxisMode]);
+
   const displayGraphs = isFirstLoad
-    ? Array.from({ length: 2 }).map((_, index) => (
-        <Card key={`skeleton-${index}`}>
+    ? [
+        <Card key="skeleton-0">
           <Skeleton className="h-7 w-2/4 mb-1" />
           <Skeleton className="h-5 w-3/4 mb-2" />
           <Skeleton className="h-[600px] w-full" />
-        </Card>
-      ))
-    : effectiveGraphs.length === 0
+        </Card>,
+      ]
+    : visibleGraphs.length === 0
       ? []
-      : effectiveGraphs.map((graph, graphIndex) => {
+      : visibleGraphs.map((graph, graphIndex) => {
           const isTimelineMode = Boolean(
             selectedDateRange.startDate && selectedDateRange.endDate && selectedGPUs.length > 0,
           );
@@ -415,43 +395,17 @@ export default function ChartDisplay() {
                               return 'vs. P90 Time To First Token';
                             }
 
-                            // For e2e chart: render clickable inline dropdown for x-axis
+                            // For e2e chart: heading is driven by the TTFT / E2E button
+                            // selection above the card, so the inline dropdown is gone.
                             if (graph.chartDefinition.chartType === 'e2e') {
                               const isAgentic = sequenceKind(selectedSequence) === 'agentic';
                               const pctlWord = selectedPercentile.toUpperCase();
-                              const e2elLabel = isAgentic
-                                ? `${pctlWord} End-to-end Latency`
-                                : 'End-to-end Latency';
-                              const xAxisLabel =
-                                selectedE2eXAxisMetric === 'p90_ttft' ? 'P90 TTFT' : e2elLabel;
-                              const xAxisOptions = [
-                                { value: null, label: e2elLabel },
-                                { value: 'p90_ttft', label: 'P90 TTFT' },
-                              ];
-                              const zoomPrefix =
-                                selectedDateRange.startDate &&
-                                selectedDateRange.endDate &&
-                                selectedGPUs.length > 0
-                                  ? 'gpu_timeseries'
-                                  : 'latency';
-                              return (
-                                <E2eXAxisDropdown
-                                  xAxisLabel={xAxisLabel}
-                                  xAxisOptions={xAxisOptions}
-                                  selectedValue={selectedE2eXAxisMetric}
-                                  onSelect={(value) => {
-                                    setSelectedE2eXAxisMetric(value);
-                                    track('latency_x_axis_metric_selected', {
-                                      metric: value ?? 'median_e2el',
-                                    });
-                                    window.dispatchEvent(
-                                      new CustomEvent(
-                                        `${zoomPrefix}_zoom_reset_chart-${graphIndex}`,
-                                      ),
-                                    );
-                                  }}
-                                />
-                              );
+                              if (selectedE2eXAxisMetric === 'p90_ttft') {
+                                return 'vs. P90 Time To First Token';
+                              }
+                              return isAgentic
+                                ? `vs. ${pctlWord} End-to-end Latency`
+                                : 'vs. End-to-end Latency';
                             }
 
                             // Fall back to the heading baked into chartDefinition
@@ -636,6 +590,36 @@ export default function ChartDisplay() {
           <CustomPowers loading={loading} />
         </section>
       )}
+      <section
+        className="flex flex-wrap justify-center gap-3 sm:gap-4"
+        role="tablist"
+        aria-label="Chart x-axis metric"
+        data-testid="x-axis-mode-buttons"
+      >
+        {X_AXIS_MODE_BUTTONS.map(({ value, label }) => {
+          const isActive = selectedXAxisMode === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              data-testid={`x-axis-mode-${value}`}
+              onClick={() => {
+                setSelectedXAxisMode(value);
+                track('latency_x_axis_mode_selected', { mode: value });
+              }}
+              className={`min-w-[160px] flex-1 sm:flex-initial rounded-full border-2 px-6 py-3 text-base font-semibold transition-colors ${
+                isActive
+                  ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                  : 'border-border bg-card text-foreground hover:border-primary/60 hover:bg-accent'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </section>
       <div className="flex flex-col gap-4">{displayGraphs}</div>
 
       {/* Performance Over Time — Modal Drill-Down */}

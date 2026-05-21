@@ -195,6 +195,8 @@ export function createMockInferenceContext(
     setSelectedXAxisMetric: namedStub('setSelectedXAxisMetric'),
     selectedE2eXAxisMetric: null,
     setSelectedE2eXAxisMetric: namedStub('setSelectedE2eXAxisMetric'),
+    selectedXAxisMode: 'interactivity',
+    setSelectedXAxisMode: namedStub('setSelectedXAxisMode'),
     scaleType: 'auto',
     setScaleType: namedStub('setScaleType'),
     isLegendExpanded: true,

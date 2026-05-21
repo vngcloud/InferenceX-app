@@ -532,6 +532,15 @@ export interface InferenceChartContextType {
   setSelectedXAxisMetric: (metric: string | null) => void;
   selectedE2eXAxisMetric: string | null;
   setSelectedE2eXAxisMetric: (metric: string | null) => void;
+  /**
+   * Which chart variant the user wants to see — the inference card shows one chart
+   * at a time, picked by the big TTFT / E2E Latency / Interactivity buttons.
+   * - 'ttft'          → e2e chartType with x-axis forced to p90_ttft
+   * - 'e2e'           → e2e chartType with the chart-config default x-axis (median_e2el / p90_e2el)
+   * - 'interactivity' → interactivity chartType (x = median_intvty / p90_intvty)
+   */
+  selectedXAxisMode: 'ttft' | 'e2e' | 'interactivity';
+  setSelectedXAxisMode: (mode: 'ttft' | 'e2e' | 'interactivity') => void;
   scaleType: 'auto' | 'linear' | 'log';
   setScaleType: (type: 'auto' | 'linear' | 'log') => void;
   setIsLegendExpanded: (metric: boolean) => void;

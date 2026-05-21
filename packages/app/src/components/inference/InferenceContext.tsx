@@ -43,7 +43,7 @@ import {
 import { useUrlState } from '@/hooks/useUrlState';
 import { buildAvailabilityHwKey } from '@/lib/chart-utils';
 import { getHardwareConfig, getModelSortIndex, isKnownGpu, TABLEAU_10 } from '@/lib/constants';
-import { hasMtpEngineExclusion, MODEL_PREFIX_MAPPING } from '@/lib/data-mappings';
+import { hasMtpEngineExclusion, MODEL_PREFIX_MAPPING, sequenceKind } from '@/lib/data-mappings';
 import {
   MtpEngineConflictToast,
   type MtpEngineConflictDetail,
@@ -133,6 +133,26 @@ export function InferenceProvider({
   const [selectedE2eXAxisMetric, setSelectedE2eXAxisMetric] = useState<string | null>(
     () => getUrlParam('i_e2e_xmetric') || 'p90_ttft',
   );
+  // Selected chart variant. Initialize from URL only — SSR cannot read URL, so
+  // computing a kind-based default here would diverge between server and client
+  // and cause a hydration mismatch. The scenario-kind default is applied in a
+  // post-mount effect below (and a ref tracks whether the user has overridden).
+  const urlXMode = (() => {
+    const v = getUrlParam('i_xmode');
+    return v === 'ttft' || v === 'e2e' || v === 'interactivity' ? v : null;
+  })();
+  const [selectedXAxisMode, setSelectedXAxisMode] = useState<'ttft' | 'e2e' | 'interactivity'>(
+    urlXMode ?? 'ttft',
+  );
+  const xAxisModeFromUrlRef = useRef(urlXMode !== null);
+  // Wrap the setter so a button click also aligns selectedE2eXAxisMetric — the
+  // existing useChartData pipeline keys off that flag for the e2e chart's x-axis.
+  const handleSetXAxisMode = useCallback((mode: 'ttft' | 'e2e' | 'interactivity') => {
+    xAxisModeFromUrlRef.current = true;
+    setSelectedXAxisMode(mode);
+    if (mode === 'ttft') setSelectedE2eXAxisMetric('p90_ttft');
+    else if (mode === 'e2e') setSelectedE2eXAxisMetric(null);
+  }, []);
   // Latency percentile applied to the chart x-axis for agentic scenarios.
   // Values: 'p90' | 'p99'. Non-agentic charts ignore.
   const [selectedPercentile, setSelectedPercentile] = useState<string>(
@@ -324,6 +344,24 @@ export function InferenceProvider({
   useEffect(() => {
     setTrackedConfigs((prev) => (prev.length > 0 ? [] : prev));
   }, [selectedModel, effectiveSequence, effectivePrecisions, selectedYAxisMetric]);
+
+  // Reconcile the x-axis mode with the scenario kind:
+  //  - On mount with no `i_xmode` URL param: snap to the kind's natural default
+  //    (agentic → ttft, fixed → interactivity). The state itself was initialized
+  //    to a SSR-stable constant so server and client render the same DOM; this
+  //    effect fixes it up after hydration.
+  //  - When the user later switches sequence kinds: snap to the new kind's
+  //    natural default (the prior selection was for a different kind, so it
+  //    doesn't carry over).
+  const lastSeqKindRef = useRef<ReturnType<typeof sequenceKind> | null>(null);
+  useEffect(() => {
+    const kind = sequenceKind(effectiveSequence);
+    const isInitialMount = lastSeqKindRef.current === null;
+    if (!isInitialMount && lastSeqKindRef.current === kind) return;
+    lastSeqKindRef.current = kind;
+    if (isInitialMount && xAxisModeFromUrlRef.current) return;
+    handleSetXAxisMode(kind === 'agentic' ? 'ttft' : 'interactivity');
+  }, [effectiveSequence, handleSetXAxisMode]);
 
   // Ref guard: when true, filter changes don't clear the active preset.
   // FavoritePresetsDropdown sets this while applying a preset so its own
@@ -785,6 +823,7 @@ export function InferenceProvider({
       i_log: logScale ? '1' : '',
       i_xmetric: selectedXAxisMetric || '',
       i_e2e_xmetric: selectedE2eXAxisMetric || '',
+      i_xmode: selectedXAxisMode,
       i_scale: scaleType,
       i_legend: isLegendExpanded ? '' : '0',
       i_advlabel: useAdvancedLabels ? '1' : '',
@@ -798,6 +837,7 @@ export function InferenceProvider({
       selectedYAxisMetric,
       selectedXAxisMetric,
       selectedE2eXAxisMetric,
+      selectedXAxisMode,
       scaleType,
       selectedGPUs,
       selectedDates,
@@ -968,6 +1008,8 @@ export function InferenceProvider({
       setSelectedXAxisMetric,
       selectedE2eXAxisMetric,
       setSelectedE2eXAxisMetric,
+      selectedXAxisMode,
+      setSelectedXAxisMode: handleSetXAxisMode,
       scaleType,
       setScaleType,
       loading,
@@ -1041,6 +1083,7 @@ export function InferenceProvider({
       selectedYAxisMetric,
       selectedXAxisMetric,
       selectedE2eXAxisMetric,
+      selectedXAxisMode,
       scaleType,
       selectedGPUs,
       selectedDates,
