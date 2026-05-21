@@ -13,9 +13,12 @@ export const dynamic = 'force-dynamic';
 // blobOnly: the response is one entry per id with two numbers, but the
 // derivation work parses thousands of JSONL records per blob — cache the
 // computed result so a chart-refresh hits the warm path.
+// Bumped to v2 when mean_p90_prefill_tps_per_user → p90_prefill_tps_per_user.
+// Stale v1 cache entries return undefined for the new field and silently
+// blank the chart with "No data available".
 const getCachedDerivedAgenticMetrics = cachedQuery(
   (ids: number[]): Promise<DerivedAgenticMetricMap> => getDerivedAgenticMetrics(getDb(), ids),
-  'derived-agentic-metrics',
+  'derived-agentic-metrics-v2',
   { blobOnly: true },
 );
 
