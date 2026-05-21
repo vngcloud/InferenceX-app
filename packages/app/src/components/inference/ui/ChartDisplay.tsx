@@ -350,7 +350,7 @@ export default function ChartDisplay() {
     if (!derivedMetrics) return visibleGraphs.map((g) => ({ ...g, data: [] }));
     const isSession = selectedXAxisMode === 'session-time';
     const xLabel = isSession
-      ? 'Mean Normalized Session Time (s)'
+      ? 'Mean Normalized Session Time (min)'
       : 'Mean P90 Prefill TPS per user (tok/s)';
     // Roofline corner = which corner the curve sweeps from / toward, matching
     // existing chart-config convention:
@@ -373,8 +373,9 @@ export default function ChartDisplay() {
         .map((d) => {
           if (typeof d.id !== 'number') return null;
           const m = derivedMetrics[d.id];
-          const v = isSession ? m?.normalized_session_time_s : m?.mean_p90_prefill_tps_per_user;
-          if (v === null || v === undefined || !Number.isFinite(v)) return null;
+          const raw = isSession ? m?.normalized_session_time_s : m?.mean_p90_prefill_tps_per_user;
+          if (raw === null || raw === undefined || !Number.isFinite(raw)) return null;
+          const v = isSession ? raw / 60 : raw;
           return { ...d, x: v };
         })
         .filter((d): d is NonNullable<typeof d> => d !== null);
