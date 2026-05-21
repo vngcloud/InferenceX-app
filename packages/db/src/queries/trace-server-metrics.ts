@@ -1,73 +1,26 @@
 /**
- * Parse aiperf's `server_metrics_export.json` blob (gzipped in
- * `agentic_trace_replay.server_metrics_json_gz`) and return a slim, chart-ready
- * time-series for one benchmark point.
+ * Time-series view of one agentic benchmark point: chart-ready arrays for
+ * KV utilization, prefix-cache hit rate, queue depth, prefill + decode TPS,
+ * and per-source prompt-token counts.
  *
- * The raw JSON has shape:
- *   metrics: {
- *     "<metric_name>": {
- *       series: [
- *         {
- *           labels: { ... },
- *           stats: { ... summary ... },
- *           timeslices: [
- *             { start_ns, end_ns, avg, min, max }            // gauges
- *             { start_ns, end_ns, total, rate }              // counters
- *           ]
- *         }
- *       ]
- *     }
- *   }
- *
- * Timeslices are ~1 Hz windows. The benchmark window can be tens of minutes
- * (1800+ windows). We return them as `[{ t, ...}]` arrays with `t` measured
- * in seconds from the benchmark start so the frontend doesn't need to
- * shuffle bigint nanoseconds around.
+ * Backed by `agentic_trace_replay.chart_series` (pre-computed at ingest
+ * time, see `etl/compute-chart-series.ts`). The fast path is a single SQL
+ * row read; the slow path re-computes from `server_metrics_json_gz` and is
+ * only taken when the column is missing or the stored
+ * `CHART_SERIES_VERSION` is stale (the backfill script should drain that).
  */
 
-import { gunzipSync } from 'node:zlib';
+import {
+  CHART_SERIES_VERSION,
+  computeChartSeries,
+  type ChartSeries,
+  type QueueDepthPoint,
+  type TimeSeriesPoint,
+} from '../etl/compute-chart-series';
 
 import type { DbClient } from '../connection.js';
 
-interface GaugeSlice {
-  start_ns: number;
-  end_ns: number;
-  avg?: number;
-  min?: number;
-  max?: number;
-}
-
-interface CounterSlice {
-  start_ns: number;
-  end_ns: number;
-  total?: number;
-  rate?: number;
-}
-
-interface Series {
-  endpoint_url?: string;
-  labels?: Record<string, string>;
-  stats?: Record<string, unknown>;
-  timeslices?: (GaugeSlice & CounterSlice)[];
-}
-
-interface MetricsJson {
-  metrics?: Record<string, { type?: string; description?: string; series?: Series[] }>;
-}
-
-export interface TimeSeriesPoint {
-  /** Seconds from benchmark start. */
-  t: number;
-  value: number;
-}
-
-export interface QueueDepthPoint {
-  t: number;
-  running: number;
-  waiting: number;
-  /** Optional total — frontend can compute too. */
-  total: number;
-}
+export type { TimeSeriesPoint, QueueDepthPoint } from '../etl/compute-chart-series';
 
 export interface PointMeta {
   id: number;
@@ -120,30 +73,13 @@ export interface TraceServerMetrics {
   decodeTps: TimeSeriesPoint[];
 }
 
-export async function getTraceServerMetrics(
-  sql: DbClient,
-  benchmarkResultId: number,
-): Promise<TraceServerMetrics | null> {
-  const rows = (await sql`
-    select
-      atr.server_metrics_json_gz as blob,
-      br.id, c.hardware, c.framework, c.model, c.precision, c.spec_method, c.disagg,
-      br.conc, br.offload_mode, br.isl, br.osl, br.benchmark_type,
-      br.date::text,
-      case when wr.html_url is not null then wr.html_url || '/attempts/' || wr.run_attempt else null end as run_url,
-      (br.metrics ->> 'server_gpu_cache_hit_rate')::numeric as server_gpu_cache_hit_rate,
-      (br.metrics ->> 'server_cpu_cache_hit_rate')::numeric as server_cpu_cache_hit_rate
-    from benchmark_results br
-    join configs c on c.id = br.config_id
-    join workflow_runs wr on wr.id = br.workflow_run_id
-    left join agentic_trace_replay atr on atr.id = br.trace_replay_id
-    where br.id = ${benchmarkResultId}
-  `) as unknown as ({ blob: Buffer | null } & PointMeta)[];
-  const row = rows[0];
-  if (!row) return null;
-  const blob = row.blob;
-  if (!blob) return null;
-  const pointMeta: PointMeta = {
+interface RawMetaRow extends PointMeta {
+  blob: Buffer | null;
+  chart_series: ChartSeries | null;
+}
+
+function buildMeta(row: RawMetaRow): PointMeta {
+  return {
     id: Number(row.id),
     hardware: row.hardware,
     framework: row.framework,
@@ -163,113 +99,58 @@ export async function getTraceServerMetrics(
     server_cpu_cache_hit_rate:
       row.server_cpu_cache_hit_rate === null ? null : Number(row.server_cpu_cache_hit_rate),
   };
+}
 
-  const parsed = JSON.parse(gunzipSync(blob).toString('utf8')) as MetricsJson;
-  const metrics = parsed.metrics ?? {};
-
-  const firstSeries = (name: string): Series | undefined => {
-    const s = metrics[name]?.series;
-    return s && s.length > 0 ? s[0] : undefined;
-  };
-
-  // Compute timing reference from the first gauge metric we can find.
-  let startNs = Number.POSITIVE_INFINITY;
-  let endNs = 0;
-  let timeslicesCount = 0;
-  for (const metricMeta of Object.values(metrics)) {
-    for (const s of metricMeta?.series ?? []) {
-      const ts = s.timeslices ?? [];
-      if (ts.length === 0) continue;
-      timeslicesCount = Math.max(timeslicesCount, ts.length);
-      const first = ts[0]!;
-      const last = ts.at(-1)!;
-      if (typeof first.start_ns === 'number' && first.start_ns < startNs) startNs = first.start_ns;
-      if (typeof last.end_ns === 'number' && last.end_ns > endNs) endNs = last.end_ns;
-    }
-  }
-  if (!Number.isFinite(startNs)) startNs = 0;
-  const tOf = (ns: number) => (ns - startNs) / 1e9;
-
-  // KV cache usage (gauge, 0..1)
-  const kvCacheUsage: TimeSeriesPoint[] = [];
-  const kvSeries =
-    firstSeries('vllm:kv_cache_usage_perc') ?? firstSeries('vllm:gpu_cache_usage_perc');
-  for (const ts of kvSeries?.timeslices ?? []) {
-    if (typeof ts.avg === 'number') {
-      kvCacheUsage.push({ t: tOf(ts.start_ns), value: ts.avg });
-    }
-  }
-
-  // Prefix cache hit rate per scrape (Δhits / Δqueries from counter rate).
-  // `rate` is already per-window delta; we just divide.
-  const hitsTs = firstSeries('vllm:prefix_cache_hits')?.timeslices ?? [];
-  const qsTs = firstSeries('vllm:prefix_cache_queries')?.timeslices ?? [];
-  const prefixCacheHitRate: TimeSeriesPoint[] = [];
-  const minLen = Math.min(hitsTs.length, qsTs.length);
-  for (let i = 0; i < minLen; i++) {
-    const h = hitsTs[i]!;
-    const q = qsTs[i]!;
-    if (typeof q.rate === 'number' && q.rate > 0 && typeof h.rate === 'number') {
-      prefixCacheHitRate.push({ t: tOf(h.start_ns), value: h.rate / q.rate });
-    }
-  }
-
-  // Queue depth: pair running + waiting by index.
-  const runTs = firstSeries('vllm:num_requests_running')?.timeslices ?? [];
-  const waitTs = firstSeries('vllm:num_requests_waiting')?.timeslices ?? [];
-  const queueDepth: QueueDepthPoint[] = [];
-  const qlen = Math.min(runTs.length, waitTs.length);
-  for (let i = 0; i < qlen; i++) {
-    const r = runTs[i]!;
-    const w = waitTs[i]!;
-    const running = typeof r.avg === 'number' ? r.avg : 0;
-    const waiting = typeof w.avg === 'number' ? w.avg : 0;
-    queueDepth.push({
-      t: tOf(r.start_ns),
-      running,
-      waiting,
-      total: running + waiting,
-    });
-  }
-
-  // Throughput: extract counter `rate` (already per-second delta from aiperf).
-  const counterRateSeries = (name: string): TimeSeriesPoint[] => {
-    const s = firstSeries(name);
-    if (!s) return [];
-    const out: TimeSeriesPoint[] = [];
-    for (const ts of s.timeslices ?? []) {
-      if (typeof ts.rate === 'number') out.push({ t: tOf(ts.start_ns), value: ts.rate });
-    }
-    return out;
-  };
-  const prefillTps = counterRateSeries('vllm:prompt_tokens');
-  const decodeTps = counterRateSeries('vllm:generation_tokens');
-
-  // Per-source prompt tokens — emit one TS array per source label.
-  const promptTokensBySource: Record<string, TimeSeriesPoint[]> = {};
-  for (const series of metrics['vllm:prompt_tokens_by_source']?.series ?? []) {
-    const labels = series.labels ?? {};
-    const source = labels['source'] ?? labels['reason'] ?? labels['kind'] ?? JSON.stringify(labels);
-    const arr: TimeSeriesPoint[] = [];
-    for (const ts of series.timeslices ?? []) {
-      if (typeof ts.rate === 'number') {
-        arr.push({ t: tOf(ts.start_ns), value: ts.rate });
-      }
-    }
-    if (arr.length > 0) promptTokensBySource[source] = arr;
-  }
-
+function merge(meta: PointMeta, series: ChartSeries): TraceServerMetrics {
   return {
-    meta: pointMeta,
-    startNs,
-    endNs,
-    durationS: endNs > startNs ? (endNs - startNs) / 1e9 : 0,
-    timeslicesCount,
-    kvCacheUsage,
-    prefixCacheHitRate,
-    queueDepth,
-    promptTokensBySource,
-    prefillTps,
-    decodeTps,
+    meta,
+    startNs: series.startNs,
+    endNs: series.endNs,
+    durationS: series.durationS,
+    timeslicesCount: series.timeslicesCount,
+    kvCacheUsage: series.kvCacheUsage,
+    prefixCacheHitRate: series.prefixCacheHitRate,
+    queueDepth: series.queueDepth,
+    promptTokensBySource: series.promptTokensBySource,
+    prefillTps: series.prefillTps,
+    decodeTps: series.decodeTps,
   };
+}
+
+export async function getTraceServerMetrics(
+  sql: DbClient,
+  benchmarkResultId: number,
+): Promise<TraceServerMetrics | null> {
+  const rows = (await sql`
+    select
+      atr.server_metrics_json_gz as blob,
+      atr.chart_series,
+      br.id, c.hardware, c.framework, c.model, c.precision, c.spec_method, c.disagg,
+      br.conc, br.offload_mode, br.isl, br.osl, br.benchmark_type,
+      br.date::text,
+      case when wr.html_url is not null then wr.html_url || '/attempts/' || wr.run_attempt else null end as run_url,
+      (br.metrics ->> 'server_gpu_cache_hit_rate')::numeric as server_gpu_cache_hit_rate,
+      (br.metrics ->> 'server_cpu_cache_hit_rate')::numeric as server_cpu_cache_hit_rate
+    from benchmark_results br
+    join configs c on c.id = br.config_id
+    join workflow_runs wr on wr.id = br.workflow_run_id
+    left join agentic_trace_replay atr on atr.id = br.trace_replay_id
+    where br.id = ${benchmarkResultId}
+  `) as unknown as RawMetaRow[];
+  const row = rows[0];
+  if (!row) return null;
+  if (!row.blob) return null;
+  const meta = buildMeta(row);
+
+  // Fast path: pre-computed chart_series at the current version.
+  if (row.chart_series && Number(row.chart_series.version) === CHART_SERIES_VERSION) {
+    return merge(meta, row.chart_series);
+  }
+
+  // Slow path: compute from the blob. `computeChartSeries` handles
+  // ERR_STRING_TOO_LONG via a stream-parse fallback so high-conc TP+EP
+  // rows succeed even before the backfill drains them.
+  const series = await computeChartSeries(row.blob);
+  if (!series) return null;
+  return merge(meta, series);
 }
