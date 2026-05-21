@@ -150,8 +150,9 @@ export function InferenceProvider({
   const handleSetXAxisMode = useCallback((mode: 'ttft' | 'e2e' | 'interactivity') => {
     xAxisModeFromUrlRef.current = true;
     setSelectedXAxisMode(mode);
-    if (mode === 'ttft') setSelectedE2eXAxisMetric('p90_ttft');
-    else if (mode === 'e2e') setSelectedE2eXAxisMetric(null);
+    // The e2e chart's x-axis metric is reconciled in a separate effect below,
+    // because it depends on sequence kind (fixed-seq has no p90_* metrics) and
+    // the agentic percentile, both of which can change independently.
   }, []);
   // Latency percentile applied to the chart x-axis for agentic scenarios.
   // Values: 'p90' | 'p99'. Non-agentic charts ignore.
@@ -362,6 +363,24 @@ export function InferenceProvider({
     if (isInitialMount && xAxisModeFromUrlRef.current) return;
     handleSetXAxisMode(kind === 'agentic' ? 'ttft' : 'interactivity');
   }, [effectiveSequence, handleSetXAxisMode]);
+
+  // Reconcile selectedE2eXAxisMetric whenever the mode, sequence kind, or
+  // agentic percentile changes. For fixed-seq the JSONB only carries
+  // median_* / p99_* (no p90_*), so the TTFT button there has to point at
+  // median_ttft — otherwise the chart goes blank. For agentic, we point at
+  // the user's chosen percentile so the dropdown actually drives the axis.
+  useEffect(() => {
+    const isAgentic = sequenceKind(effectiveSequence) === 'agentic';
+    if (selectedXAxisMode === 'ttft') {
+      setSelectedE2eXAxisMetric(isAgentic ? `${selectedPercentile}_ttft` : 'median_ttft');
+    } else if (selectedXAxisMode === 'e2e') {
+      // null = use the chart-config natural x (median_e2el), which useChartData
+      // rewrites to <pctl>_e2el for agentic via withPercentile().
+      setSelectedE2eXAxisMetric(null);
+    }
+    // 'interactivity' mode renders the interactivity chart, which keys off
+    // selectedXAxisMetric (not the e2e one), so nothing to do here.
+  }, [selectedXAxisMode, effectiveSequence, selectedPercentile]);
 
   // Ref guard: when true, filter changes don't clear the active preset.
   // FavoritePresetsDropdown sets this while applying a preset so its own

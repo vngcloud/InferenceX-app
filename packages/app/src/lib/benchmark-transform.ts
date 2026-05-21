@@ -136,7 +136,7 @@ interface PreparedEntry {
  * percentile prefix; leaves everything else alone.
  */
 export function withPercentile(key: string, percentile: string): string {
-  return key.replace(/^(mean|median|p90|p99|p99\.9)_/, `${percentile}_`);
+  return key.replace(/^(mean|median|p75|p90|p95|p99|p99\.9)_/u, `${percentile}_`);
 }
 
 /**

@@ -397,12 +397,16 @@ export default function ChartDisplay() {
 
                             // For e2e chart: heading is driven by the TTFT / E2E button
                             // selection above the card, so the inline dropdown is gone.
+                            // The metric carries the percentile prefix (e.g. p90_ttft,
+                            // median_ttft for fixed-seq, p75_ttft for agentic+p75).
                             if (graph.chartDefinition.chartType === 'e2e') {
                               const isAgentic = sequenceKind(selectedSequence) === 'agentic';
-                              const pctlWord = selectedPercentile.toUpperCase();
-                              if (selectedE2eXAxisMetric === 'p90_ttft') {
-                                return 'vs. P90 Time To First Token';
+                              if (selectedE2eXAxisMetric?.endsWith('_ttft')) {
+                                const pctl = selectedE2eXAxisMetric.replace(/_ttft$/u, '');
+                                const word = pctl === 'median' ? 'Median' : pctl.toUpperCase();
+                                return `vs. ${word} Time To First Token`;
                               }
+                              const pctlWord = selectedPercentile.toUpperCase();
                               return isAgentic
                                 ? `vs. ${pctlWord} End-to-end Latency`
                                 : 'vs. End-to-end Latency';

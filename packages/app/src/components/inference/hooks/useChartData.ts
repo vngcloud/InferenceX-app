@@ -215,8 +215,16 @@ export function useChartData(
         // Resolve the effective x-axis override per chart type
         const effectiveXMetric =
           chartDef.chartType === 'e2e' ? selectedE2eXAxisMetric : selectedXAxisMetric;
-        const isTtftOverride = effectiveXMetric === 'p90_ttft';
-        const ttftLabel = 'P90 Time To First Token (s)';
+        // The TTFT override is now any *_ttft metric (not just p90_ttft) — the
+        // x-axis-mode picker reconciles the percentile prefix based on sequence
+        // kind (fixed-seq → median, agentic → user-picked percentile).
+        const isTtftOverride =
+          typeof effectiveXMetric === 'string' && effectiveXMetric.endsWith('_ttft');
+        const ttftPctl = isTtftOverride
+          ? (effectiveXMetric as string).replace(/_ttft$/u, '')
+          : 'p90';
+        const ttftPctlWord = ttftPctl === 'median' ? 'Median' : ttftPctl.toUpperCase();
+        const ttftLabel = `${ttftPctlWord} Time To First Token (s)`;
 
         const isAgentic = selectedSequence === Sequence.AgenticTraces;
 
@@ -261,9 +269,9 @@ export function useChartData(
             selectedPercentile,
           ) as keyof AggDataEntry;
           const pctlWord = selectedPercentile.toUpperCase();
-          xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P90|P99(?:\.9)?)\b/iu, pctlWord);
+          xAxisLabel = xAxisLabel.replace(/^(Median|Mean|P75|P90|P95|P99(?:\.9)?)\b/iu, pctlWord);
           chartHeading = chartHeading.replace(
-            /^(vs\.\s+)(?:(Median|Mean|P90|P99(?:\.9)?)\s+)?/iu,
+            /^(vs\.\s+)(?:(Median|Mean|P75|P90|P95|P99(?:\.9)?)\s+)?/iu,
             `$1${pctlWord} `,
           );
         }
