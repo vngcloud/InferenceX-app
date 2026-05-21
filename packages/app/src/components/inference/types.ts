@@ -67,6 +67,10 @@ export interface AggDataEntry {
   median_e2el: number;
   std_e2el: number;
   p99_e2el: number;
+  // Measured GPU telemetry (emitted by runner's aggregate_power.py).
+  // Optional because historical runs predate the field.
+  avg_power_w?: number;
+  joules_per_output_token?: number;
   disagg: boolean;
   num_prefill_gpu: number;
   num_decode_gpu: number;
@@ -152,6 +156,12 @@ export interface InferenceData extends Partial<Omit<AggDataEntry, AggDataConflic
   jTotal?: { y: number; roof: boolean };
   jOutput?: { y: number; roof: boolean };
   jInput?: { y: number; roof: boolean };
+
+  // Measured power / energy from runner GPU telemetry. Optional because
+  // pre-aggregate_power.py runs (and runs with monitoring disabled) won't
+  // emit these fields.
+  measuredAvgPower?: { y: number; roof: boolean };
+  measuredJPerOutputToken?: { y: number; roof: boolean };
 }
 
 /**
@@ -177,7 +187,9 @@ export type YAxisMetricKey =
   | 'powerUser'
   | 'jTotal'
   | 'jOutput'
-  | 'jInput';
+  | 'jInput'
+  | 'measuredAvgPower'
+  | 'measuredJPerOutputToken';
 
 /**
  * Defines the configuration and labels for a specific chart.
@@ -277,6 +289,18 @@ export interface ChartDefinition {
   y_jInput_label?: string;
   y_jInput_title?: string;
   y_jInput_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  // Measured power / energy from runner GPU telemetry
+  y_measuredAvgPower?: string;
+  y_measuredAvgPower_label?: string;
+  y_measuredAvgPower_title?: string;
+  // Intentionally no roofline for avg power: there's no universal "better"
+  // direction for absolute draw. Omitting roofline causes computeAllRooflines
+  // to skip the metric (it requires a direction); points render plain.
+  y_measuredAvgPower_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredJPerOutputToken?: string;
+  y_measuredJPerOutputToken_label?: string;
+  y_measuredJPerOutputToken_title?: string;
+  y_measuredJPerOutputToken_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
   y_cost_limit?: number;
   y_latency_limit?: number;
 }

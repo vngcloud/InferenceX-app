@@ -115,6 +115,24 @@ describe('rowToAggDataEntry', () => {
     const entryNull = rowToAggDataEntry(makeRow({ image: null }));
     expect(entryNull.image).toBeUndefined();
   });
+
+  it('passes through measured power telemetry fields when present', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        metrics: { tput_per_gpu: 100, avg_power_w: 685.5, joules_per_output_token: 8.4 },
+      }),
+    );
+    expect(entry.avg_power_w).toBe(685.5);
+    expect(entry.joules_per_output_token).toBe(8.4);
+  });
+
+  it('leaves measured power fields undefined for rows that predate the metric', () => {
+    // Distinguishing "no measurement" from "0 W" matters: createChartDataPoint
+    // uses typeof===number to decide whether to emit the measuredAvgPower field.
+    const entry = rowToAggDataEntry(makeRow({ metrics: {} }));
+    expect(entry.avg_power_w).toBeUndefined();
+    expect(entry.joules_per_output_token).toBeUndefined();
+  });
 });
 
 describe('transformBenchmarkRows', () => {

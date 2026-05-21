@@ -46,6 +46,10 @@ const METRIC_GROUPS = [
   },
   { label: 'Cost per Million Input Tokens', metrics: ['y_costhi', 'y_costni', 'y_costri'] },
   { label: 'All-in Provisioned Energy per Token', metrics: ['y_jTotal', 'y_jOutput', 'y_jInput'] },
+  {
+    label: 'Measured Energy',
+    metrics: ['y_measuredAvgPower', 'y_measuredJPerOutputToken'],
+  },
   { label: 'Custom User Values', metrics: ['y_costUser', 'y_powerUser'] },
 ];
 
