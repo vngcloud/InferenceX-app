@@ -351,7 +351,7 @@ export default function ChartDisplay() {
     const isSession = selectedXAxisMode === 'session-time';
     const xLabel = isSession
       ? 'Mean Normalized Session Time (min)'
-      : 'Mean P90 Prefill TPS per user (tok/s)';
+      : 'P90 Prefill TPS per user (tok/s)';
     // Roofline corner = which corner the curve sweeps from / toward, matching
     // existing chart-config convention:
     //  - session-time: as concurrency rises, session time AND throughput both
@@ -373,7 +373,7 @@ export default function ChartDisplay() {
         .map((d) => {
           if (typeof d.id !== 'number') return null;
           const m = derivedMetrics[d.id];
-          const raw = isSession ? m?.normalized_session_time_s : m?.mean_p90_prefill_tps_per_user;
+          const raw = isSession ? m?.normalized_session_time_s : m?.p90_prefill_tps_per_user;
           if (raw === null || raw === undefined || !Number.isFinite(raw)) return null;
           const v = isSession ? raw / 60 : raw;
           return { ...d, x: v };
@@ -477,7 +477,7 @@ export default function ChartDisplay() {
                                 return 'vs. Mean Normalized Session Time';
                               }
                               if (selectedXAxisMode === 'prefill-tps') {
-                                return 'vs. Mean P90 Prefill TPS / user';
+                                return 'vs. P90 Prefill TPS / user';
                               }
                               const isAgentic = sequenceKind(selectedSequence) === 'agentic';
                               if (selectedE2eXAxisMetric?.endsWith('_ttft')) {

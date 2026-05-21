@@ -23,7 +23,7 @@ describe('computeDerivedFromBlob', () => {
   it('returns nulls when no usable records', () => {
     const out = computeDerivedFromBlob('');
     expect(out.normalized_session_time_s).toBeNull();
-    expect(out.mean_p90_prefill_tps_per_user).toBeNull();
+    expect(out.p90_prefill_tps_per_user).toBeNull();
   });
 
   it('rescales single-session time and computes P90 prefill', () => {
@@ -35,8 +35,8 @@ describe('computeDerivedFromBlob', () => {
     ].join('\n');
     const out = computeDerivedFromBlob(jsonl);
     expect(out.normalized_session_time_s).toBeCloseTo(3, 6);
-    // Prefill TPS per turn: 100/0.5=200, 200/1.0=200 → P90 within session = 200.
-    expect(out.mean_p90_prefill_tps_per_user).toBeCloseTo(200, 6);
+    // Prefill TPS per turn: 100/0.5=200, 200/1.0=200 → global P90 = 200.
+    expect(out.p90_prefill_tps_per_user).toBeCloseTo(200, 6);
   });
 
   it('rescales times across sessions with unequal load', () => {
@@ -77,7 +77,7 @@ describe('computeDerivedFromBlob', () => {
     ];
     const out = computeDerivedFromBlob(lines.join('\n'));
     expect(out.normalized_session_time_s).toBeCloseTo(1, 6);
-    expect(out.mean_p90_prefill_tps_per_user).toBeCloseTo(200, 6);
+    expect(out.p90_prefill_tps_per_user).toBeCloseTo(200, 6);
   });
 
   it('p90 across turns: 10-turn session picks the right rank', () => {
@@ -91,6 +91,6 @@ describe('computeDerivedFromBlob', () => {
       }),
     );
     const out = computeDerivedFromBlob(turns.join('\n'));
-    expect(out.mean_p90_prefill_tps_per_user).toBeCloseTo(910, 6);
+    expect(out.p90_prefill_tps_per_user).toBeCloseTo(910, 6);
   });
 });

@@ -28,8 +28,8 @@ const MAX_IDS_PER_REQUEST = 200;
  * profile_export.jsonl blobs:
  *  - normalized_session_time_s: mean across sessions of session e2e time
  *    (Σ per-turn request_latency) rescaled by mean_load / session_load.
- *  - mean_p90_prefill_tps_per_user: mean across sessions of P90 (over the
- *    session's turns) prefill TPS/user (ISL / TTFT).
+ *  - p90_prefill_tps_per_user: P90 of per-turn prefill TPS/user (ISL / TTFT)
+ *    across every turn in every session.
  *
  * Ids without a trace_replay blob or with unparseable records are omitted.
  */

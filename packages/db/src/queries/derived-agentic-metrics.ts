@@ -12,10 +12,10 @@
  *   Each session's time is rescaled by `mean_load / session_load`, where load
  *   is Σ(ISL+OSL) across turns. The plotted value is the mean across sessions.
  *
- * - mean_p90_prefill_tps_per_user: per the same gist's "Prefill" Pareto chart.
- *   Per turn: prefill_tps = ISL / TTFT_seconds. Per session: P90 across its
- *   turns. Across sessions: arithmetic mean. Captures the worst-turn prefill
- *   responsiveness from the end-user perspective.
+ * - p90_prefill_tps_per_user: per the same gist's "Prefill" Pareto chart.
+ *   Per turn: prefill_tps = ISL / TTFT_seconds. Single P90 across every turn
+ *   in every session — the per-session percentile + cross-session mean
+ *   sandwich was discarded because it just dampens tail behavior.
  */
 
 import { gunzipSync } from 'node:zlib';
@@ -27,8 +27,8 @@ export interface DerivedAgenticMetric {
   id: number;
   /** Mean normalized session time in seconds. */
   normalized_session_time_s: number | null;
-  /** Mean across sessions of (P90 prefill tps/user across the session's turns). */
-  mean_p90_prefill_tps_per_user: number | null;
+  /** P90 of per-turn prefill tps/user (ISL / TTFT) across every turn in every session. */
+  p90_prefill_tps_per_user: number | null;
 }
 
 export type DerivedAgenticMetricMap = Record<number, DerivedAgenticMetric>;
@@ -109,7 +109,7 @@ function meanOf(xs: number[]): number {
  */
 export function computeDerivedFromBlob(jsonl: string): {
   normalized_session_time_s: number | null;
-  mean_p90_prefill_tps_per_user: number | null;
+  p90_prefill_tps_per_user: number | null;
 } {
   // Group records by conversation_id, filter to the profiling phase.
   const bySession = new Map<string, TurnFields[]>();
@@ -134,30 +134,26 @@ export function computeDerivedFromBlob(jsonl: string): {
     list.push(turn);
   }
   if (bySession.size === 0) {
-    return { normalized_session_time_s: null, mean_p90_prefill_tps_per_user: null };
+    return { normalized_session_time_s: null, p90_prefill_tps_per_user: null };
   }
 
-  // Per-session aggregates.
+  // Per-session aggregates for session time; per-turn prefill rates pool into
+  // a single global array so the percentile sees the full distribution.
   const sessionTimesS: number[] = [];
   const sessionLoads: number[] = [];
-  const sessionP90Prefill: number[] = [];
+  const allPrefillRates: number[] = [];
   for (const turns of bySession.values()) {
     let timeMs = 0;
     let load = 0;
-    const prefillRates: number[] = [];
     for (const t of turns) {
       timeMs += t.request_latency_ms;
       load += t.isl + t.osl;
       const ttftSec = t.ttft_ms / 1000;
-      if (ttftSec > 0) prefillRates.push(t.isl / ttftSec);
+      if (ttftSec > 0) allPrefillRates.push(t.isl / ttftSec);
     }
     if (load > 0) {
       sessionTimesS.push(timeMs / 1000);
       sessionLoads.push(load);
-    }
-    if (prefillRates.length > 0) {
-      prefillRates.sort((a, b) => a - b);
-      sessionP90Prefill.push(quantile(prefillRates, 0.9));
     }
   }
 
@@ -176,11 +172,15 @@ export function computeDerivedFromBlob(jsonl: string): {
     }
   }
 
-  const prefill = sessionP90Prefill.length > 0 ? meanOf(sessionP90Prefill) : null;
+  let prefill: number | null = null;
+  if (allPrefillRates.length > 0) {
+    allPrefillRates.sort((a, b) => a - b);
+    prefill = quantile(allPrefillRates, 0.9);
+  }
 
   return {
     normalized_session_time_s: normalized,
-    mean_p90_prefill_tps_per_user: prefill,
+    p90_prefill_tps_per_user: prefill,
   };
 }
 
@@ -209,12 +209,11 @@ export async function getDerivedAgenticMetrics(
   for (const row of rows) {
     try {
       const jsonl = gunzipSync(row.blob).toString('utf8');
-      const { normalized_session_time_s, mean_p90_prefill_tps_per_user } =
-        computeDerivedFromBlob(jsonl);
+      const { normalized_session_time_s, p90_prefill_tps_per_user } = computeDerivedFromBlob(jsonl);
       result[Number(row.benchmark_result_id)] = {
         id: Number(row.benchmark_result_id),
         normalized_session_time_s,
-        mean_p90_prefill_tps_per_user,
+        p90_prefill_tps_per_user,
       };
     } catch {
       // Skip malformed blobs silently — frontend treats missing ids as "no data".

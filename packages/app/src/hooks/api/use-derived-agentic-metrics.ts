@@ -5,9 +5,9 @@ export interface DerivedAgenticMetric {
   /** Mean across sessions of e2e time (Σ per-turn request_latency) rescaled
    *  by mean_load / session_load. Null when the JSONL had no usable records. */
   normalized_session_time_s: number | null;
-  /** Mean across sessions of (P90 over turns of ISL/TTFT). Null when no
-   *  prefill rates could be computed. */
-  mean_p90_prefill_tps_per_user: number | null;
+  /** P90 of per-turn ISL/TTFT across every turn in every session.
+   *  Null when no prefill rates could be computed. */
+  p90_prefill_tps_per_user: number | null;
 }
 
 export type DerivedAgenticMetricMap = Record<number, DerivedAgenticMetric>;
