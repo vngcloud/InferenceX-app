@@ -1,7 +1,7 @@
 'use client';
 import { track } from '@/lib/analytics';
 import dynamic from 'next/dynamic';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Table2, X } from 'lucide-react';
 
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
@@ -42,6 +42,7 @@ import {
   sequenceKind,
 } from '@/lib/data-mappings';
 import { useComparisonChangelogs } from '@/hooks/api/use-comparison-changelogs';
+import { useDerivedAgenticMetrics } from '@/hooks/api/use-derived-agentic-metrics';
 import { useTrendData } from '@/components/inference/hooks/useTrendData';
 import { hardwareKeyMatchesAnyBase } from '@/lib/constants';
 
@@ -62,20 +63,25 @@ import WorkflowInfoDisplay from './WorkflowInfoDisplay';
 type InferenceViewMode = 'chart' | 'table';
 
 /**
- * The three chart variants the user can choose with the big buttons above the
- * chart card. Each maps to one entry in `inference-chart-config.json` plus a
- * forced x-axis override for the E2E chartType.
+ * The chart variants the user can choose with the big buttons above the chart
+ * card. The first three map to entries in `inference-chart-config.json` plus a
+ * forced x-axis override for the E2E chartType; the last two are agentic-only
+ * derived metrics computed live from the stored trace_replay blobs.
  */
-type XAxisMode = 'ttft' | 'e2e' | 'interactivity';
+type XAxisMode = 'ttft' | 'e2e' | 'interactivity' | 'session-time' | 'prefill-tps';
 
 interface XAxisModeButton {
   value: XAxisMode;
   label: string;
+  /** When true, the button is only shown on agentic scenarios. */
+  agenticOnly?: boolean;
 }
 const X_AXIS_MODE_BUTTONS: XAxisModeButton[] = [
   { value: 'ttft', label: 'TTFT' },
   { value: 'e2e', label: 'E2E Latency' },
   { value: 'interactivity', label: 'Interactivity' },
+  { value: 'session-time', label: 'Session Time', agenticOnly: true },
+  { value: 'prefill-tps', label: 'Prefill TPS / user', agenticOnly: true },
 ];
 
 const VIEW_MODE_OPTIONS: SegmentedToggleOption<InferenceViewMode>[] = [
@@ -133,6 +139,13 @@ export default function ChartDisplay() {
     loading: changelogsLoading,
     totalDatesQueried,
   } = useComparisonChangelogs(selectedGPUs, selectedDateRange, dateRangeAvailableDates);
+
+  // SSR has no URL access and `selectedSequence` defaults to agentic on the
+  // server even when the URL says fixed-seq — so any conditional rendering
+  // that keys off `sequenceKind(selectedSequence)` would diverge between
+  // server and client first render. Defer agentic-only UI until after mount.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const [viewModes, setViewModes] = useState<Record<number, InferenceViewMode>>({});
   const replayHandlesRef = useRef<Record<number, ReplayLauncherHandle | null>>({});
@@ -301,14 +314,73 @@ export default function ChartDisplay() {
     }));
   }, [graphs, overlayDataByChartType, selectedModel, selectedSequence]);
 
-  // Show one chart at a time, picked by the TTFT / E2E / Interactivity buttons.
-  // Both 'ttft' and 'e2e' modes render the e2e chart (the x-axis swap is handled
-  // upstream by `selectedE2eXAxisMetric`, which `setSelectedXAxisMode` keeps in sync).
+  // Show one chart at a time, picked by the buttons above the chart.
+  //  - 'interactivity' renders the interactivity chartType.
+  //  - 'ttft' / 'e2e' render the e2e chartType (x swap via selectedE2eXAxisMetric).
+  //  - 'session-time' / 'prefill-tps' render the e2e chartType too; the x-axis
+  //    is overridden below from live-computed derived metrics.
   const visibleGraphs = useMemo(() => {
     const wantedType = selectedXAxisMode === 'interactivity' ? 'interactivity' : 'e2e';
     const filtered = effectiveGraphs.filter((g) => g.chartDefinition.chartType === wantedType);
     return filtered.length > 0 ? filtered : effectiveGraphs;
   }, [effectiveGraphs, selectedXAxisMode]);
+
+  // Derived-metric path: fetch live-computed values from the trace_replay blobs
+  // and override scatter data.x. Only fires for the two agentic-only modes.
+  const useDerived =
+    sequenceKind(selectedSequence) === 'agentic' &&
+    (selectedXAxisMode === 'session-time' || selectedXAxisMode === 'prefill-tps');
+  const derivedTargetIds = useMemo(() => {
+    if (!useDerived) return [] as number[];
+    const ids = new Set<number>();
+    for (const g of visibleGraphs) {
+      for (const d of g.data) {
+        if (d.benchmark_type === 'agentic_traces' && typeof d.id === 'number') {
+          ids.add(d.id);
+        }
+      }
+    }
+    return [...ids];
+  }, [useDerived, visibleGraphs]);
+  const derivedQuery = useDerivedAgenticMetrics(derivedTargetIds, useDerived);
+  const derivedMetrics = derivedQuery.data;
+
+  const renderableGraphs = useMemo(() => {
+    if (!useDerived) return visibleGraphs;
+    if (!derivedMetrics) return visibleGraphs.map((g) => ({ ...g, data: [] }));
+    const isSession = selectedXAxisMode === 'session-time';
+    const xLabel = isSession
+      ? 'Mean Normalized Session Time (s)'
+      : 'Mean P90 Prefill TPS per user (tok/s)';
+    // Roofline corner = which corner the curve sweeps from / toward, matching
+    // existing chart-config convention:
+    //  - session-time: as concurrency rises, session time AND throughput both
+    //    grow → curve goes bottom-left → top-right → upper_right.
+    //  - prefill-tps:  as concurrency rises, per-user prefill TPS falls while
+    //    total throughput rises → curve goes top-left → bottom-right →
+    //    upper_left.
+    const rooflineCorner = isSession ? 'upper_right' : 'upper_left';
+    return visibleGraphs.map((g) => {
+      const overriddenChartDef = {
+        ...g.chartDefinition,
+        x_label: xLabel,
+        // y_latency_limit was meant to suppress fixed-seq overload outliers on
+        // the TTFT axis — irrelevant for these derived axes.
+        y_latency_limit: undefined,
+        [`${selectedYAxisMetric}_roofline` as keyof typeof g.chartDefinition]: rooflineCorner,
+      };
+      const data = g.data
+        .map((d) => {
+          if (typeof d.id !== 'number') return null;
+          const m = derivedMetrics[d.id];
+          const v = isSession ? m?.normalized_session_time_s : m?.mean_p90_prefill_tps_per_user;
+          if (v === null || v === undefined || !Number.isFinite(v)) return null;
+          return { ...d, x: v };
+        })
+        .filter((d): d is NonNullable<typeof d> => d !== null);
+      return { ...g, chartDefinition: overriddenChartDef, data };
+    });
+  }, [useDerived, visibleGraphs, derivedMetrics, selectedXAxisMode, selectedYAxisMetric]);
 
   const displayGraphs = isFirstLoad
     ? [
@@ -318,9 +390,9 @@ export default function ChartDisplay() {
           <Skeleton className="h-[600px] w-full" />
         </Card>,
       ]
-    : visibleGraphs.length === 0
+    : renderableGraphs.length === 0
       ? []
-      : visibleGraphs.map((graph, graphIndex) => {
+      : renderableGraphs.map((graph, graphIndex) => {
           const isTimelineMode = Boolean(
             selectedDateRange.startDate && selectedDateRange.endDate && selectedGPUs.length > 0,
           );
@@ -396,11 +468,16 @@ export default function ChartDisplay() {
                               return 'vs. P90 Time To First Token';
                             }
 
-                            // For e2e chart: heading is driven by the TTFT / E2E button
-                            // selection above the card, so the inline dropdown is gone.
-                            // The metric carries the percentile prefix (e.g. p90_ttft,
-                            // median_ttft for fixed-seq, p75_ttft for agentic+p75).
+                            // For e2e chart: heading is driven by the buttons above the
+                            // card. Derived-metric modes win first; otherwise the metric
+                            // carries the percentile prefix (e.g. p90_ttft, median_ttft).
                             if (graph.chartDefinition.chartType === 'e2e') {
+                              if (selectedXAxisMode === 'session-time') {
+                                return 'vs. Mean Normalized Session Time';
+                              }
+                              if (selectedXAxisMode === 'prefill-tps') {
+                                return 'vs. Mean P90 Prefill TPS / user';
+                              }
                               const isAgentic = sequenceKind(selectedSequence) === 'agentic';
                               if (selectedE2eXAxisMetric?.endsWith('_ttft')) {
                                 const pctl = selectedE2eXAxisMetric.replace(/_ttft$/u, '');
@@ -601,7 +678,14 @@ export default function ChartDisplay() {
         aria-label="Chart x-axis metric"
         data-testid="x-axis-mode-buttons"
       >
-        {X_AXIS_MODE_BUTTONS.map(({ value, label }) => {
+        {X_AXIS_MODE_BUTTONS.filter(({ agenticOnly }) => {
+          if (!agenticOnly) return true;
+          // Before client mount, conditionalize on the server-default kind
+          // (agentic) so SSR + first client render produce identical DOM. After
+          // mount, hide the agentic-only buttons on fixed-seq sequences.
+          if (!mounted) return true;
+          return sequenceKind(selectedSequence) === 'agentic';
+        }).map(({ value, label }) => {
           const isActive = selectedXAxisMode === value;
           return (
             <button

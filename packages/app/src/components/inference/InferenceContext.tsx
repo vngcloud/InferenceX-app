@@ -137,17 +137,32 @@ export function InferenceProvider({
   // computing a kind-based default here would diverge between server and client
   // and cause a hydration mismatch. The scenario-kind default is applied in a
   // post-mount effect below (and a ref tracks whether the user has overridden).
-  const urlXMode = (() => {
+  type XAxisMode = 'ttft' | 'e2e' | 'interactivity' | 'session-time' | 'prefill-tps';
+  const VALID_X_MODES: XAxisMode[] = [
+    'ttft',
+    'e2e',
+    'interactivity',
+    'session-time',
+    'prefill-tps',
+  ];
+  // SSR has no URL access, so seed with a fixed default and apply the URL
+  // value (if any) in a post-mount effect — keeps server + client first render
+  // identical and avoids "didn't match" hydration warnings when the URL holds
+  // a non-default mode.
+  const [selectedXAxisMode, setSelectedXAxisMode] = useState<XAxisMode>('ttft');
+  const xAxisModeFromUrlRef = useRef(false);
+  useEffect(() => {
+    if (xAxisModeFromUrlRef.current) return;
     const v = getUrlParam('i_xmode');
-    return v === 'ttft' || v === 'e2e' || v === 'interactivity' ? v : null;
-  })();
-  const [selectedXAxisMode, setSelectedXAxisMode] = useState<'ttft' | 'e2e' | 'interactivity'>(
-    urlXMode ?? 'ttft',
-  );
-  const xAxisModeFromUrlRef = useRef(urlXMode !== null);
+    if (v && (VALID_X_MODES as string[]).includes(v)) {
+      xAxisModeFromUrlRef.current = true;
+      setSelectedXAxisMode(v as XAxisMode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Wrap the setter so a button click also aligns selectedE2eXAxisMetric — the
   // existing useChartData pipeline keys off that flag for the e2e chart's x-axis.
-  const handleSetXAxisMode = useCallback((mode: 'ttft' | 'e2e' | 'interactivity') => {
+  const handleSetXAxisMode = useCallback((mode: XAxisMode) => {
     xAxisModeFromUrlRef.current = true;
     setSelectedXAxisMode(mode);
     // The e2e chart's x-axis metric is reconciled in a separate effect below,
@@ -215,12 +230,37 @@ export function InferenceProvider({
   const latestDate = availableDates.length > 0 ? availableDates.at(-1) : undefined;
 
   // Run-selector scoping: only constrain benchmark data to a specific run when
-  // the current date has >1 runs (ambiguous case). When there's one run per
-  // date, the picker is informational and the SQL's latest-per-config logic
-  // already returns that run's data — passing runId would needlessly narrow
-  // the cross-date config view.
-  const multipleRunsOnDate = availableRuns && Object.keys(availableRuns).length > 1;
-  const benchmarkRunId = multipleRunsOnDate && selectedRunId ? String(selectedRunId) : undefined;
+  // there's actually a disambiguation to make for the CURRENT model. The
+  // raw `availableRuns` is across ALL models on the date, so the picker may
+  // auto-select a run that produced nothing for the current model — passing
+  // that runId would return zero rows and hide the chart entirely.
+  // Compute the set of runs whose CHANGELOG explicitly mentions this model +
+  // precision. We can't reuse `filterRunsByModel` here because it has a
+  // fallback that returns all runs when nothing matches (so the picker still
+  // renders) — which would make us pass a runId that produced no rows for
+  // the current model, hiding the chart.
+  const modelPrefixesEarly = Object.entries(MODEL_PREFIX_MAPPING)
+    .filter(([, model]) => model === selectedModel)
+    .map(([prefix]) => prefix);
+  const runIdsWithModelChangelog: string[] = [];
+  if (availableRuns) {
+    for (const [runId, runInfo] of Object.entries(availableRuns)) {
+      if (!runInfo.changelog) continue;
+      const matches = runInfo.changelog.entries.some((entry) =>
+        entry.config_keys.some((key) => {
+          const parts = key.split('-');
+          return modelPrefixesEarly.includes(parts[0]!) && effectivePrecisions.includes(parts[1]!);
+        }),
+      );
+      if (matches) runIdsWithModelChangelog.push(runId);
+    }
+  }
+  const benchmarkRunId =
+    selectedRunId &&
+    runIdsWithModelChangelog.length > 1 &&
+    runIdsWithModelChangelog.includes(selectedRunId)
+      ? String(selectedRunId)
+      : undefined;
 
   const {
     graphs,
@@ -367,11 +407,30 @@ export function InferenceProvider({
   useEffect(() => {
     const kind = sequenceKind(effectiveSequence);
     const isInitialMount = lastSeqKindRef.current === null;
-    if (!isInitialMount && lastSeqKindRef.current === kind) return;
+    const isAgenticOnlyMode =
+      selectedXAxisMode === 'session-time' || selectedXAxisMode === 'prefill-tps';
+    // On a stale render where kind hasn't changed, bail unless the current
+    // mode is agentic-only and we just landed on a fixed-seq scenario — in
+    // that case force the snap so the chart doesn't try to plot trace-derived
+    // metrics against rows that have no trace_replay.
+    if (!isInitialMount && lastSeqKindRef.current === kind) {
+      if (kind === 'fixed-seq' && isAgenticOnlyMode) {
+        handleSetXAxisMode('interactivity');
+      }
+      return;
+    }
     lastSeqKindRef.current = kind;
-    if (isInitialMount && xAxisModeFromUrlRef.current) return;
+    if (
+      isInitialMount &&
+      xAxisModeFromUrlRef.current &&
+      !(kind === 'fixed-seq' && isAgenticOnlyMode)
+    ) {
+      // URL-restored agentic-only mode on a fixed-seq sequence makes no sense
+      // — fall through to the default snap below.
+      return;
+    }
     handleSetXAxisMode(kind === 'agentic' ? 'ttft' : 'interactivity');
-  }, [effectiveSequence, handleSetXAxisMode]);
+  }, [effectiveSequence, selectedXAxisMode, handleSetXAxisMode]);
 
   // Reconcile selectedE2eXAxisMetric whenever the mode, sequence kind, or
   // agentic percentile changes. For fixed-seq the JSONB only carries

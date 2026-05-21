@@ -544,13 +544,17 @@ export interface InferenceChartContextType {
   setSelectedE2eXAxisMetric: (metric: string | null) => void;
   /**
    * Which chart variant the user wants to see — the inference card shows one chart
-   * at a time, picked by the big TTFT / E2E Latency / Interactivity buttons.
+   * at a time, picked by the big buttons above the chart.
    * - 'ttft'          → e2e chartType with x-axis forced to p90_ttft
    * - 'e2e'           → e2e chartType with the chart-config default x-axis (median_e2el / p90_e2el)
    * - 'interactivity' → interactivity chartType (x = median_intvty / p90_intvty)
+   * - 'session-time'  → agentic-only; x = mean-normalized session time (live-computed from trace blobs)
+   * - 'prefill-tps'   → agentic-only; x = mean of P90 prefill TPS/user per session
    */
-  selectedXAxisMode: 'ttft' | 'e2e' | 'interactivity';
-  setSelectedXAxisMode: (mode: 'ttft' | 'e2e' | 'interactivity') => void;
+  selectedXAxisMode: 'ttft' | 'e2e' | 'interactivity' | 'session-time' | 'prefill-tps';
+  setSelectedXAxisMode: (
+    mode: 'ttft' | 'e2e' | 'interactivity' | 'session-time' | 'prefill-tps',
+  ) => void;
   scaleType: 'auto' | 'linear' | 'log';
   setScaleType: (type: 'auto' | 'linear' | 'log') => void;
   setIsLegendExpanded: (metric: boolean) => void;
