@@ -350,7 +350,8 @@ export function useChartData(
 
         // Filter to points that have the selected metric, then remap x/y
         const hasMetric = filteredData.some((d) => metricKey in d);
-        const isTtftX = xAxisField === 'p90_ttft';
+        const isTtftX = typeof xAxisField === 'string' && xAxisField.endsWith('_ttft');
+        const isAgentic = selectedSequence === Sequence.AgenticTraces;
         const processedData = hasMetric
           ? filteredData
               .filter((d) => metricKey in d)
@@ -365,11 +366,14 @@ export function useChartData(
                   roof,
                 };
               })
-              // When TTFT is on the x-axis, apply the latency limit to filter overload outliers
-              // (e.g. conc=2048 rows with TTFT > 60s that compress all real data to the far left)
+              // When TTFT is on the x-axis, apply the latency limit to filter
+              // overload outliers (fixed-seq conc=2048 rows with TTFT > 60s that
+              // compress all real data to the far left). Skip for agentic — long
+              // TTFTs there reflect real workloads (multi-turn, big prompts).
               .filter(
                 (d) =>
                   !isTtftX ||
+                  isAgentic ||
                   !chartDefinition.y_latency_limit ||
                   d.x <= chartDefinition.y_latency_limit,
               )
