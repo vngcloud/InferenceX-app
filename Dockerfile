@@ -14,9 +14,16 @@
 
 FROM node:24-bookworm-slim AS builder
 
+# git is required: the root package.json's `prepare` script runs
+# `is-ci || lefthook install`, and lefthook shells out to git. Setting
+# CI=true makes is-ci short-circuit so lefthook is skipped, but a few
+# transitive deps (cypress, posthog cli) also do git probes during their
+# postinstall — cheaper to just have git available.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
+
+ENV CI=true
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
