@@ -1,0 +1,32 @@
+# Keep build context small — anything not needed to run `pnpm install` and
+# `pnpm build` belongs here. Source under packages/ is the only thing the
+# Dockerfile actually needs.
+
+.git
+.github
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt inside the image)
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+coverage
+**/coverage
+
+# Local-only state
+.env
+.env.local
+.env.*.local
+
+# Editor / OS junk
+.idea
+.vscode
+.DS_Store
+
+# Test artifacts
+cypress/videos
+cypress/screenshots

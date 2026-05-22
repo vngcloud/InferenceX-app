@@ -1,0 +1,80 @@
+name: deploy
+
+# Push to master → self-hosted dashboard runner rebuilds the image and
+# restarts the stack. `workflow_dispatch` lets you re-deploy without a
+# code change (e.g. to pick up an .env edit).
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Only one deploy at a time — newer pushes supersede in-progress runs so
+# we don't queue up redundant rebuilds.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    env:
+      COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
+      IMAGE_TAG: inferencex-app:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        # Tag both :latest (consumed by compose) and :<sha> so we can
+        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
+        # then `docker compose up -d` without re-pulling the source.
+        run: |
+          docker build \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app:${GITHUB_SHA::7}" \
+            .
+
+      - name: Start postgres + wait for healthy
+        run: |
+          docker compose -f "$COMPOSE_FILE" up -d postgres
+          # Compose names containers `<project>-<service>-N`; project is
+          # `inferencex` (set via `name:` in compose).
+          for i in {1..30}; do
+            status=$(docker inspect inferencex-postgres-1 --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+            echo "postgres health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo "postgres failed to become healthy" >&2
+          docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
+          exit 1
+
+      - name: Run DB migrations
+        # `pnpm admin:db:migrate` is idempotent — already-applied migrations
+        # are skipped. Safe to run on every deploy.
+        run: docker compose -f "$COMPOSE_FILE" run --rm app pnpm admin:db:migrate
+
+      - name: Recreate app + nginx
+        # Compose detects the new image and recreates the app container.
+        # nginx restarts as a dependency so it picks up the fresh upstream.
+        run: docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+      - name: Smoke-test
+        run: |
+          for i in {1..30}; do
+            if curl -fsS -o /dev/null http://127.0.0.1/; then
+              echo "app responding on :80"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app did not respond" >&2
+          docker compose -f "$COMPOSE_FILE" logs app | tail -50
+          exit 1
+
+      - name: Prune dangling images
+        # Without this, /var/lib/docker grows by ~1 GB per deploy as old
+        # builder + runtime layers pile up. Keep tagged images (including
+        # the per-sha tags above) for rollback.
+        if: always()
+        run: docker image prune -f
