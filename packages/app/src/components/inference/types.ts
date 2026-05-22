@@ -293,9 +293,10 @@ export interface ChartDefinition {
   y_measuredAvgPower?: string;
   y_measuredAvgPower_label?: string;
   y_measuredAvgPower_title?: string;
-  // Intentionally no roofline for avg power: there's no universal "better"
-  // direction for absolute draw. Omitting roofline causes computeAllRooflines
-  // to skip the metric (it requires a direction); points render plain.
+  // Not explicitly set in the config — ScatterGraph falls back to lower_right
+  // (matches "lower power at the same interactivity is more efficient").
+  // The field stays in the type for parity with the other y_* metrics and
+  // so a future config can override the default.
   y_measuredAvgPower_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
   y_measuredJPerOutputToken?: string;
   y_measuredJPerOutputToken_label?: string;
