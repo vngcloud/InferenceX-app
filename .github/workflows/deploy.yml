@@ -59,6 +59,11 @@ jobs:
         # /opt/docker-compose/.env as GITHUB_TOKEN so the app container can
         # authenticate `gh api` during `pnpm admin:db:ingest:run`.
         # Rotation = update the secret + redeploy.
+        #
+        # .env is owned by the runner user and already 0600 — write directly
+        # (no sudo, no chown). `docker compose` runs as the runner user, so
+        # rewriting it as root would break compose's ability to read .env on
+        # the next step.
         env:
           INGEST_GITHUB_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
         run: |
@@ -66,16 +71,15 @@ jobs:
             echo "INGEST_GITHUB_TOKEN secret is unset; leaving .env untouched. Ingest will fail to auth until this is set." >&2
             exit 0
           fi
-          # Atomic rewrite: strip any old GITHUB_TOKEN line, append the new
-          # one, mv into place. Same filesystem → mv is atomic, so .env is
-          # either fully-old or fully-new even on crash.
+          # Atomic rewrite: write to .env.new with 0600, then mv into place.
+          # Same filesystem → mv is atomic, so .env is either fully-old or
+          # fully-new even on crash.
+          install -m 0600 /dev/null /opt/docker-compose/.env.new
           {
-            sudo grep -v '^GITHUB_TOKEN=' /opt/docker-compose/.env || true
+            grep -v '^GITHUB_TOKEN=' /opt/docker-compose/.env || true
             printf 'GITHUB_TOKEN=%s\n' "$INGEST_GITHUB_TOKEN"
-          } | sudo tee /opt/docker-compose/.env.new >/dev/null
-          sudo chown root:root /opt/docker-compose/.env.new
-          sudo chmod 0600 /opt/docker-compose/.env.new
-          sudo mv -f /opt/docker-compose/.env.new /opt/docker-compose/.env
+          } >> /opt/docker-compose/.env.new
+          mv -f /opt/docker-compose/.env.new /opt/docker-compose/.env
 
       - name: Recreate app + nginx
         # Compose detects the new image and recreates the app container.
