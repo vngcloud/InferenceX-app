@@ -54,6 +54,29 @@ jobs:
         # are skipped. Safe to run on every deploy.
         run: docker compose -f "$COMPOSE_FILE" run --rm app pnpm admin:db:migrate
 
+      - name: Sync GITHUB_TOKEN into compose .env
+        # Writes the INGEST_GITHUB_TOKEN repo secret into
+        # /opt/docker-compose/.env as GITHUB_TOKEN so the app container can
+        # authenticate `gh api` during `pnpm admin:db:ingest:run`.
+        # Rotation = update the secret + redeploy.
+        env:
+          INGEST_GITHUB_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$INGEST_GITHUB_TOKEN" ]; then
+            echo "INGEST_GITHUB_TOKEN secret is unset; leaving .env untouched. Ingest will fail to auth until this is set." >&2
+            exit 0
+          fi
+          # Atomic rewrite: strip any old GITHUB_TOKEN line, append the new
+          # one, mv into place. Same filesystem → mv is atomic, so .env is
+          # either fully-old or fully-new even on crash.
+          {
+            sudo grep -v '^GITHUB_TOKEN=' /opt/docker-compose/.env || true
+            printf 'GITHUB_TOKEN=%s\n' "$INGEST_GITHUB_TOKEN"
+          } | sudo tee /opt/docker-compose/.env.new >/dev/null
+          sudo chown root:root /opt/docker-compose/.env.new
+          sudo chmod 0600 /opt/docker-compose/.env.new
+          sudo mv -f /opt/docker-compose/.env.new /opt/docker-compose/.env
+
       - name: Recreate app + nginx
         # Compose detects the new image and recreates the app container.
         # nginx restarts as a dependency so it picks up the fresh upstream.

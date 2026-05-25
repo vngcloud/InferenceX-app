@@ -54,6 +54,23 @@ RUN DATABASE_READONLY_URL=postgresql://x:x@x:5432/x \
 
 FROM node:24-bookworm-slim AS runtime
 
+# gh + unzip are used by `pnpm admin:db:ingest:run`, which shells out to
+# `gh api` to list & download a workflow run's artifacts and then unzips
+# them. gh comes from the official GitHub apt repo; ca-certificates is
+# kept around because gh needs it for HTTPS to api.github.com at runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg unzip \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
