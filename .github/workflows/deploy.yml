@@ -52,7 +52,10 @@ jobs:
       - name: Run DB migrations
         # `pnpm admin:db:migrate` is idempotent — already-applied migrations
         # are skipped. Safe to run on every deploy.
-        run: docker compose -f "$COMPOSE_FILE" run --rm app pnpm admin:db:migrate
+        # --yes: skip the y/N confirm (we're non-interactive in CI).
+        # --no-ssl: local compose postgres doesn't speak TLS; admin scripts
+        # default to `ssl: require` regardless of DATABASE_SSL env.
+        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
 
       - name: Sync GITHUB_TOKEN into compose .env
         # Writes the INGEST_GITHUB_TOKEN repo secret into
