@@ -31,9 +31,9 @@ export const TAB_META: Record<TabKey, { title: string; description: string }> = 
       'Compare AI inference latency, throughput, and time-to-first-token across GPUs and providers. Real benchmarks on NVIDIA GB200, H100, AMD MI355X, and more.',
   },
   evaluation: {
-    title: 'LLM Evaluation Results',
+    title: 'Recipe Comparison',
     description:
-      'LLM evaluation scores and accuracy benchmarks. Compare model quality across providers with standardized evaluation metrics.',
+      'Compare runtime serving knobs (speculative decoding, MTP layer count, kv-cache dtype, …) on the same deployment. Speedup, TPOT, acceptance rate, accuracy delta side-by-side.',
   },
   historical: {
     title: 'Historical Inference Trends',

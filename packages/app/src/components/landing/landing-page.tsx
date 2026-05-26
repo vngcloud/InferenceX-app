@@ -24,9 +24,9 @@ const WORKFLOW: WorkflowEntry[] = [
   },
   {
     href: '/evaluation',
-    label: 'Accuracy Evals',
+    label: 'Recipe Compare',
     description:
-      'Check accuracy of an FP8 / MTP / quantized variant against the baseline. gsm8k and friends, side-by-side with throughput.',
+      'Compare runtime knobs (MTP layers, speculative decoding, kv-cache dtype, …) on the same deployment. Speedup, TPOT, acceptance rate, accuracy delta side-by-side.',
   },
   {
     href: '/historical',
