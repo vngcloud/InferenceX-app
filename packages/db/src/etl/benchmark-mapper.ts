@@ -44,6 +44,10 @@ const NON_METRIC_KEYS = new Set([
   // techniques (legacy + new-shape) — extracted into BenchmarkParams.techniques
   'spec_decoding',
   'techniques',
+  'num_speculative_tokens',
+  'max_num_batched_tokens',
+  'kv_cache_dtype',
+  'prefix_cache',
   // v1 parallelism
   'tp',
   'ep',
