@@ -1,14 +1,20 @@
 'use client';
 
 import { ExternalLink } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import { useGlobalFilters } from '@/components/GlobalFilterContext';
 import { useBenchmarks } from '@/hooks/api/use-benchmarks';
 import { useEvaluations } from '@/hooks/api/use-evaluations';
+import { track } from '@/lib/analytics';
 
-import { buildRecipeRows, type RecipeRow } from './recipe-data';
+import {
+  buildRecipeRows,
+  TECHNIQUE_CATEGORIES,
+  type RecipeRow,
+  type TechniqueCategory,
+} from './recipe-data';
 
 function fmtNum(n: number | null, digits = 2, suffix = ''): string {
   if (n === null || !Number.isFinite(n)) return '—';
@@ -31,6 +37,12 @@ const COLUMNS: DataTableColumn<RecipeRow>[] = [
     align: 'left',
     cell: (r) => r.hardware,
     sortValue: (r) => r.hardware,
+  },
+  {
+    header: 'Topology',
+    align: 'left',
+    cell: (r) => <span className="whitespace-nowrap font-mono text-xs">{r.topology}</span>,
+    sortValue: (r) => `${r.numPrefillGpu + r.numDecodeGpu}_${r.prefillTp}_${r.disagg ? 1 : 0}`,
   },
   {
     header: 'Precision',
@@ -132,6 +144,7 @@ const COLUMNS: DataTableColumn<RecipeRow>[] = [
 
 export default function RecipeComparison() {
   const { selectedModel, selectedRunDate } = useGlobalFilters();
+  const [category, setCategory] = useState<TechniqueCategory | 'all'>('all');
 
   const {
     data: benchmarks,
@@ -140,7 +153,7 @@ export default function RecipeComparison() {
   } = useBenchmarks(selectedModel, selectedRunDate || undefined);
   const { data: evals, isLoading: evalLoading, error: evalError } = useEvaluations();
 
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     if (!benchmarks || benchmarks.length === 0) return [];
     const built = buildRecipeRows(benchmarks, evals ?? []);
     // Sort: group rows together, baseline first within each group, then by speedup descending.
@@ -151,18 +164,59 @@ export default function RecipeComparison() {
     });
   }, [benchmarks, evals]);
 
+  // Only show category chips for axes that actually have rows. Avoids empty
+  // chips that lead to a blank table when selected.
+  const availableCategories = useMemo(() => {
+    const seen = new Set<TechniqueCategory>(allRows.map((r) => r.category));
+    return TECHNIQUE_CATEGORIES.filter((c) => c.value === 'all' || seen.has(c.value));
+  }, [allRows]);
+
+  const rows = useMemo(() => {
+    if (category === 'all') return allRows;
+    // Always include baseline rows in any non-"all" filter so the user has a
+    // reference variant on the page if one exists in the group.
+    return allRows.filter((r) => r.category === category || r.isBaseline);
+  }, [allRows, category]);
+
   const loading = bmkLoading || evalLoading;
   const error = bmkError ?? evalError;
 
   return (
     <section className="container mx-auto flex flex-col gap-4 px-4 py-6 lg:px-8">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold">Recipe Comparison</h1>
-        <p className="text-sm text-muted-foreground">
-          Compare runtime knobs (speculative decoding, MTP layers, …) on the same deployment.
-          Speedup is computed against the variant whose <code>techniques</code> is empty within the
-          same (model × hw × precision × isl/osl × conc) group.
-        </p>
+      <header className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold">Recipe Comparison</h1>
+          <p className="text-sm text-muted-foreground">
+            Compare runtime knobs (speculative decoding, batch size, …) on the same deployment.
+            Speedup is computed against the variant whose <code>techniques</code> is empty within
+            the same (model × topology × precision × isl/osl × conc) group.
+          </p>
+        </div>
+        {availableCategories.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Filter by knob:</span>
+            {availableCategories.map((c) => {
+              const active = category === c.value;
+              return (
+                <button
+                  key={c.value}
+                  type="button"
+                  onClick={() => {
+                    setCategory(c.value);
+                    track('evaluation_recipe_category_changed', { category: c.value });
+                  }}
+                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                    active
+                      ? 'border-brand bg-brand text-primary-foreground'
+                      : 'border-border bg-card hover:bg-accent'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </header>
 
       {error && (
