@@ -17,6 +17,28 @@ import type { BenchmarkRow, EvalRow } from '@/lib/api';
 
 const ACCURACY_KEY = 'em_strict';
 
+/**
+ * Recipe-comparison filter axes. Each row is tagged with one category so the
+ * UI can show e.g. only spec-decoding variants without mixing in batch-size
+ * sweeps.
+ */
+export type TechniqueCategory =
+  | 'baseline'
+  | 'spec-decoding'
+  | 'batch-size'
+  | 'kv-cache'
+  | 'prefix-cache'
+  | 'other';
+
+export const TECHNIQUE_CATEGORIES: { value: TechniqueCategory | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'spec-decoding', label: 'Spec decoding' },
+  { value: 'batch-size', label: 'Batch size' },
+  { value: 'kv-cache', label: 'KV cache' },
+  { value: 'prefix-cache', label: 'Prefix cache' },
+  { value: 'baseline', label: 'Baseline only' },
+];
+
 export interface RecipeRow {
   groupKey: string;
   /** Identity (constant within a group). */
@@ -24,12 +46,21 @@ export interface RecipeRow {
   hardware: string;
   framework: string;
   precision: string;
+  /** Parallelism dims that distinguish 1× vs 2× topology, disagg, etc. */
+  numPrefillGpu: number;
+  numDecodeGpu: number;
+  prefillTp: number;
+  decodeTp: number;
+  disagg: boolean;
+  /** Pretty-printed topology, e.g. "2× (TP=2)", "1P+1D (TP=2/2)". */
+  topology: string;
   isl: number;
   osl: number;
   conc: number;
   /** Variant. */
   techniques: Record<string, string | number>;
   variantLabel: string;
+  category: TechniqueCategory;
   isBaseline: boolean;
   /** Measurements. */
   tputPerGpu: number;
@@ -48,9 +79,65 @@ export interface RecipeRow {
 }
 
 function groupKey(
-  r: Pick<BenchmarkRow, 'model' | 'hardware' | 'framework' | 'precision' | 'isl' | 'osl' | 'conc'>,
+  r: Pick<
+    BenchmarkRow,
+    | 'model'
+    | 'hardware'
+    | 'framework'
+    | 'precision'
+    | 'isl'
+    | 'osl'
+    | 'conc'
+    | 'num_prefill_gpu'
+    | 'num_decode_gpu'
+    | 'prefill_tp'
+    | 'decode_tp'
+    | 'disagg'
+  >,
 ): string {
-  return `${r.model}|${r.hardware}|${r.framework}|${r.precision}|${r.isl}|${r.osl}|${r.conc}`;
+  // Topology dims (num_*_gpu, *_tp, disagg) are part of the deployment
+  // context — a 1× H100 and a 2× H100 run are different deployments and must
+  // not collapse into the same row group.
+  return [
+    r.model,
+    r.hardware,
+    r.framework,
+    r.precision,
+    r.isl,
+    r.osl,
+    r.conc,
+    r.num_prefill_gpu,
+    r.num_decode_gpu,
+    r.prefill_tp,
+    r.decode_tp,
+    r.disagg ? '1' : '0',
+  ].join('|');
+}
+
+function topologyLabel(r: {
+  num_prefill_gpu: number;
+  num_decode_gpu: number;
+  prefill_tp: number;
+  decode_tp: number;
+  disagg: boolean;
+}): string {
+  if (r.disagg) {
+    return `${r.num_prefill_gpu}P+${r.num_decode_gpu}D (TP=${r.prefill_tp}/${r.decode_tp})`;
+  }
+  return `${r.num_prefill_gpu}× (TP=${r.prefill_tp})`;
+}
+
+/**
+ * Tag a techniques jsonb with the category that best describes the knob being
+ * tuned. Used to drive the filter chip group on /evaluation.
+ */
+export function categorizeTechniques(t: Record<string, string | number>): TechniqueCategory {
+  if (Object.keys(t).length === 0) return 'baseline';
+  if (typeof t.spec_method === 'string' && t.spec_method !== 'none') return 'spec-decoding';
+  if (t.max_num_batched_tokens !== undefined) return 'batch-size';
+  if (t.kv_cache_dtype !== undefined) return 'kv-cache';
+  if (t.prefix_cache !== undefined) return 'prefix-cache';
+  return 'other';
 }
 
 function accuracyKey(r: {
@@ -130,18 +217,26 @@ export function buildRecipeRows(benchmarks: BenchmarkRow[], evals: EvalRow[]): R
         baseline && baseline.metrics?.median_tpot
           ? tpot / Number(baseline.metrics.median_tpot)
           : null;
+      const techniques = r.techniques ?? {};
       out.push({
         groupKey: k,
         model: r.model,
         hardware: r.hardware,
         framework: r.framework,
         precision: r.precision,
+        numPrefillGpu: r.num_prefill_gpu,
+        numDecodeGpu: r.num_decode_gpu,
+        prefillTp: r.prefill_tp,
+        decodeTp: r.decode_tp,
+        disagg: r.disagg,
+        topology: topologyLabel(r),
         isl: r.isl,
         osl: r.osl,
         conc: r.conc,
-        techniques: r.techniques ?? {},
-        variantLabel: describeTechniques(r.techniques ?? {}),
-        isBaseline: isBaseline(r.techniques ?? {}),
+        techniques,
+        variantLabel: describeTechniques(techniques),
+        category: categorizeTechniques(techniques),
+        isBaseline: isBaseline(techniques),
         tputPerGpu: tput,
         medianTpot: tpot,
         medianIntvty: intvty,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { BenchmarkRow, EvalRow } from '@/lib/api';
 
-import { buildRecipeRows, describeTechniques } from './recipe-data';
+import { buildRecipeRows, categorizeTechniques, describeTechniques } from './recipe-data';
 
 function bmk(overrides: Partial<BenchmarkRow>): BenchmarkRow {
   return {
@@ -140,6 +140,43 @@ describe('buildRecipeRows', () => {
     };
     const rows = buildRecipeRows([bmk({ techniques: {} })], [ev]);
     expect(rows[0]?.accuracy).toBeCloseTo(0.842, 5);
+  });
+
+  it('separates 1× and 2× H100 into distinct groups via topology in groupKey', () => {
+    const rows = buildRecipeRows(
+      [
+        bmk({
+          num_prefill_gpu: 1,
+          num_decode_gpu: 1,
+          prefill_tp: 1,
+          decode_tp: 1,
+          techniques: { max_num_batched_tokens: 4096 },
+        }),
+        bmk({
+          num_prefill_gpu: 2,
+          num_decode_gpu: 2,
+          prefill_tp: 2,
+          decode_tp: 2,
+          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
+        }),
+      ],
+      [],
+    );
+    expect(new Set(rows.map((r) => r.groupKey)).size).toBe(2);
+    const oneXh = rows.find((r) => r.numPrefillGpu === 1)!;
+    const twoXh = rows.find((r) => r.numPrefillGpu === 2)!;
+    expect(oneXh.topology).toBe('1× (TP=1)');
+    expect(twoXh.topology).toBe('2× (TP=2)');
+  });
+
+  it('tags rows with technique category for filter chips', () => {
+    expect(categorizeTechniques({})).toBe('baseline');
+    expect(categorizeTechniques({ spec_method: 'mtp', num_speculative_tokens: 4 })).toBe(
+      'spec-decoding',
+    );
+    expect(categorizeTechniques({ max_num_batched_tokens: 4096 })).toBe('batch-size');
+    expect(categorizeTechniques({ kv_cache_dtype: 'fp8' })).toBe('kv-cache');
+    expect(categorizeTechniques({ prefix_cache: 'true' })).toBe('prefix-cache');
   });
 
   it('reads acceptance rate from variant metrics', () => {
