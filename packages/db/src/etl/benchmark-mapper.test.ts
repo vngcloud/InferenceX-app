@@ -349,19 +349,19 @@ describe('mapBenchmarkRow', () => {
     it('reads new-shape techniques object directly', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(
-        makeV1Row({ techniques: { spec_method: 'mtp', mtp_layers: 4 } }),
+        makeV1Row({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 } }),
         tracker,
       );
 
-      expect(result!.techniques).toEqual({ spec_method: 'mtp', mtp_layers: 4 });
+      expect(result!.techniques).toEqual({ spec_method: 'mtp', num_speculative_tokens: 4 });
     });
 
-    it('infers mtp_layers from gemma4n4/gemma4n6 model prefix (legacy)', () => {
+    it('infers num_speculative_tokens from gemma4n4/gemma4n6 model prefix (legacy)', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(makeV1Row({ infmax_model_prefix: 'gemma4n6' }), tracker);
 
       expect(result!.config.model).toBe('gemma4');
-      expect(result!.techniques.mtp_layers).toBe(6);
+      expect(result!.techniques.num_speculative_tokens).toBe(6);
       expect(result!.techniques.spec_method).toBe('mtp');
     });
   });

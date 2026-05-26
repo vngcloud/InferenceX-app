@@ -41,14 +41,16 @@ const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/iu;
 const PREFIX_ALIASES: Record<string, string> = {
   gptoss: 'gptoss120b',
   dsv4pro: 'dsv4',
-  // Gemma-4 MTP variants encode layer count in the prefix on the benchmark side.
-  // Layer count itself lands in techniques.mtp_layers (see parseTechniques).
+  // Legacy Gemma-4 MTP variants encoded layer count in the prefix
+  // (`gemma4n4`/`gemma4n6`). New artifacts emit `gemma4` + a separate
+  // `num_speculative_tokens` field; we keep the prefix aliases here as a
+  // fallback for older runs (see parseTechniques).
   gemma4n4: 'gemma4',
   gemma4n6: 'gemma4',
 };
 
-/** Prefix → mtp_layers count, when the variant smuggles it into the model prefix. */
-const PREFIX_TO_MTP_LAYERS: Record<string, number> = {
+/** Prefix → num_speculative_tokens, when the legacy artifact smuggled N into the model prefix. */
+const PREFIX_TO_NUM_SPEC_TOKENS: Record<string, number> = {
   gemma4n4: 4,
   gemma4n6: 6,
 };
@@ -183,18 +185,26 @@ export function normalizeSpecMethod(spec: any): string {
 }
 
 /** Known technique keys we promote into the techniques jsonb explicitly. */
-const TECHNIQUE_KEYS = ['spec_method', 'mtp_layers', 'kv_cache_dtype', 'prefix_cache'] as const;
+const TECHNIQUE_KEYS = [
+  'spec_method',
+  'num_speculative_tokens',
+  'max_num_batched_tokens',
+  'kv_cache_dtype',
+  'prefix_cache',
+] as const;
 
 /**
  * Build the per-measurement `techniques` jsonb from a raw artifact row.
  *
- * New-shape artifacts emit a top-level `techniques` object directly:
- *   { "techniques": { "spec_method": "mtp", "mtp_layers": 4 } }
+ * The new-shape artifact emits the technique fields at the **top level** of
+ * each row (not nested in a `techniques` object), e.g.:
+ *   { "spec_decoding": "mtp", "num_speculative_tokens": 6, "max_num_batched_tokens": 4096, … }
  *
- * Legacy-shape artifacts emit a top-level `spec_decoding` field and encode
- * the MTP layer count in the model prefix (`gemma4n4`, `gemma4n6`); both are
- * coerced into the new shape here so the rest of the pipeline only sees one
- * format. Empty/absent values are dropped (no `spec_method: 'none'` keys).
+ * For forward-compat we also accept a nested `techniques: { ... }` object.
+ *
+ * Legacy artifacts (pre-rename) smuggled the layer count into the model prefix
+ * (`gemma4n4`, `gemma4n6`); we keep that fallback so older runs still ingest.
+ * Empty/absent values are dropped (no `spec_method: 'none'` keys).
  *
  * @param row - Raw artifact dict.
  * @returns Techniques jsonb. May be empty (`{}`) when no knobs were tuned.
@@ -202,16 +212,26 @@ const TECHNIQUE_KEYS = ['spec_method', 'mtp_layers', 'kv_cache_dtype', 'prefix_c
 export function parseTechniques(row: Record<string, any>): Record<string, string | number> {
   const out: Record<string, string | number> = {};
 
-  // New-shape: top-level techniques object.
+  const setIfPresent = (key: (typeof TECHNIQUE_KEYS)[number], v: any) => {
+    if (v === undefined || v === null || v === '') return;
+    out[key] = typeof v === 'number' ? v : String(v).toLowerCase();
+  };
+
+  // Forward-compat: nested `techniques` object.
   if (row.techniques && typeof row.techniques === 'object') {
     for (const k of TECHNIQUE_KEYS) {
-      const v = (row.techniques as Record<string, any>)[k];
-      if (v === undefined || v === null || v === '') continue;
-      out[k] = typeof v === 'number' ? v : String(v).toLowerCase();
+      setIfPresent(k, (row.techniques as Record<string, any>)[k]);
     }
   }
 
-  // Legacy fallback: spec_decoding at top level → techniques.spec_method.
+  // New-shape: technique fields at top level.
+  setIfPresent('num_speculative_tokens', row.num_speculative_tokens);
+  setIfPresent('max_num_batched_tokens', row.max_num_batched_tokens);
+  setIfPresent('kv_cache_dtype', row.kv_cache_dtype);
+  setIfPresent('prefix_cache', row.prefix_cache);
+
+  // spec_decoding is the canonical top-level field name; map to spec_method
+  // unless we already pulled one out of the nested techniques object.
   if (!('spec_method' in out)) {
     const legacy = row.spec_decoding;
     if (legacy && legacy !== '' && String(legacy).toLowerCase() !== 'none') {
@@ -219,13 +239,13 @@ export function parseTechniques(row: Record<string, any>): Record<string, string
     }
   }
 
-  // Legacy fallback: MTP layer count smuggled into the model prefix.
-  if (!('mtp_layers' in out)) {
+  // Legacy fallback: layer count smuggled into the model prefix (gemma4n4/n6).
+  if (!('num_speculative_tokens' in out)) {
     const rawPrefix = String(row.infmax_model_prefix ?? row.model_prefix ?? '').toLowerCase();
-    const layers = PREFIX_TO_MTP_LAYERS[rawPrefix];
-    if (layers !== undefined) {
-      out.mtp_layers = layers;
-      // If spec_method wasn't set elsewhere but we have MTP layers, infer it.
+    const n = PREFIX_TO_NUM_SPEC_TOKENS[rawPrefix];
+    if (n !== undefined) {
+      out.num_speculative_tokens = n;
+      // If spec_method wasn't set elsewhere but we have a layer count, infer mtp.
       if (!('spec_method' in out)) out.spec_method = 'mtp';
     }
   }

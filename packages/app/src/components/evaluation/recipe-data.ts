@@ -67,16 +67,21 @@ function accuracyKey(r: {
  * short, human-readable summary. Insertion order is preserved from
  * `parseTechniques()` so the label is deterministic.
  */
+function specMethodLabel(sm: string): string {
+  // Short codes (mtp, eagle, ntp, medusa) → ALL CAPS; longer names get title-cased.
+  return sm.length <= 6 ? sm.toUpperCase() : sm.charAt(0).toUpperCase() + sm.slice(1);
+}
+
 export function describeTechniques(t: Record<string, string | number>): string {
   const keys = Object.keys(t);
   if (keys.length === 0) return 'baseline';
   const sm = t.spec_method;
-  const mtp = t.mtp_layers;
-  if (typeof sm === 'string' && sm === 'mtp' && typeof mtp === 'number') {
-    return `MTP×${mtp}`;
+  const n = t.num_speculative_tokens;
+  if (typeof sm === 'string' && sm !== 'none' && typeof n === 'number') {
+    return `${specMethodLabel(sm)}×${n}`;
   }
   if (typeof sm === 'string' && sm !== 'none') {
-    return sm.charAt(0).toUpperCase() + sm.slice(1);
+    return specMethodLabel(sm);
   }
   return keys.map((k) => `${k}=${t[k]}`).join(' · ');
 }
