@@ -8,6 +8,7 @@ export enum Model {
   MiniMax_M2_5 = 'MiniMax-M2.5',
   GLM_5 = 'GLM-5',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
+  Gemma_4_31B = 'Gemma-4-31B-it',
 }
 
 export type CategoryTag = 'default' | 'experimental' | 'deprecated' | 'hidden';
@@ -71,6 +72,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
   [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'default' },
   [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
   [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
+  [Model.Gemma_4_31B]: { label: 'Gemma-4 31B', prefix: 'gemma4', category: 'default' },
 };
 
 function modelsByCategory(cat: CategoryTag): ReadonlySet<Model> {
