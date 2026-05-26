@@ -145,6 +145,7 @@ const COLUMNS: DataTableColumn<RecipeRow>[] = [
 export default function RecipeComparison() {
   const { selectedModel } = useGlobalFilters();
   const [category, setCategory] = useState<TechniqueCategory | 'all'>('all');
+  const [topology, setTopology] = useState<string | 'all'>('all');
 
   // Always use the no-date "latest state across all dates" path. The recipe
   // table is meant to surface current recipe variants, not historical data —
@@ -172,12 +173,29 @@ export default function RecipeComparison() {
     return TECHNIQUE_CATEGORIES.filter((c) => c.value === 'all' || seen.has(c.value));
   }, [allRows]);
 
-  const rows = useMemo(() => {
-    if (category === 'all') return allRows;
-    // Always include baseline rows in any non-"all" filter so the user has a
-    // reference variant on the page if one exists in the group.
-    return allRows.filter((r) => r.category === category || r.isBaseline);
-  }, [allRows, category]);
+  // Topology chips — one per distinct deployment shape (e.g. 1× (TP=1),
+  // 2× (TP=2)). Sorted by total GPU count ascending so the chip order is
+  // intuitive: smaller deployments first.
+  const availableTopologies = useMemo(() => {
+    const byKey = new Map<string, { label: string; total: number }>();
+    for (const r of allRows) {
+      if (byKey.has(r.topology)) continue;
+      byKey.set(r.topology, { label: r.topology, total: r.numPrefillGpu + r.numDecodeGpu });
+    }
+    return [...byKey.values()].toSorted((a, b) => a.total - b.total);
+  }, [allRows]);
+
+  const rows = useMemo(
+    () =>
+      allRows.filter((r) => {
+        if (topology !== 'all' && r.topology !== topology) return false;
+        // Always include baseline rows in any non-"all" category filter so the
+        // user has a reference variant on the page if one exists in the group.
+        if (category !== 'all' && r.category !== category && !r.isBaseline) return false;
+        return true;
+      }),
+    [allRows, category, topology],
+  );
 
   const loading = bmkLoading || evalLoading;
   const error = bmkError ?? evalError;
@@ -213,6 +231,45 @@ export default function RecipeComparison() {
                   }`}
                 >
                   {c.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {availableTopologies.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Filter by topology:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setTopology('all');
+                track('evaluation_recipe_topology_changed', { topology: 'all' });
+              }}
+              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                topology === 'all'
+                  ? 'border-brand bg-brand text-primary-foreground'
+                  : 'border-border bg-card hover:bg-accent'
+              }`}
+            >
+              All
+            </button>
+            {availableTopologies.map((t) => {
+              const active = topology === t.label;
+              return (
+                <button
+                  key={t.label}
+                  type="button"
+                  onClick={() => {
+                    setTopology(t.label);
+                    track('evaluation_recipe_topology_changed', { topology: t.label });
+                  }}
+                  className={`whitespace-nowrap rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                    active
+                      ? 'border-brand bg-brand text-primary-foreground'
+                      : 'border-border bg-card hover:bg-accent'
+                  }`}
+                >
+                  {t.label}
                 </button>
               );
             })}
