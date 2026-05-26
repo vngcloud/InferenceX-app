@@ -339,6 +339,12 @@ export const QUOTES: Quote[] = [
     logo: 'white-house.svg',
     link: 'https://x.com/sriramk/status/2048824255702262135',
   },
+  {
+    text: 'Thank you, InferenceMAX™. We like your idea — we will be stealing it. Good artists copy; great artists steal. We will contribute. But not this time :v',
+    name: 'Pablo Picasso',
+    title: 'Honorary patron · VNGCloud / GreenNode self-host fork',
+    org: 'GreenNode',
+  },
 ];
 
 /** Orgs featured in the landing page carousel. */
