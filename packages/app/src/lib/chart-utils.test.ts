@@ -1219,6 +1219,55 @@ describe('createChartDataPoint energy fields', () => {
 });
 
 // ===========================================================================
+// createChartDataPoint — measured power / energy fields (from runner telemetry)
+// ===========================================================================
+describe('createChartDataPoint measured power fields', () => {
+  it('emits measuredAvgPower when avg_power_w is present on the entry', () => {
+    const e = entry({ avg_power_w: 685.5 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredAvgPower!.y).toBe(685.5);
+    expect(point.measuredAvgPower!.roof).toBe(false);
+  });
+
+  it('emits measuredJPerOutputToken when joules_per_output_token is present', () => {
+    const e = entry({ joules_per_output_token: 8.4 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredJPerOutputToken).toBeDefined();
+    expect(point.measuredJPerOutputToken!.y).toBe(8.4);
+  });
+
+  it('omits both fields when neither is on the entry', () => {
+    // Legacy runs predating aggregate_power.py.
+    const point = createChartDataPoint(
+      '2025-01-01',
+      entry(),
+      'median_e2el',
+      'tput_per_gpu',
+      'h100',
+    );
+    expect(point.measuredAvgPower).toBeUndefined();
+    expect(point.measuredJPerOutputToken).toBeUndefined();
+  });
+
+  it('emits one and omits the other when only one is present', () => {
+    // Defensive: aggregator can patch only avg_power_w if total_output_tokens=0.
+    const e = entry({ avg_power_w: 500 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredJPerOutputToken).toBeUndefined();
+  });
+
+  it('preserves a zero measured power value (not falsy-coerced away)', () => {
+    // Guards against a refactor switching the gate from typeof===number to truthiness.
+    const e = entry({ avg_power_w: 0 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredAvgPower!.y).toBe(0);
+  });
+});
+
+// ===========================================================================
 // createChartDataPoint — boolean narrowing for prefill/decode dp_attention, is_multinode
 // ===========================================================================
 describe('createChartDataPoint boolean narrowing', () => {

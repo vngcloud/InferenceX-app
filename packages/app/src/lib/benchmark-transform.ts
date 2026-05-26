@@ -49,6 +49,11 @@ export function rowToAggDataEntry(row: BenchmarkRow): AggDataEntry {
     median_e2el: m.median_e2el ?? 0,
     std_e2el: m.std_e2el ?? 0,
     p99_e2el: m.p99_e2el ?? 0,
+    // Measured GPU telemetry (runner's aggregate_power.py). Left undefined for
+    // rows predating the field so downstream chart code can distinguish
+    // "no measurement" from "0 W" via createChartDataPoint's typeof guard.
+    avg_power_w: m.avg_power_w,
+    joules_per_output_token: m.joules_per_output_token,
     disagg: row.disagg,
     num_prefill_gpu: row.num_prefill_gpu,
     num_decode_gpu: row.num_decode_gpu,
