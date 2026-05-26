@@ -40,13 +40,14 @@ describe('describeTechniques', () => {
     expect(describeTechniques({})).toBe('baseline');
   });
 
-  it('labels mtp + layer count compactly', () => {
-    expect(describeTechniques({ spec_method: 'mtp', mtp_layers: 4 })).toBe('MTP×4');
-    expect(describeTechniques({ spec_method: 'mtp', mtp_layers: 6 })).toBe('MTP×6');
+  it('labels spec_method + token count compactly', () => {
+    expect(describeTechniques({ spec_method: 'mtp', num_speculative_tokens: 4 })).toBe('MTP×4');
+    expect(describeTechniques({ spec_method: 'mtp', num_speculative_tokens: 6 })).toBe('MTP×6');
+    expect(describeTechniques({ spec_method: 'eagle', num_speculative_tokens: 3 })).toBe('EAGLE×3');
   });
 
-  it('falls back to capitalized spec_method', () => {
-    expect(describeTechniques({ spec_method: 'eagle' })).toBe('Eagle');
+  it('falls back to formatted spec_method', () => {
+    expect(describeTechniques({ spec_method: 'eagle' })).toBe('EAGLE');
   });
 });
 
@@ -56,7 +57,7 @@ describe('buildRecipeRows', () => {
       [
         bmk({ techniques: {}, metrics: { tput_per_gpu: 100, median_tpot: 0.01 } }),
         bmk({
-          techniques: { spec_method: 'mtp', mtp_layers: 4 },
+          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
           metrics: { tput_per_gpu: 150, median_tpot: 0.0067 },
         }),
       ],
@@ -75,11 +76,11 @@ describe('buildRecipeRows', () => {
     const rows = buildRecipeRows(
       [
         bmk({
-          techniques: { spec_method: 'mtp', mtp_layers: 4 },
+          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
           metrics: { tput_per_gpu: 120 },
         }),
         bmk({
-          techniques: { spec_method: 'mtp', mtp_layers: 6 },
+          techniques: { spec_method: 'mtp', num_speculative_tokens: 6 },
           metrics: { tput_per_gpu: 140 },
         }),
       ],
@@ -96,10 +97,10 @@ describe('buildRecipeRows', () => {
     const rows = buildRecipeRows(
       [
         bmk({ techniques: {} }),
-        bmk({ techniques: { spec_method: 'mtp', mtp_layers: 4 } }),
-        bmk({ techniques: { spec_method: 'mtp', mtp_layers: 6 } }),
+        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 } }),
+        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 6 } }),
         // Different conc → different group, no shared baseline.
-        bmk({ techniques: { spec_method: 'mtp', mtp_layers: 4 }, conc: 16 }),
+        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 }, conc: 16 }),
       ],
       [],
     );
@@ -145,7 +146,7 @@ describe('buildRecipeRows', () => {
     const rows = buildRecipeRows(
       [
         bmk({
-          techniques: { spec_method: 'mtp', mtp_layers: 4 },
+          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
           metrics: { tput_per_gpu: 150, median_acceptance_rate: 0.78 },
         }),
       ],
