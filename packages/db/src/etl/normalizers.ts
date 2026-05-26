@@ -41,6 +41,16 @@ const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/iu;
 const PREFIX_ALIASES: Record<string, string> = {
   gptoss: 'gptoss120b',
   dsv4pro: 'dsv4',
+  // Gemma-4 MTP variants encode layer count in the prefix on the benchmark side.
+  // Layer count itself lands in techniques.mtp_layers (see parseTechniques).
+  gemma4n4: 'gemma4',
+  gemma4n6: 'gemma4',
+};
+
+/** Prefix → mtp_layers count, when the variant smuggles it into the model prefix. */
+const PREFIX_TO_MTP_LAYERS: Record<string, number> = {
+  gemma4n4: 4,
+  gemma4n6: 6,
 };
 
 function resolvePrefixToKey(prefix: string): string | null {
@@ -170,6 +180,57 @@ export function normalizePrecision(raw: string): string {
 export function normalizeSpecMethod(spec: any): string {
   if (!spec || spec === '') return 'none';
   return String(spec).toLowerCase();
+}
+
+/** Known technique keys we promote into the techniques jsonb explicitly. */
+const TECHNIQUE_KEYS = ['spec_method', 'mtp_layers', 'kv_cache_dtype', 'prefix_cache'] as const;
+
+/**
+ * Build the per-measurement `techniques` jsonb from a raw artifact row.
+ *
+ * New-shape artifacts emit a top-level `techniques` object directly:
+ *   { "techniques": { "spec_method": "mtp", "mtp_layers": 4 } }
+ *
+ * Legacy-shape artifacts emit a top-level `spec_decoding` field and encode
+ * the MTP layer count in the model prefix (`gemma4n4`, `gemma4n6`); both are
+ * coerced into the new shape here so the rest of the pipeline only sees one
+ * format. Empty/absent values are dropped (no `spec_method: 'none'` keys).
+ *
+ * @param row - Raw artifact dict.
+ * @returns Techniques jsonb. May be empty (`{}`) when no knobs were tuned.
+ */
+export function parseTechniques(row: Record<string, any>): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+
+  // New-shape: top-level techniques object.
+  if (row.techniques && typeof row.techniques === 'object') {
+    for (const k of TECHNIQUE_KEYS) {
+      const v = (row.techniques as Record<string, any>)[k];
+      if (v === undefined || v === null || v === '') continue;
+      out[k] = typeof v === 'number' ? v : String(v).toLowerCase();
+    }
+  }
+
+  // Legacy fallback: spec_decoding at top level → techniques.spec_method.
+  if (!('spec_method' in out)) {
+    const legacy = row.spec_decoding;
+    if (legacy && legacy !== '' && String(legacy).toLowerCase() !== 'none') {
+      out.spec_method = String(legacy).toLowerCase();
+    }
+  }
+
+  // Legacy fallback: MTP layer count smuggled into the model prefix.
+  if (!('mtp_layers' in out)) {
+    const rawPrefix = String(row.infmax_model_prefix ?? row.model_prefix ?? '').toLowerCase();
+    const layers = PREFIX_TO_MTP_LAYERS[rawPrefix];
+    if (layers !== undefined) {
+      out.mtp_layers = layers;
+      // If spec_method wasn't set elsewhere but we have MTP layers, infer it.
+      if (!('spec_method' in out)) out.spec_method = 'mtp';
+    }
+  }
+
+  return out;
 }
 
 /**

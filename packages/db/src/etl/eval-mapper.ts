@@ -13,7 +13,7 @@ import {
   hwToGpuKey,
   normalizeFramework,
   normalizePrecision,
-  normalizeSpecMethod,
+  parseTechniques,
   parseBool,
   parseNum,
   parseInt2,
@@ -39,6 +39,7 @@ export interface EvalParams {
   conc: number | null;
   lmEvalVersion: string | null;
   metrics: Record<string, number>;
+  techniques: Record<string, string | number>;
 }
 
 /**
@@ -91,17 +92,9 @@ export function mapEvalRow(
   if (!PRECISION_KEYS.has(precision)) {
     tracker.unmappedPrecisions.add(precision);
   }
-  const specMethod = normalizeSpecMethod(meta.spec_decoding);
+  const techniques = parseTechniques(meta);
   const lmEvalVersion = results.lm_eval_version ? String(results.lm_eval_version) : null;
-  const config = buildEvalConfig(
-    meta,
-    gpuKey,
-    framework,
-    modelKey,
-    precision,
-    specMethod,
-    disaggFromFw,
-  );
+  const config = buildEvalConfig(meta, gpuKey, framework, modelKey, precision, disaggFromFw);
 
   const nSamples = results['n-samples'] as Record<string, any> | undefined;
 
@@ -127,6 +120,7 @@ export function mapEvalRow(
       conc: parseInt2(meta.conc) ?? null,
       lmEvalVersion,
       metrics,
+      techniques,
     };
   });
 }
@@ -174,7 +168,7 @@ export function mapAggEvalRow(row: Record<string, any>, tracker: SkipTracker): E
   if (!PRECISION_KEYS.has(precision)) {
     tracker.unmappedPrecisions.add(precision);
   }
-  const specMethod = normalizeSpecMethod(row.spec_decoding);
+  const techniques = parseTechniques(row);
 
   // ISL/OSL is encoded in the source path (e.g. "eval_dsr1_1k8k_.../results_...").
   const islOsl = row.source ? parseIslOsl(String(row.source)) : null;
@@ -193,13 +187,14 @@ export function mapAggEvalRow(row: Record<string, any>, tracker: SkipTracker): E
   add('score_se', row.score_se);
 
   return {
-    config: buildEvalConfig(row, gpuKey, framework, modelKey, precision, specMethod, disaggFromFw),
+    config: buildEvalConfig(row, gpuKey, framework, modelKey, precision, disaggFromFw),
     task,
     isl: islOsl?.isl ?? null,
     osl: islOsl?.osl ?? null,
     conc: parseInt2(row.conc) ?? null,
     lmEvalVersion: null,
     metrics,
+    techniques,
   };
 }
 
@@ -225,7 +220,6 @@ function buildEvalConfig(
   framework: string,
   model: string,
   precision: string,
-  specMethod: string,
   disaggFromFw: boolean,
 ): ConfigParams {
   const isMultinode = parseBool(src.is_multinode);
@@ -270,7 +264,6 @@ function buildEvalConfig(
     framework,
     model,
     precision,
-    specMethod,
     disagg,
     isMultinode,
     prefillTp,

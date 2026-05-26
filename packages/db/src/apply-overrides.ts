@@ -150,10 +150,13 @@ async function purge(wrIds: number[]): Promise<void> {
   await sql.begin(async (_tx) => {
     const tx = _tx as unknown as Sql;
 
-    // Capture availability keys + server_log_ids before deleting benchmarks
+    // Capture availability keys + server_log_ids before deleting benchmarks.
+    // spec_method is now a measurement-level technique flag (see migration 006).
     const availKeys = await tx`
       SELECT DISTINCT c.model, br.isl, br.osl, c.precision, c.hardware,
-             c.framework, c.spec_method, c.disagg, br.date::text AS date
+             c.framework,
+             COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
+             c.disagg, br.date::text AS date
       FROM benchmark_results br
       JOIN configs c ON c.id = br.config_id
       WHERE br.workflow_run_id = ANY(${wrIds})
@@ -210,7 +213,8 @@ async function purge(wrIds: number[]): Promise<void> {
             JOIN configs c ON c.id = br.config_id
             WHERE c.model = a.model AND br.isl = a.isl AND br.osl = a.osl
               AND c.precision = a.precision AND c.hardware = a.hardware
-              AND c.framework = a.framework AND c.spec_method = a.spec_method
+              AND c.framework = a.framework
+              AND COALESCE(br.techniques->>'spec_method', 'none') = a.spec_method
               AND c.disagg = a.disagg AND br.date = a.date AND br.error IS NULL
           )
       `;

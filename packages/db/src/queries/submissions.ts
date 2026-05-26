@@ -37,7 +37,7 @@ export async function getSubmissionSummary(sql: DbClient): Promise<SubmissionSum
       c.hardware,
       c.framework,
       c.precision,
-      c.spec_method,
+      COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
       c.disagg,
       c.is_multinode,
       c.num_prefill_gpu,
@@ -56,7 +56,7 @@ export async function getSubmissionSummary(sql: DbClient): Promise<SubmissionSum
     JOIN configs c ON c.id = br.config_id
     JOIN latest_workflow_runs wr ON wr.id = br.workflow_run_id
     WHERE br.error IS NULL
-    GROUP BY c.model, c.hardware, c.framework, c.precision, c.spec_method, c.disagg, c.is_multinode, c.num_prefill_gpu, c.num_decode_gpu, c.prefill_tp, c.prefill_ep, c.decode_tp, c.decode_ep, br.date
+    GROUP BY c.model, c.hardware, c.framework, c.precision, (br.techniques->>'spec_method'), c.disagg, c.is_multinode, c.num_prefill_gpu, c.num_decode_gpu, c.prefill_tp, c.prefill_ep, c.decode_tp, c.decode_ep, br.date
     ORDER BY br.date DESC, COUNT(*) DESC
   `;
   return rows as unknown as SubmissionSummaryRow[];
