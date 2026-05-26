@@ -143,14 +143,15 @@ const COLUMNS: DataTableColumn<RecipeRow>[] = [
 ];
 
 export default function RecipeComparison() {
-  const { selectedModel, selectedRunDate } = useGlobalFilters();
+  const { selectedModel } = useGlobalFilters();
   const [category, setCategory] = useState<TechniqueCategory | 'all'>('all');
 
-  const {
-    data: benchmarks,
-    isLoading: bmkLoading,
-    error: bmkError,
-  } = useBenchmarks(selectedModel, selectedRunDate || undefined);
+  // Always use the no-date "latest state across all dates" path. The recipe
+  // table is meant to surface current recipe variants, not historical data —
+  // a stale `selectedRunDate` inherited from /inference would hide rows
+  // ingested on more recent dates (e.g. the user reported missing the
+  // batch-size filter chip because mnbt rows landed after the sticky date).
+  const { data: benchmarks, isLoading: bmkLoading, error: bmkError } = useBenchmarks(selectedModel);
   const { data: evals, isLoading: evalLoading, error: evalError } = useEvaluations();
 
   const allRows = useMemo(() => {
@@ -231,14 +232,7 @@ export default function RecipeComparison() {
 
       {!loading && rows.length === 0 && (
         <div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
-          No data for <strong>{selectedModel || '(no model)'}</strong>
-          {selectedRunDate ? (
-            <>
-              {' '}
-              on <strong>{selectedRunDate}</strong>
-            </>
-          ) : null}
-          . Pick a different model or date.
+          No data for <strong>{selectedModel || '(no model)'}</strong>. Pick a different model.
         </div>
       )}
 
