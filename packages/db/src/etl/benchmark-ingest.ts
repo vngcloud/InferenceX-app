@@ -29,9 +29,16 @@ export async function bulkIngestBenchmarkRows(
 
   // Postgres rejects ON CONFLICT DO UPDATE if the same conflict key appears
   // more than once in a single batch. Deduplicate within the batch, keeping
-  // the last occurrence (last metrics for each unique config/isl/osl/conc).
+  // the last occurrence. The conflict key must include techniques — two MTP
+  // variants at the same (config, isl, osl, conc) are legitimately distinct
+  // measurements and must not collapse to one row (migration 007).
   const seen = new Map<string, BenchmarkParams & { configId: number }>();
-  for (const r of rows) seen.set(`${r.configId}-${r.isl}-${r.osl}-${r.conc}`, r);
+  for (const r of rows) {
+    // parseTechniques() builds the techniques object with deterministic key
+    // order, so a plain JSON.stringify is a stable dedup discriminator.
+    const techniquesKey = JSON.stringify(r.techniques);
+    seen.set(`${r.configId}-${r.isl}-${r.osl}-${r.conc}-${techniquesKey}`, r);
+  }
   const deduped = [...seen.values()];
 
   const configIds = deduped.map((r) => r.configId);
@@ -58,11 +65,10 @@ export async function bulkIngestBenchmarkRows(
       unnest(${sql.array(images)}),
       unnest(${sql.array(metricsJsons)}::jsonb[]),
       unnest(${sql.array(techniquesJsons)}::jsonb[])
-    on conflict (workflow_run_id, config_id, benchmark_type, isl, osl, conc)
+    on conflict (workflow_run_id, config_id, benchmark_type, isl, osl, conc, techniques)
     do update set
       metrics = excluded.metrics,
-      image = excluded.image,
-      techniques = excluded.techniques
+      image = excluded.image
     returning (xmax = 0) as inserted, id
   `;
 
