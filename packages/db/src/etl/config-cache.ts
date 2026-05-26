@@ -14,7 +14,6 @@ export interface ConfigParams {
   framework: string;
   model: string;
   precision: string;
-  specMethod: string;
   disagg: boolean;
   isMultinode: boolean;
   prefillTp: number;
@@ -43,7 +42,6 @@ export function configCacheKey(p: ConfigParams): string {
     p.framework,
     p.model,
     p.precision,
-    p.specMethod,
     p.disagg,
     p.isMultinode,
     p.prefillTp,
@@ -85,20 +83,20 @@ export function createConfigCache(sql: Sql) {
 
     const [row] = await sql`
       insert into configs (
-        hardware, framework, model, precision, spec_method,
+        hardware, framework, model, precision,
         disagg, is_multinode,
         prefill_tp, prefill_ep, prefill_dp_attention, prefill_num_workers,
         decode_tp,  decode_ep,  decode_dp_attention,  decode_num_workers,
         num_prefill_gpu, num_decode_gpu
       ) values (
-        ${p.hardware}, ${p.framework}, ${p.model}, ${p.precision}, ${p.specMethod},
+        ${p.hardware}, ${p.framework}, ${p.model}, ${p.precision},
         ${p.disagg}, ${p.isMultinode},
         ${p.prefillTp}, ${p.prefillEp}, ${p.prefillDpAttn}, ${p.prefillNumWorkers},
         ${p.decodeTp},  ${p.decodeEp},  ${p.decodeDpAttn},  ${p.decodeNumWorkers},
         ${p.numPrefillGpu}, ${p.numDecodeGpu}
       )
       on conflict (
-        hardware, framework, model, precision, spec_method,
+        hardware, framework, model, precision,
         disagg, is_multinode,
         prefill_tp, prefill_ep, prefill_dp_attention, prefill_num_workers,
         decode_tp,  decode_ep,  decode_dp_attention,  decode_num_workers,
@@ -119,7 +117,7 @@ export function createConfigCache(sql: Sql) {
    */
   async function preloadConfigs(): Promise<void> {
     const rows = await sql`
-      select id, hardware, framework, model, precision, spec_method,
+      select id, hardware, framework, model, precision,
              disagg, is_multinode,
              prefill_tp, prefill_ep, prefill_dp_attention, prefill_num_workers,
              decode_tp,  decode_ep,  decode_dp_attention,  decode_num_workers,
@@ -132,7 +130,6 @@ export function createConfigCache(sql: Sql) {
         framework: r.framework,
         model: r.model,
         precision: r.precision,
-        specMethod: r.spec_method,
         disagg: r.disagg,
         isMultinode: r.is_multinode,
         prefillTp: r.prefill_tp,

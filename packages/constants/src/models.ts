@@ -18,6 +18,7 @@ export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
   glm5: 'GLM-5',
   'glm5.1': 'GLM-5',
   dsv4: 'DeepSeek-V4-Pro',
+  gemma4: 'Gemma-4-31B-it',
 };
 
 /**

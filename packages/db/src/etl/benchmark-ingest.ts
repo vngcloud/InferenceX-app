@@ -40,11 +40,12 @@ export async function bulkIngestBenchmarkRows(
   const concs = deduped.map((r) => r.conc);
   const images = deduped.map((r) => r.image);
   const metricsJsons = deduped.map((r) => JSON.stringify(r.metrics));
+  const techniquesJsons = deduped.map((r) => JSON.stringify(r.techniques));
 
   const result = await sql<{ inserted: boolean; id: number }[]>`
     insert into benchmark_results (
       workflow_run_id, config_id, benchmark_type, date,
-      isl, osl, conc, image, metrics
+      isl, osl, conc, image, metrics, techniques
     )
     select
       ${workflowRunId},
@@ -55,11 +56,13 @@ export async function bulkIngestBenchmarkRows(
       unnest(${sql.array(osls)}::int[]),
       unnest(${sql.array(concs)}::int[]),
       unnest(${sql.array(images)}),
-      unnest(${sql.array(metricsJsons)}::jsonb[])
+      unnest(${sql.array(metricsJsons)}::jsonb[]),
+      unnest(${sql.array(techniquesJsons)}::jsonb[])
     on conflict (workflow_run_id, config_id, benchmark_type, isl, osl, conc)
     do update set
       metrics = excluded.metrics,
-      image = excluded.image
+      image = excluded.image,
+      techniques = excluded.techniques
     returning (xmax = 0) as inserted, id
   `;
 
@@ -143,6 +146,14 @@ export async function bulkIngestRunStats(
  * Rows are deduplicated within the batch before sending. ON CONFLICT DO NOTHING
  * makes re-runs idempotent.
  */
+/**
+ * availability.spec_method is a denormalized projection of techniques.spec_method
+ * (kept for filter ergonomics on the date picker). Default to 'none' when absent.
+ */
+function specMethodFor(t: Record<string, string | number>): string {
+  return typeof t.spec_method === 'string' ? t.spec_method : 'none';
+}
+
 export async function bulkUpsertAvailability(
   sql: Sql,
   rows: {
@@ -152,7 +163,7 @@ export async function bulkUpsertAvailability(
     precision: string;
     hardware: string;
     framework: string;
-    specMethod: string;
+    techniques: Record<string, string | number>;
     disagg: boolean;
   }[],
   date: string,
@@ -162,7 +173,8 @@ export async function bulkUpsertAvailability(
   const seen = new Set<string>();
   const unique: typeof rows = [];
   for (const r of rows) {
-    const key = `${r.model}|${r.isl}|${r.osl}|${r.precision}|${r.hardware}|${r.framework}|${r.specMethod}|${r.disagg}|${date}`;
+    const sm = specMethodFor(r.techniques);
+    const key = `${r.model}|${r.isl}|${r.osl}|${r.precision}|${r.hardware}|${r.framework}|${sm}|${r.disagg}|${date}`;
     if (!seen.has(key)) {
       seen.add(key);
       unique.push(r);
@@ -178,7 +190,7 @@ export async function bulkUpsertAvailability(
       unnest(${sql.array(unique.map((r) => r.precision))}::text[]),
       unnest(${sql.array(unique.map((r) => r.hardware))}::text[]),
       unnest(${sql.array(unique.map((r) => r.framework))}::text[]),
-      unnest(${sql.array(unique.map((r) => r.specMethod))}::text[]),
+      unnest(${sql.array(unique.map((r) => specMethodFor(r.techniques)))}::text[]),
       unnest(${sql.array(unique.map((r) => r.disagg))}::bool[]),
       ${date}::date
     on conflict do nothing

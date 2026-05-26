@@ -299,7 +299,7 @@ async function main(): Promise<void> {
     precision: string;
     hardware: string;
     framework: string;
-    specMethod: string;
+    techniques: Record<string, string | number>;
     disagg: boolean;
   }[] = [];
 
@@ -413,7 +413,7 @@ async function main(): Promise<void> {
               precision: r.config.precision,
               hardware: r.config.hardware,
               framework: r.config.framework,
-              specMethod: r.config.specMethod,
+              techniques: r.techniques,
               disagg: r.config.disagg,
             });
           }

@@ -32,12 +32,15 @@ export function normalizeArtifactRows(
     const params = mapBenchmarkRow(raw as Record<string, any>, tracker);
     if (!params) continue;
     const { config } = params;
+    const specMethod =
+      typeof params.techniques.spec_method === 'string' ? params.techniques.spec_method : 'none';
     results.push({
       hardware: config.hardware,
       framework: config.framework,
       model: config.model,
       precision: config.precision,
-      spec_method: config.specMethod,
+      spec_method: specMethod,
+      techniques: params.techniques,
       disagg: config.disagg,
       is_multinode: config.isMultinode,
       prefill_tp: config.prefillTp,
@@ -62,13 +65,17 @@ export function normalizeArtifactRows(
   return results;
 }
 
-function evalConfigKey(config: EvalParams['config']): string {
+function evalConfigKey(
+  config: EvalParams['config'],
+  techniques: Record<string, string | number>,
+): string {
   return [
     config.hardware,
     config.framework,
     config.model,
     config.precision,
-    config.specMethod,
+    typeof techniques.spec_method === 'string' ? techniques.spec_method : 'none',
+    typeof techniques.mtp_layers === 'number' ? String(techniques.mtp_layers) : 'none',
     config.disagg ? '1' : '0',
     config.prefillTp,
     config.prefillEp,
@@ -107,13 +114,16 @@ export function normalizeEvalArtifactRows(
     const params = mapAggEvalRow(raw as Record<string, any>, tracker);
     if (!params) continue;
 
-    const key = evalConfigKey(params.config);
+    const key = evalConfigKey(params.config, params.techniques);
     let localId = configIds.get(key);
     if (!localId) {
       localId = nextLocalId;
       configIds.set(key, localId);
       nextLocalId += 1;
     }
+
+    const specMethod =
+      typeof params.techniques.spec_method === 'string' ? params.techniques.spec_method : 'none';
 
     rows.push({
       // Synthetic id — unofficial rows are never persisted to eval_results, so
@@ -125,7 +135,8 @@ export function normalizeEvalArtifactRows(
       framework: params.config.framework,
       model: params.config.model,
       precision: params.config.precision,
-      spec_method: params.config.specMethod,
+      spec_method: specMethod,
+      techniques: params.techniques,
       disagg: params.config.disagg,
       is_multinode: params.config.isMultinode,
       prefill_tp: params.config.prefillTp,

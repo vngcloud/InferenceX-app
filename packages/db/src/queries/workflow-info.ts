@@ -75,7 +75,7 @@ export async function getDateConfigs(sql: DbClient, date: string): Promise<DateC
       c.precision,
       c.hardware,
       c.framework,
-      c.spec_method,
+      COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
       c.disagg
     FROM benchmark_results br
     JOIN configs c ON c.id = br.config_id

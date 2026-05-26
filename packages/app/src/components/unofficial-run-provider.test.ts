@@ -17,6 +17,7 @@ function stubRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
     model: 'dsr1',
     precision: 'fp8',
     spec_method: 'none',
+    techniques: {},
     disagg: false,
     is_multinode: false,
     prefill_tp: 8,

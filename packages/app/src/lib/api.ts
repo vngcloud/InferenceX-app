@@ -10,7 +10,9 @@ export interface BenchmarkRow {
   framework: string;
   model: string;
   precision: string;
+  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
+  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -83,7 +85,9 @@ export interface EvalRow {
   framework: string;
   model: string;
   precision: string;
+  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
+  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
