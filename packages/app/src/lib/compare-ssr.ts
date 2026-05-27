@@ -10,7 +10,13 @@
  *     and JSON-LD shape — with a `variant` knob that swaps the headline
  *     framing between the latency+throughput view and the per-dollar view.
  */
-import { HW_REGISTRY, sequenceToIslOsl } from '@semianalysisai/inferencex-constants';
+import {
+  AUTHOR_NAME,
+  AUTHOR_URL,
+  HW_REGISTRY,
+  SITE_URL,
+  sequenceToIslOsl,
+} from '@semianalysisai/inferencex-constants';
 import { FIXTURES_MODE, JSON_MODE, getDb } from '@semianalysisai/inferencex-db/connection';
 import * as jsonProvider from '@semianalysisai/inferencex-db/json-provider';
 import {
@@ -75,7 +81,7 @@ export function pickString(value: string | string[] | undefined): string | undef
 }
 
 // ---------------------------------------------------------------------------
-// Pair summary (JSON-LD Product additionalProperty)
+// Pair summary (JSON-LD additionalProperty)
 // ---------------------------------------------------------------------------
 
 export interface PairSummary {
@@ -260,7 +266,12 @@ export function computeCompareTableData(
 
 /** Sample the same interpolated cost curve used for the comparison table for
  * server-rendered image assets. More samples make the static PNG read like the
- * interactive roofline without requiring browser-based chart capture. */
+ * interactive roofline without requiring browser-based chart capture.
+ *
+ * `includeTargets` are merged into the even sampling grid so callers can
+ * guarantee the curve has exact samples at specific targets (e.g. the plotted
+ * comparison dots), making it safe to partition the curve into solid /
+ * dashed segments without interpolation gaps at the boundary. */
 export function computeCompareImageRows(
   rows: BenchmarkRow[],
   a: string,
@@ -268,6 +279,7 @@ export function computeCompareImageRows(
   sequence: string | null,
   precision: string | null,
   interactivityRange: { min: number; max: number },
+  includeTargets: number[] = [],
 ): SsrInterpolatedRow[] {
   if (!sequence || !precision || interactivityRange.max <= interactivityRange.min) return [];
 
@@ -280,20 +292,26 @@ export function computeCompareImageRows(
 
   const sampleCount = 17;
   const span = interactivityRange.max - interactivityRange.min;
-  return Array.from({ length: sampleCount }, (_, index) => {
-    const target = interactivityRange.min + (span * index) / (sampleCount - 1);
-    return {
-      target,
-      a:
-        pointsA.length > 0
-          ? interpolateForGPU(pointsA, target, 'interactivity_to_throughput', 'costh')
-          : null,
-      b:
-        pointsB.length > 0
-          ? interpolateForGPU(pointsB, target, 'interactivity_to_throughput', 'costh')
-          : null,
-    };
-  });
+  const evenTargets = Array.from(
+    { length: sampleCount },
+    (_, index) => interactivityRange.min + (span * index) / (sampleCount - 1),
+  );
+  const clamped = includeTargets.filter(
+    (t) => t >= interactivityRange.min && t <= interactivityRange.max,
+  );
+  const targets = [...new Set([...evenTargets, ...clamped])].toSorted((x, y) => x - y);
+
+  return targets.map((target) => ({
+    target,
+    a:
+      pointsA.length > 0
+        ? interpolateForGPU(pointsA, target, 'interactivity_to_throughput', 'costh')
+        : null,
+    b:
+      pointsB.length > 0
+        ? interpolateForGPU(pointsB, target, 'interactivity_to_throughput', 'costh')
+        : null,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +321,7 @@ export function computeCompareImageRows(
 function jsonLdEntryFor(key: string, summary: PairSummary, position: number) {
   const meta = HW_REGISTRY[key];
   const label = meta?.label ?? key.toUpperCase();
-  const props: { name: string; value: string | number }[] = [];
+  const props: { name: string; value: string | number }[] = [{ name: 'Category', value: 'GPU' }];
   if (meta) {
     props.push({ name: 'Vendor', value: meta.vendor });
     props.push({ name: 'Architecture', value: meta.arch });
@@ -332,10 +350,8 @@ function jsonLdEntryFor(key: string, summary: PairSummary, position: number) {
     '@type': 'ListItem',
     position,
     item: {
-      '@type': 'Product',
+      '@type': 'Thing',
       name: label,
-      brand: { '@type': 'Brand', name: meta?.vendor ?? 'Unknown' },
-      category: 'GPU',
       ...(props.length > 0 && {
         additionalProperty: props.map((p) => ({
           '@type': 'PropertyValue',
@@ -758,6 +774,46 @@ export function bucketComparePairsByVendor(modelSlug: string, pairs: ComparePair
   return { cross, nvidia, amd };
 }
 
+/** Breadcrumb trail for a compare slug page. Emitted alongside the main
+ *  Dataset/ItemList JSON-LD so Google can render the Home → Compare → A vs B
+ *  trail in search results. Variant chooses /compare vs /compare-per-dollar. */
+export function buildBreadcrumbJsonLd(
+  variant: CompareJsonLdVariant,
+  pairLabel: string,
+  url: string,
+) {
+  const indexUrl =
+    variant === 'per-dollar' ? `${SITE_URL}/compare-per-dollar` : `${SITE_URL}/compare`;
+  const indexName = variant === 'per-dollar' ? 'GPU Performance per Dollar' : 'GPU Comparisons';
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_URL },
+      { '@type': 'ListItem', position: 2, name: indexName, item: indexUrl },
+      { '@type': 'ListItem', position: 3, name: pairLabel, item: url },
+    ],
+  };
+}
+
+/** Pick the oldest and newest benchmark dates among rows whose hardware matches
+ *  the compared pair — used to populate Dataset.datePublished / dateModified. */
+export function dateRangeForPair(
+  rows: BenchmarkRow[],
+  a: string,
+  b: string,
+): { oldest?: string; newest?: string } {
+  let oldest: string | undefined;
+  let newest: string | undefined;
+  for (const row of rows) {
+    if (row.hardware !== a && row.hardware !== b) continue;
+    if (!row.date) continue;
+    if (oldest === undefined || row.date < oldest) oldest = row.date;
+    if (newest === undefined || row.date > newest) newest = row.date;
+  }
+  return { oldest, newest };
+}
+
 export function buildJsonLd(
   variant: CompareJsonLdVariant,
   model: CompareModelSlug,
@@ -768,6 +824,13 @@ export function buildJsonLd(
   summaryB: PairSummary,
   ssrRows: SsrInterpolatedRow[],
   imageUrl?: string,
+  /** ISO date of oldest benchmark row contributing to this dataset. */
+  datePublished?: string,
+  /** ISO date of newest benchmark row — drives Google Dataset Search freshness. */
+  dateModified?: string,
+  /** Display model name accepted by /api/v1/benchmarks?model=…, used to wire the
+   *  Dataset's `distribution: DataDownload` to a real machine-readable export. */
+  modelApiKey?: string,
 ) {
   const aLabel = HW_REGISTRY[a]?.label ?? a.toUpperCase();
   const bLabel = HW_REGISTRY[b]?.label ?? b.toUpperCase();
@@ -814,7 +877,7 @@ export function buildJsonLd(
         );
       }
       return {
-        '@type': 'Observation',
+        '@type': 'Dataset',
         name: `${model.label} comparison at ${row.target} tok/s/user interactivity`,
         variableMeasured: metrics.map((m) => ({
           '@type': 'PropertyValue',
@@ -844,6 +907,40 @@ export function buildJsonLd(
               name: datasetName,
               description: datasetDescription,
               url,
+              license: 'https://www.apache.org/licenses/LICENSE-2.0',
+              isAccessibleForFree: true,
+              measurementTechnique:
+                'Open-source automated GPU CI/CD inference benchmark (github.com/SemiAnalysisAI/InferenceX)',
+              keywords: [
+                ...new Set(
+                  [
+                    'AI inference benchmark',
+                    'GPU comparison',
+                    variant === 'per-dollar' ? 'cost per million tokens' : 'inference latency',
+                    variant === 'per-dollar' ? 'performance per dollar' : 'tokens per second',
+                    model.label,
+                    aLabel,
+                    bLabel,
+                    HW_REGISTRY[a]?.vendor,
+                    HW_REGISTRY[b]?.vendor,
+                  ].filter(Boolean),
+                ),
+              ].join(', '),
+              ...(datePublished && { datePublished }),
+              ...(dateModified && { dateModified }),
+              creator: {
+                '@type': 'Organization',
+                name: AUTHOR_NAME,
+                url: AUTHOR_URL,
+              },
+              ...(modelApiKey && {
+                distribution: {
+                  '@type': 'DataDownload',
+                  encodingFormat: 'application/json',
+                  contentUrl: `${SITE_URL}/api/v1/benchmarks?model=${encodeURIComponent(modelApiKey)}`,
+                  name: `${model.label} latest benchmark rows (JSON)`,
+                },
+              }),
               ...(imageUrl && {
                 image: {
                   '@type': 'ImageObject',
