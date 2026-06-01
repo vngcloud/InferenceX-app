@@ -4,6 +4,7 @@ export enum Model {
   DeepSeek_R1 = 'DeepSeek-R1-0528',
   GptOss = 'gpt-oss-120b',
   Qwen3_5 = 'Qwen-3.5-397B-A17B',
+  Qwen3_5_27B = 'Qwen-3.5-27B',
   Kimi_K2_5 = 'Kimi-K2.5',
   MiniMax_M2_5 = 'MiniMax-M2.5',
   GLM_5 = 'GLM-5',
@@ -63,6 +64,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     category: 'default',
   },
   [Model.Qwen3_5]: { label: 'Qwen3.5', prefix: 'qwen3.5', category: 'default' },
+  [Model.Qwen3_5_27B]: { label: 'Qwen3.5 27B', prefix: 'qwen3.5-27b', category: 'default' },
   [Model.GLM_5]: { label: 'GLM5/5.1', prefix: 'glm5', category: 'default' },
   [Model.MiniMax_M2_5]: {
     label: 'MiniMax M2.5',

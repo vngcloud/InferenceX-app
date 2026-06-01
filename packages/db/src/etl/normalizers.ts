@@ -98,6 +98,8 @@ export const MODEL_TO_KEY: Record<string, string> = {
   // Qwen3.5
   'Qwen/Qwen3.5-397B-A17B': 'qwen3.5',
   'Qwen/Qwen3.5-397B-A17B-FP8': 'qwen3.5',
+  'Qwen/Qwen3.5-27B': 'qwen3.5-27b',
+  'Qwen/Qwen3.5-27B-FP8': 'qwen3.5-27b',
   // Kimi-K2.5
   'moonshotai/Kimi-K2.5': 'kimik2.5',
   // MiniMax-M2.5
