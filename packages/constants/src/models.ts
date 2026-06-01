@@ -11,6 +11,7 @@ export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
   gptoss120b: 'gpt-oss-120b',
   llama70b: 'Llama-3.3-70B-Instruct-FP8',
   'qwen3.5': 'Qwen-3.5-397B-A17B',
+  'qwen3.5-27b': 'Qwen-3.5-27B',
   'kimik2.5': 'Kimi-K2.5',
   'kimik2.6': 'Kimi-K2.5',
   'minimaxm2.5': 'MiniMax-M2.5',
