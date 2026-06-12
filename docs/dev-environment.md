@@ -2,9 +2,9 @@
 
 > **TL;DR**
 >
-> - **Push to `dev`** → `deploy-dev.yml` builds and deploys an isolated stack to **`http://61.28.228.19:8080`**. Prod (`master` → `:80`/`:443`) is never touched: separate image, separate DB.
-> - **8080 isn't open externally yet** — add an inbound TCP 8080 rule in the GreenNode console, or tunnel: `ssh -p 234 -L 8080:127.0.0.1:8080 hoanq333@61.28.228.19` then open `http://localhost:8080`.
-> - **No data?** A fresh dev DB is empty. Populate it: `gh workflow run dev-ingest.yml -R vngcloud/InferenceX-app --ref master -f run_url=<benchmark-run-url>`.
+> - **Push** — `git push origin dev`. `deploy-dev.yml` builds and deploys an isolated stack; prod (`master` → `:80`/`:443`) is never touched (separate image + DB).
+> - **Look** — open **`http://61.28.228.19:8080`**, or watch the build at `gh run list -R vngcloud/InferenceX-app --workflow=deploy-dev.yml --limit 5`.
+> - **Ingest** — a fresh dev DB is empty; populate it with `gh workflow run dev-ingest.yml -R vngcloud/InferenceX-app --ref master -f run_url=<benchmark-run-url>`.
 
 A second, fully isolated copy of the dashboard that lives next to prod on the
 same self-hosted runner (`dashboard-greennode-00`, `61.28.228.19`). Use it to
