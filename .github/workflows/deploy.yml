@@ -6,6 +6,15 @@ name: deploy
 on:
   push:
     branches: [master]
+    # Don't redeploy prod for changes that can't affect the app image:
+    # CI workflow edits (incl. the dev deploy/ingest workflows) and docs.
+    # A commit that also touches app code (packages/**, Dockerfile, lockfile,
+    # …) still triggers — paths-ignore only skips when ALL changed files match.
+    # To force a redeploy after a workflow edit, use the workflow_dispatch below.
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 # Only one deploy at a time — newer pushes supersede in-progress runs so
