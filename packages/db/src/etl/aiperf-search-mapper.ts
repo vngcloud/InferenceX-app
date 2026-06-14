@@ -40,10 +40,23 @@ interface SlugInfo {
 }
 
 const GPU_TOKEN = /_((?:h|b)\d{3}|gb\d{3}|mi\d{3}x)-/u;
-const WORKLOAD_TOKEN = /^(\d+)k(\d+)k$/u;
+/** Compact workload token "8k1k" / "16k1k" — values are in units of 1024 tokens. */
+const WORKLOAD_K_TOKEN = /^(\d+)k(\d+)k$/u;
+/** A single raw integer token (e.g. "16384", "1024"). */
+const INT_TOKEN = /^\d+$/u;
+/** Smallest ISL we treat as a workload anchor — guards against a stray small int
+ * inside a model name being mistaken for the sequence-length pair. */
+const MIN_WORKLOAD_ISL = 256;
 
 /**
  * Parse an `aiperf_search_*` artifact directory name into config identity.
+ *
+ * Two workload-token spellings exist in the wild, depending on the InferenceX
+ * config that produced the run:
+ *   A. compact "<n>k<m>k"      → `..._8k1k_bf16_vllm_...`        (×1024)
+ *   B. raw "<isl>_<osl>" pair  → `..._16384_1024_bf16_vllm_...`  (token counts)
+ * Both are accepted; the workload token(s) anchor model (before) and
+ * precision/engine (after).
  *
  * Example:
  *   aiperf_search_qwen3.5-27b_8k1k_bf16_vllm_aiperf_tp1-ep1-dpafalse_disagg-false_spec-none_n_mnbt_conc1000_h200-greennode_00
@@ -57,18 +70,40 @@ export function parseAiperfSlug(dirName: string): SlugInfo | null {
   const base = dirName.replace(/^aiperf_search_/u, '');
   const parts = base.split('_');
 
-  // The workload token (e.g. "8k1k") anchors model (before) and precision/engine (after).
-  const wlIdx = parts.findIndex((p) => WORKLOAD_TOKEN.test(p));
-  if (wlIdx <= 0) return null;
+  let isl: number;
+  let osl: number;
+  let wlIdx: number; // index of the first workload token
+  let afterIdx: number; // index of the precision token (just past the workload)
 
-  const wl = WORKLOAD_TOKEN.exec(parts[wlIdx]);
-  if (!wl) return null;
-  const isl = parseInt(wl[1], 10) * 1024;
-  const osl = parseInt(wl[2], 10) * 1024;
+  // Format A: a single "<n>k<m>k" token.
+  const kIdx = parts.findIndex((p) => WORKLOAD_K_TOKEN.test(p));
+  if (kIdx > 0) {
+    const wl = WORKLOAD_K_TOKEN.exec(parts[kIdx])!;
+    isl = parseInt(wl[1], 10) * 1024;
+    osl = parseInt(wl[2], 10) * 1024;
+    wlIdx = kIdx;
+    afterIdx = kIdx + 1;
+  } else {
+    // Format B: two consecutive raw integer tokens "<isl>_<osl>" (token counts,
+    // not ×1024). Require isl ≥ MIN_WORKLOAD_ISL so a small int in the model name
+    // can't be mistaken for the pair.
+    const pairIdx = parts.findIndex(
+      (p, i) =>
+        INT_TOKEN.test(p) &&
+        parseInt(p, 10) >= MIN_WORKLOAD_ISL &&
+        i + 1 < parts.length &&
+        INT_TOKEN.test(parts[i + 1]),
+    );
+    if (pairIdx <= 0) return null;
+    isl = parseInt(parts[pairIdx], 10);
+    osl = parseInt(parts[pairIdx + 1], 10);
+    wlIdx = pairIdx;
+    afterIdx = pairIdx + 2;
+  }
 
   const model = parts.slice(0, wlIdx).join('_');
-  const precision = parts[wlIdx + 1] ?? '';
-  const engine = parts[wlIdx + 2] ?? '';
+  const precision = parts[afterIdx] ?? '';
+  const engine = parts[afterIdx + 1] ?? '';
 
   const tpEp = /tp(\d+)-ep(\d+)/u.exec(base);
   const tp = tpEp ? parseInt(tpEp[1], 10) : 1;

@@ -36,6 +36,36 @@ describe('parseAiperfSlug', () => {
     });
   });
 
+  it('parses the raw "<isl>_<osl>" workload spelling (e.g. 16384_1024) used by the 16k1k configs', () => {
+    const name =
+      'aiperf_search_qwen3.5-27b_16384_1024_bf16_vllm_aiperf_tp1-ep1-dpafalse_disagg-false_spec-none_n_mnbt_conc512_h200-greennode_00';
+    expect(parseAiperfSlug(name)).toEqual({
+      model: 'qwen3.5-27b',
+      isl: 16384,
+      osl: 1024,
+      precision: 'bf16',
+      engine: 'vllm',
+      tp: 1,
+      ep: 1,
+      disagg: false,
+      hw: 'h200',
+    });
+  });
+
+  it('parses the raw spelling for gemma4 tp2 sglang on H100', () => {
+    const name =
+      'aiperf_search_gemma4_16384_1024_fp8_sglang_aiperf_tp2-ep1-dpafalse_disagg-false_spec-none_n_mnbt_conc512_h100-greennode_01';
+    expect(parseAiperfSlug(name)).toMatchObject({
+      model: 'gemma4',
+      isl: 16384,
+      osl: 1024,
+      precision: 'fp8',
+      engine: 'sglang',
+      tp: 2,
+      hw: 'h100',
+    });
+  });
+
   it('detects disagg-true', () => {
     const name = 'aiperf_search_gemma4_8k1k_fp8_sglang_tp4-ep1-dpafalse_disagg-true_conc256_h200-greennode_00';
     expect(parseAiperfSlug(name)?.disagg).toBe(true);
