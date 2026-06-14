@@ -142,6 +142,7 @@ export enum Sequence {
   OneK_OneK = '1k/1k',
   OneK_EightK = '1k/8k',
   EightK_OneK = '8k/1k',
+  SixteenK_OneK = '16k/1k',
 }
 
 const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; category: CategoryTag }> =
@@ -149,6 +150,7 @@ const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; catego
     [Sequence.OneK_OneK]: { label: '1K / 1K', compact: '1k1k', category: 'default' },
     [Sequence.OneK_EightK]: { label: '1K / 8K', compact: '1k8k', category: 'deprecated' },
     [Sequence.EightK_OneK]: { label: '8K / 1K', compact: '8k1k', category: 'default' },
+    [Sequence.SixteenK_OneK]: { label: '16K / 1K', compact: '16k1k', category: 'default' },
   };
 
 export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
