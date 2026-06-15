@@ -11,6 +11,12 @@ name: deploy-dev
 on:
   push:
     branches: [dev]
+    # A workflow- or docs-only commit can't change the app image, so don't
+    # rebuild the dev stack for those (mirrors prod's deploy.yml guard).
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 # Separate from prod's `deploy` group so a dev push never cancels a prod
@@ -92,7 +98,17 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs app | tail -50
           exit 1
 
-      - name: Prune dangling images
-        # Only removes untagged layers; prod's tagged images are kept.
+      - name: Prune images + build cache
+        # Same bounded cleanup as prod: dangling layers + all but the newest
+        # $KEEP_TAGS per-sha dev tags + buildkit cache older than 72h. Only
+        # touches inferencex-app-dev:* — prod's inferencex-app:* are untouched.
         if: always()
-        run: docker image prune -f
+        env:
+          KEEP_TAGS: '5'
+        run: |
+          docker image prune -f
+          docker images inferencex-app-dev --format '{{.Tag}}' \
+            | grep -vx latest \
+            | tail -n +$((KEEP_TAGS + 1)) \
+            | while read -r t; do [ -n "$t" ] && docker rmi "inferencex-app-dev:$t" || true; done
+          docker builder prune -f --filter until=72h

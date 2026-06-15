@@ -111,9 +111,21 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs app | tail -50
           exit 1
 
-      - name: Prune dangling images
-        # Without this, /var/lib/docker grows by ~1 GB per deploy as old
-        # builder + runtime layers pile up. Keep tagged images (including
-        # the per-sha tags above) for rollback.
+      - name: Prune images + build cache
+        # Bound disk growth. `docker image prune -f` only removes *dangling*
+        # layers — the per-sha rollback tags built above are NOT dangling, so
+        # they used to accumulate indefinitely until the disk filled. Keep the
+        # newest $KEEP_TAGS per-sha tags for rollback and drop older ones;
+        # `:latest` and the image the running container uses are never removed
+        # (rmi of an in-use image fails, which we ignore). Also cap the
+        # buildkit cache by age.
         if: always()
-        run: docker image prune -f
+        env:
+          KEEP_TAGS: '5'
+        run: |
+          docker image prune -f
+          docker images inferencex-app --format '{{.Tag}}' \
+            | grep -vx latest \
+            | tail -n +$((KEEP_TAGS + 1)) \
+            | while read -r t; do [ -n "$t" ] && docker rmi "inferencex-app:$t" || true; done
+          docker builder prune -f --filter until=72h
