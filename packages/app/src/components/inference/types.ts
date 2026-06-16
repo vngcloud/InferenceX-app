@@ -482,6 +482,24 @@ export interface ScatterGraphProps {
    */
   niceAxes?: boolean;
   /**
+   * Pin each line label to a stable anchor along its roofline so it tracks the
+   * line smoothly instead of re-running the per-frame greedy placement (which
+   * makes labels teleport between candidate positions as the lines animate).
+   * Defaults to false. The replay panel passes true so labels keep a positional
+   * "affinity" across frames. Trades the static chart's per-frame de-overlap for
+   * positional stability — appropriate while the chart is animating.
+   */
+  pinLineLabels?: boolean;
+  /**
+   * Fixed x/y data extents `[min, max]` to base the axes on, instead of fitting
+   * to the currently rendered points. The normal domain padding (and log /
+   * zero-baseline handling) is still applied on top. Replay passes the whole
+   * run's extent so the axes stay constant across the animation and you can see
+   * the frontier expand toward them over time.
+   */
+  xExtentOverride?: [number, number];
+  yExtentOverride?: [number, number];
+  /**
    * Stable run numbering (entry string `date~rRunId` → 1-based number) shared with
    * the comparison changelog so legend labels match it exactly. Numbers index ALL
    * of a date's runs (not just the ones on the chart), so a removed run leaves a
