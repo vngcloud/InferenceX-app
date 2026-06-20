@@ -157,7 +157,17 @@ export function InferenceProvider({
   });
 
   const [hideNonOptimal, setHideNonOptimal] = useState(() => getUrlParam('i_optimal') !== '0');
-  const [hidePointLabels, setHidePointLabels] = useState(() => getUrlParam('i_nolabel') === '1');
+  const [showPointLabels, setShowPointLabels] = useState(() => {
+    // Legacy `?i_nolabel=1` from before the rename: keep hiding point labels
+    // explicitly so the share link's intent survives future default changes.
+    if (getUrlParam('i_nolabel') === '1') return false;
+    if (getUrlParam('i_label') === '1') return true;
+    // Old share links set `?i_advlabel=1` while keeping the labels default
+    // (shown). Mirror the toggle's auto-enable side-effect on load so those
+    // links still render advanced labels under the new default-off behavior.
+    if (getUrlParam('i_advlabel') === '1') return true;
+    return false;
+  });
   const [logScale, setLogScale] = useState(() => getUrlParam('i_log') === '1');
   const [useAdvancedLabels, setUseAdvancedLabels] = useState(
     () => getUrlParam('i_advlabel') === '1',
@@ -165,7 +175,7 @@ export function InferenceProvider({
   const [showGradientLabels, setShowGradientLabels] = useState(
     () => getUrlParam('i_gradlabel') === '1',
   );
-  const [showLineLabels, setShowLineLabels] = useState(() => getUrlParam('i_linelabel') === '1');
+  const [showLineLabels, setShowLineLabels] = useState(() => getUrlParam('i_linelabel') !== '0');
   const [showSpeedOverlay, setShowSpeedOverlay] = useState(() => getUrlParam('i_speed') === '1');
   const [showMinecraftOverlay, setShowMinecraftOverlay] = useState(
     () => getUrlParam('i_mc') === '1',
@@ -821,7 +831,7 @@ export function InferenceProvider({
       i_dstart: selectedDateRange.startDate,
       i_dend: selectedDateRange.endDate,
       i_optimal: hideNonOptimal ? '' : '0',
-      i_nolabel: hidePointLabels ? '1' : '',
+      i_label: showPointLabels ? '1' : '',
       i_hc: highContrast ? '1' : '',
       i_log: logScale ? '1' : '',
       i_xmetric: selectedXAxisMetric || '',
@@ -830,7 +840,7 @@ export function InferenceProvider({
       i_legend: isLegendExpanded ? '' : '0',
       i_advlabel: useAdvancedLabels ? '1' : '',
       i_gradlabel: showGradientLabels ? '1' : '',
-      i_linelabel: showLineLabels ? '1' : '',
+      i_linelabel: showLineLabels ? '' : '0',
       i_speed: showSpeedOverlay ? '1' : '',
       i_mc: showMinecraftOverlay ? '1' : '',
       i_active: iActiveStr,
@@ -844,7 +854,7 @@ export function InferenceProvider({
       selectedDates,
       selectedDateRange,
       hideNonOptimal,
-      hidePointLabels,
+      showPointLabels,
       highContrast,
       logScale,
       isLegendExpanded,
@@ -989,8 +999,8 @@ export function InferenceProvider({
       setIsLegendExpanded,
       hideNonOptimal,
       setHideNonOptimal,
-      hidePointLabels,
-      setHidePointLabels,
+      showPointLabels,
+      setShowPointLabels,
       highContrast,
       setHighContrast,
       logScale,
@@ -1089,7 +1099,7 @@ export function InferenceProvider({
       availableSequences,
       availableModels,
       hideNonOptimal,
-      hidePointLabels,
+      showPointLabels,
       highContrast,
       logScale,
       isLegendExpanded,

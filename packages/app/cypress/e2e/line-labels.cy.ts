@@ -15,15 +15,22 @@ describe('Line Labels Toggle', () => {
     cy.get('label[for="scatter-line-labels"]').should('contain.text', 'Line Labels');
   });
 
-  it('Line Labels toggle is off by default', () => {
-    cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'unchecked');
-  });
-
-  it('toggling Line Labels on renders label elements on the chart', () => {
-    cy.get('#scatter-line-labels').click();
+  it('Line Labels toggle is on by default', () => {
     cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'checked');
 
-    // Line label groups should appear in the SVG
+    // Line labels render without any interaction
+    cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length.greaterThan', 0);
+  });
+
+  it('toggling Line Labels off then back on removes and restores label elements', () => {
+    // On by default — turn it off first.
+    cy.get('#scatter-line-labels').click();
+    cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'unchecked');
+    cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length', 0);
+
+    // Turn it back on — labels return.
+    cy.get('#scatter-line-labels').click();
+    cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'checked');
     cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length.greaterThan', 0);
   });
 
@@ -146,6 +153,53 @@ describe('Line Labels Toggle', () => {
 
     // Labels should be rendered
     cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length.greaterThan', 0);
+  });
+
+  it('URL param i_linelabel=0 disables line labels on load', () => {
+    cy.visit('/inference?i_linelabel=0', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+      },
+    });
+    cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'unchecked');
+
+    // Labels should not be rendered
+    cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length', 0);
+  });
+
+  it('legacy URL param i_nolabel=1 keeps point labels hidden on load', () => {
+    cy.visit('/inference?i_nolabel=1', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+      },
+    });
+    cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    cy.get('#scatter-point-labels').should('have.attr', 'data-state', 'unchecked');
+  });
+
+  it('legacy URL param i_advlabel=1 auto-enables Labels so advanced labels render', () => {
+    cy.visit('/inference?i_advlabel=1', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+      },
+    });
+    cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'checked');
+    // Labels toggle is auto-enabled by the URL hydration so the advanced
+    // (parallelism) point labels actually render.
+    cy.get('#scatter-point-labels').should('have.attr', 'data-state', 'checked');
+  });
+
+  it('legacy URL combo i_advlabel=1&i_nolabel=1 keeps point labels hidden (i_nolabel wins)', () => {
+    cy.visit('/inference?i_advlabel=1&i_nolabel=1', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+      },
+    });
+    cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'checked');
+    cy.get('#scatter-point-labels').should('have.attr', 'data-state', 'unchecked');
   });
 
   it('appends the precision to each line label when multiple precisions are selected', () => {
