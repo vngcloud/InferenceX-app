@@ -44,6 +44,11 @@ const URL_STATE_KEYS = [
   'i_speed',
   'i_mc',
   'i_active',
+  // Quick filters (vendor / framework / agg-disagg / mtp-stp)
+  'i_vendor',
+  'i_fw',
+  'i_disagg',
+  'i_spec',
   // Evaluation
   'e_rundate',
   'e_bench',
@@ -92,6 +97,10 @@ export const PARAM_DEFAULTS: Record<UrlStateKey, string> = {
   i_speed: '',
   i_mc: '',
   i_active: '',
+  i_vendor: '',
+  i_fw: '',
+  i_disagg: '',
+  i_spec: '',
   e_rundate: '',
   e_bench: '',
   e_hc: '',

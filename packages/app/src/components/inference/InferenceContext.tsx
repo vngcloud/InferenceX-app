@@ -59,6 +59,12 @@ import { filterRunsByModel, getDisplayLabel } from '@/lib/utils';
 
 import { useChartData } from './hooks/useChartData';
 import { resolveComparisonEntries } from './utils/comparisonEntry';
+import {
+  EMPTY_QUICK_FILTERS,
+  type DisaggMode,
+  type QuickFilters,
+  type SpecMode,
+} from './utils/quickFilters';
 
 /** @internal Exported for test provider wrapping only. */
 export const InferenceContext = createContext<InferenceChartContextType | undefined>(undefined);
@@ -152,6 +158,38 @@ export function InferenceProvider({
   const [scaleType, setScaleType] = useState<'auto' | 'linear' | 'log'>(
     () => (getUrlParam('i_scale') as 'auto' | 'linear' | 'log') || 'auto',
   );
+
+  // ── Quick filters (vendor / agg-disagg / mtp-stp) ───────────────────────────
+  // Coarse pre-filters applied to the point set. Empty = no constraint.
+  const [quickFilterVendors, setQuickFilterVendors] = useState<string[]>(() => {
+    const v = getUrlParam('i_vendor');
+    return v ? v.split(',').filter(Boolean) : [];
+  });
+  const [quickFilterFrameworks, setQuickFilterFrameworks] = useState<string[]>(() => {
+    const v = getUrlParam('i_fw');
+    return v ? v.split(',').filter(Boolean) : [];
+  });
+  const [quickFilterDisagg, setQuickFilterDisagg] = useState<DisaggMode[]>(() => {
+    const v = getUrlParam('i_disagg');
+    return v ? (v.split(',').filter(Boolean) as DisaggMode[]) : [];
+  });
+  const [quickFilterSpec, setQuickFilterSpec] = useState<SpecMode[]>(() => {
+    const v = getUrlParam('i_spec');
+    return v ? (v.split(',').filter(Boolean) as SpecMode[]) : [];
+  });
+  const quickFilters = useMemo<QuickFilters>(
+    () => ({
+      vendors: quickFilterVendors,
+      frameworks: quickFilterFrameworks,
+      disagg: quickFilterDisagg,
+      spec: quickFilterSpec,
+    }),
+    [quickFilterVendors, quickFilterFrameworks, quickFilterDisagg, quickFilterSpec],
+  );
+  // The Historical Trends tab hides the quick-filter pills (hideGpuComparison), so
+  // don't silently narrow its chart with selections carried in via share links or
+  // the inference tab — there would be no pill to clear them.
+  const dataQuickFilters = activeTab === 'historical' ? EMPTY_QUICK_FILTERS : quickFilters;
   const { highContrast, setHighContrast, isLegendExpanded, setIsLegendExpanded } = useChartUIState({
     urlPrefix: 'i_',
   });
@@ -256,6 +294,7 @@ export function InferenceProvider({
     loading: chartDataLoading,
     error: chartDataError,
     hardwareConfig,
+    availableQuickFilters,
   } = useChartData(
     selectedModel,
     effectiveSequence,
@@ -273,6 +312,7 @@ export function InferenceProvider({
     latestDate,
     compareGpuPair ?? null,
     asOfRunId,
+    dataQuickFilters,
   );
 
   // For GPU comparison date picker — use shared availability data from global filters
@@ -844,6 +884,10 @@ export function InferenceProvider({
       i_speed: showSpeedOverlay ? '1' : '',
       i_mc: showMinecraftOverlay ? '1' : '',
       i_active: iActiveStr,
+      i_vendor: quickFilterVendors.join(','),
+      i_fw: quickFilterFrameworks.join(','),
+      i_disagg: quickFilterDisagg.join(','),
+      i_spec: quickFilterSpec.join(','),
     },
     [
       selectedYAxisMetric,
@@ -864,6 +908,10 @@ export function InferenceProvider({
       showSpeedOverlay,
       showMinecraftOverlay,
       iActiveStr,
+      quickFilterVendors,
+      quickFilterFrameworks,
+      quickFilterDisagg,
+      quickFilterSpec,
     ],
   );
 
@@ -1011,6 +1059,12 @@ export function InferenceProvider({
       setSelectedE2eXAxisMetric,
       scaleType,
       setScaleType,
+      quickFilters,
+      availableQuickFilters,
+      setQuickFilterVendors,
+      setQuickFilterFrameworks,
+      setQuickFilterDisagg,
+      setQuickFilterSpec,
       loading,
       error,
       workflowInfo,
@@ -1081,6 +1135,8 @@ export function InferenceProvider({
       selectedXAxisMetric,
       selectedE2eXAxisMetric,
       scaleType,
+      quickFilters,
+      availableQuickFilters,
       selectedGPUs,
       selectedDates,
       selectedDateRange,

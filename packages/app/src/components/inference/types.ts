@@ -594,6 +594,31 @@ export interface RunInfo {
   changelog?: ChangelogMetadata;
 }
 
+/** Aggregation mode for the quick filters: aggregated vs disaggregated serving. */
+export type DisaggMode = 'agg' | 'disagg';
+/** Speculative-decoding mode for the quick filters: MTP vs standard token prediction. */
+export type SpecMode = 'mtp' | 'stp';
+
+/**
+ * Coarse vendor / framework / aggregation / spec-decoding filters applied to the
+ * chart point set. Empty array within a category = no constraint. Framework
+ * values are engine-family keys ('vllm' | 'sglang' | 'trt' | 'atom'). See
+ * `utils/quickFilters.ts`.
+ */
+export interface QuickFilters {
+  vendors: string[];
+  frameworks: string[];
+  disagg: DisaggMode[];
+  spec: SpecMode[];
+}
+
+/**
+ * The quick-filter values that actually have data for the current model /
+ * sequence / precision. Drives which pills are shown (frameworks) or disabled
+ * (vendor / agg / spec). Same shape as {@link QuickFilters}.
+ */
+export type AvailableQuickFilters = QuickFilters;
+
 /**
  * Defines the shape of the context object provided by `InferenceChartContext`.
  * @interface InferenceChartContextType
@@ -641,6 +666,14 @@ export interface InferenceChartContextType {
   setSelectedE2eXAxisMetric: (metric: string | null) => void;
   scaleType: 'auto' | 'linear' | 'log';
   setScaleType: (type: 'auto' | 'linear' | 'log') => void;
+  /** Coarse vendor / framework / agg-disagg / mtp-stp filters applied to the chart point set. */
+  quickFilters: QuickFilters;
+  /** Quick-filter values that have data for the current model (drives pill enable/disable). */
+  availableQuickFilters: AvailableQuickFilters;
+  setQuickFilterVendors: (vendors: string[]) => void;
+  setQuickFilterFrameworks: (frameworks: string[]) => void;
+  setQuickFilterDisagg: (modes: DisaggMode[]) => void;
+  setQuickFilterSpec: (modes: SpecMode[]) => void;
   setIsLegendExpanded: (metric: boolean) => void;
   isLegendExpanded: boolean;
   hideNonOptimal: boolean;

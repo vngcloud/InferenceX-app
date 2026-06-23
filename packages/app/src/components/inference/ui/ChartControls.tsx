@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { track } from '@/lib/analytics';
 import { useFeatureGate } from '@/lib/use-feature-gate';
+import { cn } from '@/lib/utils';
 
 import { useInference } from '@/components/inference/InferenceContext';
 import {
@@ -23,8 +24,10 @@ import {
 } from '@/components/ui/select';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import chartDefinitions from '@/components/inference/inference-chart-config.json';
-import type { ChartDefinition } from '@/components/inference/types';
+import type { ChartDefinition, DisaggMode, SpecMode } from '@/components/inference/types';
+import { FRAMEWORK_FAMILIES } from '@/components/inference/utils/quickFilters';
 import type { Model, Sequence } from '@/lib/data-mappings';
 
 /**
@@ -81,6 +84,25 @@ const METRIC_TITLE_MAP = (() => {
   return map;
 })();
 
+/** Quick-filter pill groups: vendor, aggregation mode, spec-decoding method. */
+const QUICK_FILTER_VENDORS: { value: string; label: string }[] = [
+  { value: 'NVIDIA', label: 'NVIDIA' },
+  { value: 'AMD', label: 'AMD' },
+];
+const QUICK_FILTER_DISAGG: { value: DisaggMode; label: string }[] = [
+  { value: 'agg', label: 'Aggregated' },
+  { value: 'disagg', label: 'Disaggregated' },
+];
+const QUICK_FILTER_SPEC: { value: SpecMode; label: string }[] = [
+  { value: 'mtp', label: 'MTP' },
+  { value: 'stp', label: 'STP' },
+];
+
+/** Toggle a value in/out of a quick-filter selection array. */
+function toggleValue<T extends string>(current: T[], value: T): T[] {
+  return current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+}
+
 interface ChartControlsProps {
   /** Hide GPU Config selector and related date pickers (used by Historical Trends tab) */
   hideGpuComparison?: boolean;
@@ -119,6 +141,12 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
     setSelectedXAxisMetric,
     scaleType,
     setScaleType,
+    quickFilters,
+    availableQuickFilters,
+    setQuickFilterVendors,
+    setQuickFilterFrameworks,
+    setQuickFilterDisagg,
+    setQuickFilterSpec,
   } = useInference();
 
   // Y-axis metric options — built from static chart config JSON (no API dependency).
@@ -218,6 +246,28 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
     });
   };
 
+  const handleQuickFilterToggle = (
+    category: 'vendor' | 'framework' | 'disagg' | 'spec',
+    value: string,
+  ) => {
+    const wasActive =
+      category === 'vendor'
+        ? quickFilters.vendors.includes(value)
+        : category === 'framework'
+          ? quickFilters.frameworks.includes(value)
+          : category === 'disagg'
+            ? quickFilters.disagg.includes(value as DisaggMode)
+            : quickFilters.spec.includes(value as SpecMode);
+    if (category === 'vendor') setQuickFilterVendors(toggleValue(quickFilters.vendors, value));
+    else if (category === 'framework')
+      setQuickFilterFrameworks(toggleValue(quickFilters.frameworks, value));
+    else if (category === 'disagg')
+      setQuickFilterDisagg(toggleValue(quickFilters.disagg, value as DisaggMode));
+    else setQuickFilterSpec(toggleValue(quickFilters.spec, value as SpecMode));
+    // `active` is the state *after* this toggle.
+    track('inference_quick_filter_toggled', { category, value, active: !wasActive });
+  };
+
   const isInputMetric = (() => {
     const chartDef = graphs[0]?.chartDefinition;
     if (!chartDef) return false;
@@ -233,6 +283,64 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
       endDate: range.endDate,
     });
   };
+
+  // Quick-filter pill groups. Each option carries an `available` flag (has data
+  // for the current model); the render disables unavailable options unless they
+  // are currently selected, so a selection can always be toggled back off. The
+  // Framework group is data-driven — only families present (or selected) are
+  // offered, so it's omitted entirely when none resolve (e.g. while data loads).
+  const fwSelected = quickFilters.frameworks;
+  const frameworkOptions = FRAMEWORK_FAMILIES.filter(
+    (f) => availableQuickFilters.frameworks.includes(f.key) || fwSelected.includes(f.key),
+  ).map((f) => ({
+    value: f.key,
+    label: f.label,
+    available: availableQuickFilters.frameworks.includes(f.key),
+  }));
+  const quickFilterGroups: {
+    key: 'vendor' | 'framework' | 'disagg' | 'spec';
+    label: string;
+    options: readonly { value: string; label: string; available: boolean }[];
+    selected: readonly string[];
+  }[] = [
+    {
+      key: 'vendor',
+      label: 'Vendor',
+      options: QUICK_FILTER_VENDORS.map((o) => ({
+        ...o,
+        available: availableQuickFilters.vendors.includes(o.value),
+      })),
+      selected: quickFilters.vendors,
+    },
+    ...(frameworkOptions.length > 0
+      ? [
+          {
+            key: 'framework' as const,
+            label: 'Framework',
+            options: frameworkOptions,
+            selected: quickFilters.frameworks,
+          },
+        ]
+      : []),
+    {
+      key: 'disagg',
+      label: 'Aggregation',
+      options: QUICK_FILTER_DISAGG.map((o) => ({
+        ...o,
+        available: availableQuickFilters.disagg.includes(o.value),
+      })),
+      selected: quickFilters.disagg,
+    },
+    {
+      key: 'spec',
+      label: 'Spec Decoding',
+      options: QUICK_FILTER_SPEC.map((o) => ({
+        ...o,
+        available: availableQuickFilters.spec.includes(o.value),
+      })),
+      selected: quickFilters.spec,
+    },
+  ];
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -378,6 +486,52 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
             </div>
           )}
         </div>
+
+        {!hideGpuComparison && (
+          <div className="flex flex-col space-y-1.5" data-testid="quick-filters">
+            <LabelWithTooltip
+              htmlFor="quick-filters"
+              label="Quick Filters"
+              tooltip="Narrow the chart to any combination of GPU vendor, serving framework, aggregation mode (aggregated vs disaggregated serving), and speculative decoding (MTP vs standard). Selecting none in a group shows all."
+            />
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              {quickFilterGroups.map((group) => (
+                <div key={group.key} className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">{group.label}:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {group.options.map((option) => {
+                      const active = (group.selected as readonly string[]).includes(option.value);
+                      // Disable options with no data, but keep a selected one
+                      // clickable so it can always be toggled back off.
+                      const disabled = !option.available && !active;
+                      return (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          size="sm"
+                          variant={active ? 'default' : 'outline'}
+                          aria-pressed={active}
+                          disabled={disabled}
+                          title={disabled ? 'No data for the current selection' : undefined}
+                          // Active pills use the brand color (blue in light, amber in dark)
+                          // rather than the amber primary fill.
+                          className={cn(
+                            'h-7 rounded-full px-3 text-xs',
+                            active && 'bg-brand hover:bg-brand/90',
+                          )}
+                          data-testid={`quick-filter-${group.key}-${option.value}`}
+                          onClick={() => handleQuickFilterToggle(group.key, option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </TooltipProvider>
   );
