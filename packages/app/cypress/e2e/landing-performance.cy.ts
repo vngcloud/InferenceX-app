@@ -94,10 +94,76 @@ describe('Landing page performance', () => {
 
     cy.get('.circuit-bg').should('have.css', 'display', 'none');
     cy.window().then((win) => {
-      const loadedPattern = win.performance
-        .getEntriesByType('resource')
-        .some((entry) => entry.name.includes('/brand/left-pattern-full.svg'));
-      expect(loadedPattern).to.eq(false);
+      const resourceNames = win.performance.getEntriesByType('resource').map((entry) => entry.name);
+      expect(resourceNames.some((name) => name.includes('/brand/left-pattern-full.svg'))).to.eq(
+        false,
+      );
+      expect(resourceNames.some((name) => name.includes('/minecraft-click.mp3'))).to.eq(false);
+      expect(resourceNames.some((name) => name.includes('/Monocraft-'))).to.eq(false);
+      expect(resourceNames.some((name) => name.includes('/logos/huggingface.svg'))).to.eq(false);
+      expect(
+        resourceNames.some(
+          (name) => name.includes('/brand/logo-color.webp') && name.includes('w=128'),
+        ),
+      ).to.eq(false);
+    });
+  });
+
+  it('preloads only the default font and initially visible supporter logo', () => {
+    cy.request('/').then((response) => {
+      // Next emits resource preloads as a `Link` response header (when `/` renders
+      // dynamically) and/or as inlined <link rel="preload"> tags in the document
+      // <head> (when `/` is statically prerendered) — and a production build can
+      // surface the same resource in BOTH places at once. Collect a deduplicated
+      // set of preloaded URLs per `as` type, keyed by URL, so the assertion holds
+      // in every render mode and never double-counts a resource listed twice.
+      const linkHeader = String(response.headers.link ?? '');
+      const body = String(response.body ?? '');
+
+      const fonts = new Set<string>();
+      const logos = new Set<string>();
+      const add = (as: string | undefined, url: string | undefined) => {
+        if (!url) return;
+        if (as === 'font') fonts.add(url);
+        else if (as === 'image' && url.startsWith('/logos/')) logos.add(url);
+      };
+
+      // `Link` header entries: <url>; rel=preload; as="font"|"image"; ...
+      for (const entry of linkHeader.split(',')) {
+        if (!/\brel=preload\b/u.test(entry)) continue;
+        add(
+          entry.match(/\bas="(?<as>[^"]+)"/u)?.groups?.as,
+          entry.match(/<(?<url>[^>]+)>/u)?.groups?.url,
+        );
+      }
+
+      // Inlined <link rel="preload"> tags.
+      for (const tag of body.match(/<link\b[^>]*\brel="preload"[^>]*>/gu) ?? []) {
+        add(
+          tag.match(/\bas="(?<as>[^"]+)"/u)?.groups?.as,
+          tag.match(/\bhref="(?<href>[^"]+)"/u)?.groups?.href,
+        );
+      }
+
+      expect([...fonts]).to.have.length(1);
+      expect([...logos]).to.have.length(1);
+      expect([...logos][0]).to.eq('/logos/openai.svg');
+    });
+  });
+
+  it('loads Minecraft assets after the theme is activated', () => {
+    cy.visit('/', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('theme', 'dark');
+        win.localStorage.setItem('minecraft-music', 'false');
+      },
+    });
+
+    cy.get('[data-testid="theme-toggle"]').click();
+    cy.get('html').should('have.class', 'minecraft');
+    cy.window().should((win) => {
+      const resourceNames = win.performance.getEntriesByType('resource').map((entry) => entry.name);
+      expect(resourceNames.some((name) => name.includes('/minecraft-click.mp3'))).to.eq(true);
     });
   });
 });
