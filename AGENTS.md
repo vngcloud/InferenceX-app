@@ -262,8 +262,12 @@ Detailed design rationale (the "why" and "how", not the "what") lives in [docs/]
 
 ### `@claude` (`.github/workflows/claude.yml`)
 
-All Claude AI workflows are dispatched from a single trigger word `@claude`. The next word selects the mode:
+Three jobs: a lightweight Haiku **`route`** classifier runs on any `@claude` mention in an issue/comment and emits a `profile`; its output gates **`implement`** or **`review`**. (The `review` job also triggers directly on PR open/sync, with no comment to route.)
 
-- `@claude` (or `@claude <anything>`) — implementation with Playwright MCP. Triggered by mentioning in issues/comments. Full code implementation + browser testing. Creates `claude/issue-{N}-*` branches. Must verify charts render real data (no "No data available").
-- `@claude chrome` — implementation with Chrome DevTools MCP instead of Playwright. Preferred when you need deeper debugging (network requests, console messages, JS evaluation).
-- `@claude review` — code review only. Also auto-runs on PR open/sync. Flags: bugs, security, breaking changes, missing tests (🔴 BLOCKING), low-quality tests (🔴 BLOCKING). Ignores: style, naming, docs.
+- `@claude <anything>` — `route` picks a **profile** (`ui` / `code` / `docs` / `question` / `review`) and, for implement profiles, a browser (`playwright` / `chrome` / `none`).
+  - **implement** job (`ui` / `code` / `docs` / `question`): provisions only what's needed — dev server, Playwright browser, and Cypress binary install **on demand** only for browser/UI work, so docs/DB/backend/question tasks stay fast. `ui` gets full browser verification (render real data, check the `?unofficialrun=` overlay, add `track()` + tests, pass `pnpm test:e2e`); the rest get scoped checks. Creates `claude/issue-{N}-*` branches and can push.
+  - **review** job (`review` profile, or any PR open/sync): a **read-only**, **verifying** review. It checks out the PR head, starts a local dev server backed by the real read-only DB, and uses the **Playwright MCP** on `http://localhost:3000` to confirm the changed UI actually works (renders real data, interactions behave, no console errors). It does **not** re-run the test suite — `typecheck`/`lint`/`test:unit` and the fixtures-based e2e are already covered by the dedicated `tests-*`/`lint` workflows; the review reads their status and folds failures into the review as 🔴 BLOCKING — plus the static diff review (bugs, security, missing tests). Never edits or pushes. A review-phrased ask in **any** wording (e.g. "@claude take a look at this PR") routes here, not just the exact `@claude review`. Prompt: `.github/claude/review-prompt.md`.
+- **Explicit overrides** (skip the classifier): `@claude review` → review; `@claude chrome` → Chrome DevTools MCP; `@claude frontend` → full Playwright + dev server; `@claude general` (or `lite`) → lean no-browser. If the router guesses wrong, re-run with the override.
+- `implement` and `review` share a `claude-<PR/issue number>` concurrency group, so reviews and implementation on the same PR serialize instead of clobbering each other.
+
+The model is set once via the workflow-level `CLAUDE_MODEL` env (`claude-opus-4-8`); the router uses `CLAUDE_ROUTER_MODEL` (`claude-haiku-4-5`).
