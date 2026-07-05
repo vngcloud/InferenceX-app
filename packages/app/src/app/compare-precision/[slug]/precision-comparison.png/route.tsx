@@ -1,149 +1,85 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { ImageResponse } from 'next/og';
 
 import { HW_REGISTRY } from '@semianalysisai/inferencex-constants';
 
 import { trackServer } from '@/lib/analytics-server';
-import { pickPairDefaults } from '@/lib/compare-pair-defaults';
-import { canonicalCompareSlug, parseCompareSlug } from '@/lib/compare-slug';
+import { getCachedBenchmarks } from '@/lib/compare-ssr';
 import {
-  computeCompareImageRows,
-  computeCompareTableData,
-  getCachedBenchmarks,
-  type SsrInterpolatedRow,
-} from '@/lib/compare-ssr';
+  computeVariantCompareImageRows,
+  computeVariantCompareTableData,
+  pickVariantPairDefaults,
+} from '@/lib/compare-variant-ssr';
+import {
+  canonicalPrecisionCompareSlug,
+  parsePrecisionCompareSlug,
+  precisionDisplayLabel,
+} from '@/lib/compare-variant-slug';
+import { getLogoSrc } from '@/lib/og-assets';
+import {
+  buildSeriesPoints,
+  CHART,
+  CHART_FRAME,
+  COLORS,
+  money,
+  moneyForStep,
+  niceAxis,
+  R,
+  renderSeriesPath,
+  SIZE,
+  splitByMatchRange,
+} from '@/lib/png-chart';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-// Render natively at high-DPI. CSS `transform: scale()` causes Satori to rasterize
-// SVG/text at the source size and bitmap-upsample, which produces a blurry chart.
-// Multiplying every pixel value by R keeps glyphs and strokes as vectors at full res.
-const R = 2;
-const SIZE = { width: 1200 * R, height: 675 * R };
-const CHART_FRAME = { left: 0, top: 18 * R, width: 746 * R, height: 382 * R };
-const CHART = { left: 96 * R, top: 42 * R, width: 630 * R, height: 260 * R };
-const COLORS = {
-  background: '#0d1117',
-  panel: '#121a23',
-  border: '#23303d',
-  muted: '#9aa7b5',
-  faint: '#5f6e7d',
-  text: '#f3f7fb',
-  a: '#38d9a9',
-  b: '#f7b041',
-  grid: '#263544',
-  blue: '#0b86d1',
-};
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-interface TargetedPoint extends Point {
-  target: number;
-}
-
-function money(value: number): string {
-  if (value >= 10) return `$${value.toFixed(1)}`;
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  return `$${value.toFixed(3)}`;
-}
-
-/** Decimals chosen from the tick step so every label in the axis prints with
- * the same precision (no $0.000/$9.01/$18.0 mix). */
-function decimalsForStep(step: number): number {
-  if (step >= 1) return 0;
-  return Math.max(0, Math.ceil(-Math.log10(step)));
-}
-
-function moneyForStep(value: number, step: number): string {
-  return `$${value.toFixed(decimalsForStep(step))}`;
-}
-
-/** "Nice" step in the 1/2/5 × 10ⁿ family, the same convention d3 uses. */
-function niceStep(span: number, targetCount: number): number {
-  const rawStep = span / Math.max(1, targetCount - 1);
-  const mag = 10 ** Math.floor(Math.log10(rawStep));
-  const normalized = rawStep / mag;
-  if (normalized < 1.5) return mag;
-  if (normalized < 3) return 2 * mag;
-  if (normalized < 7) return 5 * mag;
-  return 10 * mag;
-}
-
-function niceAxis(
-  min: number,
-  max: number,
-  targetCount = 5,
-): { min: number; max: number; step: number; ticks: number[] } {
-  if (max <= min) return { min, max: min + 1, step: 1, ticks: [min] };
-  const step = niceStep(max - min, targetCount);
-  const niceMin = Math.floor(min / step) * step;
-  const niceMax = Math.ceil(max / step) * step;
-  const ticks: number[] = [];
-  for (let t = niceMin; t <= niceMax + step * 1e-6; t += step) {
-    ticks.push(Number(t.toFixed(10)));
-  }
-  return { min: niceMin, max: niceMax, step, ticks };
-}
-
-function pointsPath(points: Point[]): string {
-  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
-}
-
-let logoSrcPromise: Promise<string | null> | undefined;
-function getLogoSrc(): Promise<string | null> {
-  if (!logoSrcPromise) {
-    logoSrcPromise = readFile(join(process.cwd(), 'public/brand/logo-color.png'))
-      .then((buf) => `data:image/png;base64,${buf.toString('base64')}`)
-      .catch(() => null);
-  }
-  return logoSrcPromise;
-}
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ): Promise<Response> {
   const { slug } = await params;
-  const parsed = parseCompareSlug(slug);
+  const parsed = parsePrecisionCompareSlug(slug);
+  // Compare case-insensitively — the HTML pages lowercase before their 308,
+  // so a mixed-case PNG URL should serve rather than 404.
   if (
     !parsed ||
-    canonicalCompareSlug(parsed.model.slug, parsed.a, parsed.b) !== slug.toLowerCase()
+    canonicalPrecisionCompareSlug(parsed.model.slug, parsed.gpu, parsed.precA, parsed.precB) !==
+      slug.toLowerCase()
   ) {
     return new Response('Not found', { status: 404 });
   }
+
+  const sideA = { precision: parsed.precA };
+  const sideB = { precision: parsed.precB };
 
   const [rows, logoSrc] = await Promise.all([
     getCachedBenchmarks(parsed.model.dbKeys),
     getLogoSrc(),
   ]);
-  const { sequence, precision } = pickPairDefaults(rows, parsed.a, parsed.b);
-  const { ssrRows, interactivityRange } = computeCompareTableData(
+
+  const { sequence } = pickVariantPairDefaults('precision', rows, parsed.gpu, sideA, sideB);
+  const { ssrRows, interactivityRange } = computeVariantCompareTableData(
     rows,
-    parsed.a,
-    parsed.b,
+    parsed.gpu,
     sequence,
-    precision,
+    sideA,
+    sideB,
   );
   const plottedRows = ssrRows.filter((row) => row.a || row.b);
-  const imageRows = computeCompareImageRows(
+  const imageRows = computeVariantCompareImageRows(
     rows,
-    parsed.a,
-    parsed.b,
+    parsed.gpu,
     sequence,
-    precision,
+    sideA,
+    sideB,
     interactivityRange,
     plottedRows.map((r) => r.target),
   ).filter((row) => row.a || row.b);
   const curveRows = imageRows.length > 0 ? imageRows : plottedRows;
 
-  const aLabel = HW_REGISTRY[parsed.a]?.label ?? parsed.a.toUpperCase();
-  const bLabel = HW_REGISTRY[parsed.b]?.label ?? parsed.b.toUpperCase();
+  const gpuMeta = HW_REGISTRY[parsed.gpu];
+  const gpuLabel = gpuMeta?.label ?? parsed.gpu.toUpperCase();
+  const aLabel = precisionDisplayLabel(parsed.precA);
+  const bLabel = precisionDisplayLabel(parsed.precB);
   const costs = curveRows
     .flatMap((row) => [row.a?.cost, row.b?.cost])
     .filter((cost): cost is number => typeof cost === 'number' && Number.isFinite(cost));
@@ -166,49 +102,26 @@ export async function GET(
     CHART.height -
     (yMax === yMin ? CHART.height / 2 : ((value - yMin) / (yMax - yMin)) * CHART.height);
 
-  function buildSeriesPoints(getCost: (row: SsrInterpolatedRow) => number | null): TargetedPoint[] {
-    return curveRows
-      .map((row) => ({ target: row.target, cost: getCost(row) }))
-      .filter((p): p is { target: number; cost: number } => p.cost !== null)
-      .map((p) => ({ x: scaleX(p.target), y: scaleY(p.cost), target: p.target }));
-  }
-
-  function splitByMatchRange(points: TargetedPoint[]) {
-    return {
-      matched: points.filter((p) => p.target >= matchedMin && p.target <= matchedMax),
-      leftExt: points.filter((p) => p.target <= matchedMin),
-      rightExt: points.filter((p) => p.target >= matchedMax),
-    };
-  }
-
-  const aSeries = splitByMatchRange(buildSeriesPoints((r) => r.a?.cost ?? null));
-  const bSeries = splitByMatchRange(buildSeriesPoints((r) => r.b?.cost ?? null));
+  const aSeries = splitByMatchRange(
+    buildSeriesPoints(curveRows, (r) => r.a?.cost ?? null, scaleX, scaleY),
+    matchedMin,
+    matchedMax,
+  );
+  const bSeries = splitByMatchRange(
+    buildSeriesPoints(curveRows, (r) => r.b?.cost ?? null, scaleX, scaleY),
+    matchedMin,
+    matchedMax,
+  );
   const aHighlightPoints = plottedRows
     .filter((row) => row.a)
     .map((row) => ({ x: scaleX(row.target), y: scaleY(row.a!.cost) }));
   const bHighlightPoints = plottedRows
     .filter((row) => row.b)
     .map((row) => ({ x: scaleX(row.target), y: scaleY(row.b!.cost) }));
-  const workload = [sequence, precision?.toUpperCase()].filter(Boolean).join(' / ');
+  const workload = sequence ?? '';
   const showRangeEndpoints = hasLeftExtension || hasRightExtension;
   const svgWidth = 760 * R;
   const svgHeight = 406 * R;
-
-  function renderSeriesPath(points: Point[], stroke: string, dashed: boolean) {
-    if (points.length < 2) return null;
-    return (
-      <path
-        d={pointsPath(points)}
-        fill="none"
-        stroke={stroke}
-        strokeWidth={9 * R}
-        strokeOpacity={dashed ? 0.55 : 1}
-        strokeDasharray={dashed ? `${14 * R} ${10 * R}` : undefined}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    );
-  }
 
   try {
     return new ImageResponse(
@@ -236,10 +149,10 @@ export async function GET(
                 color: COLORS.blue,
               }}
             >
-              InferenceX Performance per Dollar
+              InferenceX Precision Comparison
             </div>
             <div style={{ display: 'flex', fontSize: 41 * R, fontWeight: 800 }}>
-              {parsed.model.label}
+              {parsed.model.label} · {gpuLabel}
             </div>
             <div style={{ display: 'flex', fontSize: 25 * R, color: COLORS.muted }}>
               {aLabel} vs {bLabel} | Cost per Million Tokens
@@ -456,7 +369,7 @@ export async function GET(
                   fontStyle: 'italic',
                 }}
               >
-                Dashed segments extend to each SKU's operating envelope, where cost rises steeply
+                Dashed segments extend to each precision's operating envelope
               </div>
             )}
           </div>
@@ -544,7 +457,7 @@ export async function GET(
           }}
         >
           <span style={{ display: 'flex' }}>
-            Owning-hyperscaler TCO | interpolated from benchmark results
+            Precision comparison | interpolated from benchmark results
           </span>
           <span style={{ display: 'flex', color: COLORS.text, fontWeight: 700 }}>
             inferencex.semianalysis.com
@@ -559,24 +472,17 @@ export async function GET(
       },
     );
   } catch (error) {
-    // Satori can throw on a font fetch failure, malformed JSX layout, or a
-    // dataset that produces NaN/Infinity geometry. Capture which slug broke so
-    // we can find broken categories before a crawler hits them — without this,
-    // failures only surface as opaque Vercel 500s.
     const message = error instanceof Error ? error.message : String(error);
-    trackServer('compare_per_dollar_png_render_failed', {
+    trackServer('compare_precision_png_render_failed', {
       slug,
       model: parsed.model.slug,
-      a: parsed.a,
-      b: parsed.b,
+      gpu: parsed.gpu,
+      precA: parsed.precA,
+      precB: parsed.precB,
       sequence,
-      precision,
       error_name: error instanceof Error ? error.name : 'Unknown',
       error_message: message.slice(0, 500),
     });
-    // 502 (not 500): the route itself is reachable, the downstream renderer
-    // failed. Short cache so a retry within the hour pulls a fixed render
-    // instead of pinning the failure.
     return new Response('PNG render failed', {
       status: 502,
       headers: { 'Cache-Control': 'public, s-maxage=60' },
