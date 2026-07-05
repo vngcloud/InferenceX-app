@@ -58,7 +58,7 @@ jobs:
       fail-fast: false
       matrix:
         browser: [chrome, firefox]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
@@ -70,6 +70,22 @@ jobs:
         if: matrix.browser == 'firefox'
         with:
           firefox-version: latest
+      # Persist .next/cache between builds (Turbopack compiler cache — enabled
+      # via turbopackFileSystemCacheForBuild in next.config.ts for CI — plus
+      # the incremental fetch cache), per
+      # https://nextjs.org/docs/pages/guides/ci-build-caching#github-actions.
+      # Runs before `pnpm install` so hashFiles never scans node_modules.
+      - name: Cache Next.js build
+        uses: useblacksmith/cache@c5fe29eb0efdf1cf4186b9f7fcbbcbc0cf025662 # v5.1.0
+        with:
+          path: packages/app/.next/cache
+          # New cache whenever packages or source files change; fall back to
+          # the newest cache for the same lockfile so changed sources still
+          # start from a warm compiler cache.
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('packages/**/*.js', 'packages/**/*.jsx', 'packages/**/*.ts', 'packages/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+            ${{ runner.os }}-nextjs-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
         env:
@@ -101,11 +117,11 @@ jobs:
           CI: true
           E2E_FIXTURES: '1'
           # cypress-split picks the subset of specs for this shard.
-          # SPLIT_INDEX1 is 1-based to match matrix.shard values [1, 2, 3, 4].
+          # SPLIT_INDEX1 is 1-based to match matrix.shard values [1..16].
           # SPLIT_FILE seeds the balance from observed timings;
           # SPLIT_OUTPUT_FILE redirects on-disk updates to a throwaway path
           # so CI never tries to mutate the committed timings.json.
-          SPLIT: 4
+          SPLIT: 16
           SPLIT_INDEX1: ${{ matrix.shard }}
           SPLIT_FILE: timings.json
           SPLIT_OUTPUT_FILE: /tmp/cypress-split-out.json
