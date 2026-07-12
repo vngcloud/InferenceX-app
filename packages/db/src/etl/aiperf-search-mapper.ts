@@ -140,7 +140,9 @@ function stat(
 /** Concurrency of an iteration: the `profiling` phase concurrency in input_config. */
 function concurrencyOf(data: Record<string, any>): number | undefined {
   const phases: any[] = data?.input_config?.phases ?? [];
-  const profiling = phases.find((p) => p?.name === 'profiling') ?? phases.find((p) => p?.concurrency != null);
+  const profiling =
+    phases.find((p) => p?.name === 'profiling') ??
+    phases.find((p) => typeof p?.concurrency === 'number');
   const c = profiling?.concurrency;
   return typeof c === 'number' ? c : undefined;
 }
@@ -249,7 +251,7 @@ export function readAiperfSearchDir(dir: string): AiperfRawRow[] {
   const iterDirs = fs
     .readdirSync(dir)
     .filter((d) => d.startsWith('search_iter_'))
-    .sort();
+    .toSorted();
 
   const rows: AiperfRawRow[] = [];
   for (const iter of iterDirs) {

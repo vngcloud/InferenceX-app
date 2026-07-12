@@ -67,12 +67,15 @@ describe('parseAiperfSlug', () => {
   });
 
   it('detects disagg-true', () => {
-    const name = 'aiperf_search_gemma4_8k1k_fp8_sglang_tp4-ep1-dpafalse_disagg-true_conc256_h200-greennode_00';
+    const name =
+      'aiperf_search_gemma4_8k1k_fp8_sglang_tp4-ep1-dpafalse_disagg-true_conc256_h200-greennode_00';
     expect(parseAiperfSlug(name)?.disagg).toBe(true);
   });
 
   it('returns null when no workload token is present', () => {
-    expect(parseAiperfSlug('aiperf_search_qwen3.5-27b_bf16_vllm_conc256_h200-greennode_00')).toBeNull();
+    expect(
+      parseAiperfSlug('aiperf_search_qwen3.5-27b_bf16_vllm_conc256_h200-greennode_00'),
+    ).toBeNull();
   });
 });
 
@@ -82,11 +85,26 @@ function metric(avg: number, extra: Record<string, number> = {}): Record<string,
 }
 
 /** Write one search-iteration profile export under a fixture artifact directory. */
-function writeIter(artDir: string, iter: number, concurrency: number, body: Record<string, any>): void {
-  const dir = path.join(artDir, `search_iter_${String(iter).padStart(4, '0')}`, 'profile_runs', 'run_0001');
+function writeIter(
+  artDir: string,
+  iter: number,
+  concurrency: number,
+  body: Record<string, any>,
+): void {
+  const dir = path.join(
+    artDir,
+    `search_iter_${String(iter).padStart(4, '0')}`,
+    'profile_runs',
+    'run_0001',
+  );
   fs.mkdirSync(dir, { recursive: true });
   const data = {
-    input_config: { phases: [{ name: 'warmup', concurrency }, { name: 'profiling', concurrency }] },
+    input_config: {
+      phases: [
+        { name: 'warmup', concurrency },
+        { name: 'profiling', concurrency },
+      ],
+    },
     ...body,
   };
   fs.writeFileSync(path.join(dir, 'profile_export_aiperf.json'), JSON.stringify(data));
@@ -171,7 +189,10 @@ describe('readAiperfSearchDir', () => {
 
   it('skips an iteration missing concurrency or core throughput', () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiperf-test-'));
-    const artDir = path.join(tmp, 'aiperf_search_qwen3.5-27b_8k1k_bf16_vllm_tp1-ep1_conc256_h200-greennode_00');
+    const artDir = path.join(
+      tmp,
+      'aiperf_search_qwen3.5-27b_8k1k_bf16_vllm_tp1-ep1_conc256_h200-greennode_00',
+    );
     fs.mkdirSync(artDir, { recursive: true });
     // No throughput metrics → skipped.
     writeIter(artDir, 0, 32, { inter_token_latency: metric(40) });

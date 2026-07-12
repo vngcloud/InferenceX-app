@@ -15,7 +15,7 @@ The full set of candidates an AIPerf search produces for one run, spanning the c
 _Avoid_: sweep (a sweep enumerates a fixed grid; a search navigates toward an objective).
 
 **Full ladder**:
-The decision to ingest *every* candidate of a run — feasible and infeasible alike — rather than only the selected best. The opposite of best-run-only.
+The decision to ingest _every_ candidate of a run — feasible and infeasible alike — rather than only the selected best. The opposite of best-run-only.
 
 **Feasible**:
 A candidate whose metrics satisfy the run's SLA filter (for fastfood: `inter_token_latency.p95 < 50 ms`). Sourced from `search_history.json`, not recomputed. Infeasible candidates are still ingested; they sit at the high-latency end of the chart.
@@ -35,11 +35,11 @@ _Avoid_: synthetic benchmark (too broad).
 The table holding one row per `(workflow_run, config, benchmark_type, isl, osl, conc, techniques)`. Because `conc` is in the key, a full ladder lands as many rows — one per concurrency — which existing charts plot directly. Fastfood candidates are stored here under `benchmark_type = single_turn`.
 
 **aiperf_search_candidates**:
-A hypothetical dedicated table for search-space data (candidate identity, iteration index, feasibility, objective). Considered and *not* built — see `docs/adr/0001`. Listed here so the term is not reintroduced as if it exists.
+A hypothetical dedicated table for search-space data (candidate identity, iteration index, feasibility, objective). Considered and _not_ built — see `docs/adr/0001`. Listed here so the term is not reintroduced as if it exists.
 
 ## Flagged ambiguities
 
-- **"best run" vs "full ladder"** — early framing treated ingest as a binary "best run only" vs "modify code for full candidates." Resolved: best-run-only is *not* cheaper (these runs emit only `aiperf_search_*`, never `results_bmk`, so a new mapper is required either way), and the chart's value is the curve, so we ingest the full ladder.
+- **"best run" vs "full ladder"** — early framing treated ingest as a binary "best run only" vs "modify code for full candidates." Resolved: best-run-only is _not_ cheaper (these runs emit only `aiperf_search_*`, never `results_bmk`, so a new mapper is required either way), and the chart's value is the curve, so we ingest the full ladder.
 
 ## Example dialogue
 

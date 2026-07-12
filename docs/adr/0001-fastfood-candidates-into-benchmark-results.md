@@ -8,7 +8,7 @@ We ingest the full AIPerf search ladder (every candidate, feasible and infeasibl
 
 ## Considered and rejected
 
-- **Dedicated `aiperf_search_candidates` table + ingest path + API + search-ladder UI.** Preserves search metadata (iteration index, objective, feasibility) as first-class fields. Rejected for the dev/experimental phase: large surface area for data the dashboard does not yet need. The cost we accept is that iteration index and an explicit feasibility flag are *not* persisted — feasibility is inferred from the latency axis at view time. If the team later wants to explore the search space itself (not just the resulting curve), revisit this.
+- **Dedicated `aiperf_search_candidates` table + ingest path + API + search-ladder UI.** Preserves search metadata (iteration index, objective, feasibility) as first-class fields. Rejected for the dev/experimental phase: large surface area for data the dashboard does not yet need. The cost we accept is that iteration index and an explicit feasibility flag are _not_ persisted — feasibility is inferred from the latency axis at view time. If the team later wants to explore the search space itself (not just the resulting curve), revisit this.
 
 ## Status
 
