@@ -40,8 +40,6 @@ import {
 } from './etl/reused-ingest-metadata';
 import { mapBenchmarkRow } from './etl/benchmark-mapper';
 import { readAiperfSearchDir } from './etl/aiperf-search-mapper';
-import { readLiveCheckDir } from './etl/live-check-mapper';
-import { bulkIngestLiveCheckRows } from './etl/live-check-ingest';
 import {
   bulkIngestBenchmarkRows,
   bulkIngestRunStats,
@@ -310,8 +308,6 @@ async function main(): Promise<void> {
     totalDupBmk = 0;
   let totalNewStats = 0,
     totalDupStats = 0;
-  let totalNewLiveCheck = 0,
-    totalDupLiveCheck = 0;
   let totalEvals = 0;
   let totalSamples = 0;
   let totalSampleFiles = 0;
@@ -571,39 +567,6 @@ async function main(): Promise<void> {
     console.log(`  Run stats: +${totalNewStats} new, ${totalDupStats} dup`);
   }
 
-  // ── Ingest live-check results (post-deploy smoke + throughput probes) ─
-  // Separate from the sweep-only blocks above: a smoke-test.yml run never
-  // ships results_bmk/run-stats, so this is not gated on evalsOnly. See
-  // design/new-test-design.md.
-
-  console.log('\n--- Live Check ---');
-  {
-    const liveCheckDirs = fs
-      .readdirSync(artifactsDir)
-      .filter((d) => d.startsWith('smoke_test_results_'))
-      .map((d) => path.join(artifactsDir, d))
-      .filter((d) => fs.statSync(d).isDirectory());
-    console.log(`  Found ${liveCheckDirs.length} smoke_test_results_* artifact(s)`);
-
-    for (const dir of liveCheckDirs) {
-      const rows = readLiveCheckDir(dir);
-      if (rows.length === 0) continue;
-      try {
-        const { newCount, dupCount } = await bulkIngestLiveCheckRows(
-          sql,
-          rows,
-          workflowRunId,
-          date,
-        );
-        totalNewLiveCheck += newCount;
-        totalDupLiveCheck += dupCount;
-      } catch (error: any) {
-        tracker.recordDbError(path.basename(dir), error);
-      }
-    }
-    console.log(`  Live check: +${totalNewLiveCheck} new, ${totalDupLiveCheck} dup`);
-  }
-
   // ── Ingest eval results ───────────────────────────────────────────────
   //
   // Two artifact shapes contribute to `eval_results`:
@@ -752,7 +715,6 @@ async function main(): Promise<void> {
   const [evalCount] = await sql`select count(*)::int as n from eval_results`;
   const [sampleCount] = await sql`select count(*)::bigint as n from eval_samples`;
   const [changelogCount] = await sql`select count(*)::int as n from changelog_entries`;
-  const [liveCheckCount] = await sql`select count(*)::int as n from live_check_results`;
 
   console.log('\n=== Summary ===');
   console.log(
@@ -764,9 +726,6 @@ async function main(): Promise<void> {
   console.log(`  Eval results:      ${totalEvals} new`);
   console.log(`  Eval samples:      ${totalSamples} new across ${totalSampleFiles} file(s)`);
   console.log(`  Changelog entries: ${totalChangelogs} new`);
-  console.log(
-    `  Live check:        ${totalNewLiveCheck} new, ${totalDupLiveCheck} duplicate (ON CONFLICT updates)`,
-  );
   console.log(`\n  DB totals:`);
   console.log(`    configs           ${configCount.n}`);
   console.log(`    benchmark_results ${resultCount.n}`);
@@ -774,7 +733,6 @@ async function main(): Promise<void> {
   console.log(`    eval_results      ${evalCount.n}`);
   console.log(`    eval_samples      ${sampleCount.n}`);
   console.log(`    changelog_entries ${changelogCount.n}`);
-  console.log(`    live_check_results ${liveCheckCount.n}`);
 
   const { skips, unmappedModels, unmappedHws, unmappedPrecisions } = tracker;
   const totalSkips =

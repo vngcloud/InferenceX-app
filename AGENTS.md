@@ -97,7 +97,7 @@ All interactive elements should have `track()` from `@/lib/analytics` (autocaptu
 
 **Convention**: `[section]_[action]` — e.g., `latency_zoom_reset`, `calculator_bar_selected`, `tab_changed`
 
-**Prefixes**: `latency_`, `interactivity_`, `gpu_timeseries_`, `inference_`, `calculator_`, `evaluation_`, `reliability_`, `tab_`, `selector_`, `blog_`, `social_`, `live_check_`
+**Prefixes**: `latency_`, `interactivity_`, `gpu_timeseries_`, `inference_`, `calculator_`, `evaluation_`, `reliability_`, `tab_`, `selector_`, `blog_`, `social_`
 
 ## Tab Structure
 

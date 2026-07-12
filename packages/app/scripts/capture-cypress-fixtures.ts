@@ -188,8 +188,6 @@ async function main() {
     `/api/v1/workflow-info?date=${encodeURIComponent(latestDate)}`,
   );
 
-  const liveCheck = await fetchJson<unknown[]>('/api/v1/live-check');
-
   const N = TOP_DATES_PER_PARTITION;
   const sizes: [string, number][] = [
     [
@@ -252,8 +250,6 @@ async function main() {
       }),
     ],
     ['workflow-info', await writeFixture('workflow-info', workflowInfo)],
-    // Small "what's currently live" snapshot — not truncated, always small.
-    ['live-check', await writeFixture('live-check', liveCheck)],
   ];
 
   for (const [name, bytes] of sizes) {

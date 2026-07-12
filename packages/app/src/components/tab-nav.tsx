@@ -88,7 +88,6 @@ const GATED_TABS = [
     testId: 'tab-trigger-current-inferencex-image',
   },
   { href: '/feedback', label: 'Feedback', testId: 'tab-trigger-feedback' },
-  { href: '/live-check', label: 'Live Check', testId: 'tab-trigger-live-check' },
 ] as const;
 
 const TAB_VALUES = new Set([...VISIBLE_TABS, ...GATED_TABS].map((t) => t.href.slice(1)));
