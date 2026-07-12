@@ -43,9 +43,7 @@ env:
   COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
   SOURCE_REPO: vngcloud/InferenceX
   INGEST_PREFIX: '[ingest]'
-  # The GH Actions display name comes from smoke-test.yml's `name:` key
-  # ("Smoke Test"), not the filename — don't confuse the two.
-  SMOKE_TEST_WORKFLOW_NAME: 'Smoke Test'
+  SMOKE_TEST_WORKFLOW_NAME: 'smoke-test'
 
 jobs:
   ingest:
