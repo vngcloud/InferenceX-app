@@ -66,25 +66,12 @@ jobs:
             exit 0
           fi
 
-          # Recent completed runs: sweep runs (the [ingest] prefix convention)
-          # must have succeeded, but Smoke Test runs are ingested on success OR
-          # failure — its job intentionally fails whenever any probe is
-          # ok=false (a correctness gate, see design/new-test-design.md on
-          # dev), yet still uploads a valid results artifact either way, e.g.
-          # the tool-calling probe currently fails on every stack by design.
-          # status=completed (not "success") so failed Smoke Test runs aren't
-          # filtered out at the API level; conclusion is checked in the jq.
+          # Recent successful runs whose workflow name starts with the marker,
+          # or is exactly the smoke-test workflow (post-deploy live-check —
+          # doesn't use the [ingest] prefix convention since it's not a sweep).
           # 50 covers ~a day of bench activity at current volume; bump if needed.
-          gh api "repos/$SOURCE_REPO/actions/runs?status=completed&per_page=50" \
-            --jq "
-              .workflow_runs[]
-              | select(
-                  ((.name | startswith(\"$INGEST_PREFIX\")) and .conclusion == \"success\")
-                  or
-                  (.name == \"$SMOKE_TEST_WORKFLOW_NAME\" and (.conclusion == \"success\" or .conclusion == \"failure\"))
-                )
-              | .html_url
-            " \
+          gh api "repos/$SOURCE_REPO/actions/runs?status=success&per_page=50" \
+            --jq ".workflow_runs[] | select((.name | startswith(\"$INGEST_PREFIX\")) or (.name == \"$SMOKE_TEST_WORKFLOW_NAME\")) | .html_url" \
             > candidates.txt
 
           # Already-ingested run IDs (newline-separated).
