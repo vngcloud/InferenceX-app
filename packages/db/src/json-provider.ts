@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import type { BenchmarkRow } from './queries/benchmarks.js';
 import type { EvalRow } from './queries/evaluations.js';
 import type { ReliabilityRow } from './queries/reliability.js';
+import type { LiveCheckRow } from './queries/live-check.js';
 import type {
   AvailabilityRow,
   ChangelogRow,
@@ -438,6 +439,11 @@ export function getReliabilityStats(): ReliabilityRow[] {
 
   rows.sort((a, b) => b.date.localeCompare(a.date));
   return rows;
+}
+
+/** No dump support yet for live-check results — db:dump doesn't include this table. */
+export function getLiveCheckResults(): LiveCheckRow[] {
+  return [];
 }
 
 export function getAllEvalResults(): EvalRow[] {

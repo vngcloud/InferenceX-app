@@ -163,6 +163,21 @@ export function fetchReliability(signal?: AbortSignal) {
   return fetchJson<ReliabilityRow[]>('/api/v1/reliability', signal);
 }
 
+/** One row per (stack, probe_type) — the latest live-check result. */
+export interface LiveCheckRow {
+  stack: string;
+  probe_type: string;
+  run_type: string;
+  ok: boolean;
+  detail: string | null;
+  data: Record<string, unknown>;
+  date: string;
+}
+
+export function fetchLiveCheck(signal?: AbortSignal) {
+  return fetchJson<LiveCheckRow[]>('/api/v1/live-check', signal);
+}
+
 export function fetchEvaluations(signal?: AbortSignal) {
   return fetchJson<EvalRow[]>('/api/v1/evaluations', signal);
 }

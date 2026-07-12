@@ -5,6 +5,13 @@ name: auto-ingest
 # that aren't already in the dashboard DB. Also exposes a manual dispatch
 # that takes a run URL and force-ingests it (skips the prefix check).
 #
+# Also polls for `smoke-test.yml` runs (post-deploy live-check probes —
+# see design/new-test-design.md): those don't use the `[ingest]` prefix
+# convention since they're not a sweep, so they're matched by exact workflow
+# name (SMOKE_TEST_WORKFLOW_NAME) instead. Reuses the same generic
+# ingest-ci-run.ts pipeline — it recognizes the `smoke_test_results_*`
+# artifact shape independently of how the run was discovered.
+#
 # All logic lives in this repo — InferenceX needs no workflow changes.
 # Opt-in for a new bench config = name its workflow `[ingest] <whatever>`.
 #
@@ -36,6 +43,7 @@ env:
   COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
   SOURCE_REPO: vngcloud/InferenceX
   INGEST_PREFIX: '[ingest]'
+  SMOKE_TEST_WORKFLOW_NAME: 'smoke-test'
 
 jobs:
   ingest:
@@ -56,10 +64,12 @@ jobs:
             exit 0
           fi
 
-          # Recent successful runs whose workflow name starts with the marker.
+          # Recent successful runs whose workflow name starts with the marker,
+          # or is exactly the smoke-test workflow (post-deploy live-check —
+          # doesn't use the [ingest] prefix convention since it's not a sweep).
           # 50 covers ~a day of bench activity at current volume; bump if needed.
           gh api "repos/$SOURCE_REPO/actions/runs?status=success&per_page=50" \
-            --jq ".workflow_runs[] | select(.name | startswith(\"$INGEST_PREFIX\")) | .html_url" \
+            --jq ".workflow_runs[] | select((.name | startswith(\"$INGEST_PREFIX\")) or (.name == \"$SMOKE_TEST_WORKFLOW_NAME\")) | .html_url" \
             > candidates.txt
 
           # Already-ingested run IDs (newline-separated).

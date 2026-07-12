@@ -20,6 +20,7 @@ export const VALID_TABS = [
   'submissions',
   'current-inferencex-image',
   'feedback',
+  'live-check',
 ] as const;
 
 export type TabKey = (typeof VALID_TABS)[number];
@@ -78,6 +79,11 @@ export const TAB_META: Record<TabKey, { title: string; description: string }> = 
   feedback: {
     title: 'User Feedback',
     description: 'Internal: decrypt and review user-submitted feedback.',
+  },
+  'live-check': {
+    title: 'Live Check',
+    description:
+      "Post-deploy smoke tests and live throughput checks against InferenceX's currently deployed stacks — what's live right now, not a benchmark sweep.",
   },
 };
 
