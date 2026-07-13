@@ -59,6 +59,11 @@ describe('Header', () => {
     cy.get('[data-testid="nav-link-supporters"]').should('have.attr', 'href', '/quotes');
   });
 
+  it('shows Pipelines nav link', () => {
+    cy.get('[data-testid="nav-link-pipelines"]').should('be.visible');
+    cy.get('[data-testid="nav-link-pipelines"]').should('have.attr', 'href', '/live-check');
+  });
+
   it('shows the GitHub stars button linking to the correct repo', () => {
     cy.get('[data-testid="header-star-button"]').should('be.visible');
     cy.get('[data-testid="header-star-button"]')

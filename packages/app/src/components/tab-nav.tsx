@@ -87,7 +87,6 @@ const GATED_TABS = [
     label: 'Images',
     testId: 'tab-trigger-current-inferencex-image',
   },
-  { href: '/live-check', label: 'Live Check', testId: 'tab-trigger-live-check' },
   { href: '/feedback', label: 'Feedback', testId: 'tab-trigger-feedback' },
 ] as const;
 

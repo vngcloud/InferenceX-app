@@ -53,6 +53,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'weekly',
       priority: 0.8,
     },
+    {
+      url: `${BASE_URL}/live-check`,
+      lastModified: now,
+      changeFrequency: 'hourly',
+      priority: 0.6,
+    },
     ...getAllPosts().map((post) => ({
       url: `${BASE_URL}/blog/${post.slug}`,
       lastModified: new Date(`${post.modifiedDate ?? post.date}T00:00:00Z`).toISOString(),
