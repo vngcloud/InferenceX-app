@@ -12,8 +12,7 @@ const REAL_SGLANG_VANILLA = {
       data: {
         chart: 'sglang-vanilla-0.1.0',
         framework: 'sglang',
-        image:
-          'vcr.vngcloud.vn/108942-aiplatform-public/inference/sglang:vngcloud-sglang-feat-deepseekcoderv2-tool-call-detector-1f7f405',
+        image: 'registry.example/inference/sglang:some-tag',
         model: 'RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8',
         precision: 'fp8',
         servedName: 'DeepSeek-Coder-V2-Lite-Instruct-FP8',
@@ -46,7 +45,7 @@ const REAL_SGLANG_PD_DISAGG = {
         chart: 'sglang-pd-disaggregation-0.1.0',
         disaggregation: true,
         framework: 'sglang',
-        image: 'vcr.vngcloud.vn/108942-aiplatform-public/inference/sglang:...',
+        image: 'registry.example/inference/sglang:some-tag',
         model: 'RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8',
         precision: 'fp8',
         servedName: 'DeepSeek-Coder-V2-Lite-Instruct-FP8',
