@@ -33,6 +33,8 @@
     "admin:db:ingest:ci": "pnpm --filter *db db:ingest:ci",
     "admin:db:ingest:gcs": "pnpm --filter *db db:ingest:gcs",
     "admin:db:ingest:supplemental": "pnpm --filter *db db:ingest:supplemental",
+    "admin:db:live-check:ingest:run": "pnpm --filter *db db:live-check:ingest:run",
+    "admin:db:live-check:ingest:ci": "pnpm --filter *db db:live-check:ingest:ci",
     "admin:db:dump": "pnpm --filter *db db:dump",
     "admin:db:load-dump": "pnpm --filter *db db:load-dump --",
     "admin:db:migrate": "pnpm --filter *db db:migrate",
