@@ -17,6 +17,12 @@ interface WorkflowEntry {
 
 const WORKFLOW: WorkflowEntry[] = [
   {
+    href: '/live-check',
+    label: 'Pipelines',
+    description:
+      "What's currently live on already-deployed inference stacks — metadata drift, tool-calling correctness, and a live throughput sweep, refreshed on every deploy.",
+  },
+  {
     href: '/inference',
     label: 'Inference',
     description:
