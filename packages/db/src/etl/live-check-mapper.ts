@@ -1,9 +1,14 @@
 /**
- * Smoke-test row mapper: raw `smoke_test_results_<stack>` artifact JSON →
- * `LiveCheckParams[]` (one per probe). See design/new-test-design.md.
+ * Smoke-test and throughput-test row mappers: raw
+ * `smoke_test_results_<stack>` / `throughput_test_results_<stack>` artifact
+ * JSON → `LiveCheckParams[]`. See design/new-test-design.md.
  *
- * Throughput-test's `sweep[]` is intentionally not handled here — it has no
- * mapper/home yet (see migration 009's header comment).
+ * Throughput's `sweep[]` lands here (as one `test_type: 'throughput'` row's
+ * `data`), not in `benchmark_results` -- the real-trace dataset
+ * (`semianalysis_cc_traces_weka`) has no fixed isl/osl per sweep point
+ * (variable-length requests, not a synthetic fixed shape), which
+ * `benchmark_results` structurally requires. See migration 009's header
+ * comment.
  */
 
 export interface LiveCheckParams {
@@ -59,4 +64,45 @@ export function mapSmokeTestRow(raw: unknown): LiveCheckParams[] {
     });
   }
   return rows;
+}
+
+/**
+ * Map one `throughput_test_results_<stack>.json` payload to a single
+ * `LiveCheckParams` (`test_type: 'throughput'`). `data` (dataset,
+ * num_dataset_entries, gpu_model, framework, precision, tp, disaggregation,
+ * sweep[], redeployed_mid_run) is stored verbatim, same "snapshot upstream
+ * as-is" convention as `mapSmokeTestRow`.
+ *
+ * Note `data.redeployed_mid_run` can be `true`/`false`/`null` --
+ * `null` means "unconfirmed" (the post-sweep `/version` re-check itself
+ * failed, e.g. a transient 503), distinct from a confirmed-`false`. Callers
+ * charting this data should treat `null` the same as `true` (don't chart)
+ * unless they specifically want to distinguish "confirmed stable" from
+ * "unconfirmed."
+ *
+ * @param raw - Parsed contents of a `throughput_test_results_<stack>.json` file.
+ * @returns A one-element array with the mapped row, or `[]` if malformed.
+ */
+export function mapThroughputTestRow(raw: unknown): LiveCheckParams[] {
+  if (typeof raw !== 'object' || raw === null) return [];
+  const r = raw as Record<string, any>;
+
+  const stack = typeof r.stack === 'string' ? r.stack.toLowerCase() : null;
+  if (!stack || typeof r.ok !== 'boolean') return [];
+
+  const runType = typeof r.run_type === 'string' ? r.run_type.toLowerCase() : 'live-check';
+  const data = typeof r.data === 'object' && r.data !== null ? r.data : {};
+  const gpuModel = typeof data.gpu_model === 'string' ? data.gpu_model : null;
+
+  return [
+    {
+      stack,
+      testType: 'throughput',
+      runType,
+      ok: r.ok,
+      detail: typeof r.detail === 'string' ? r.detail : null,
+      data,
+      gpuModel,
+    },
+  ];
 }

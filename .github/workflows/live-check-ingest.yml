@@ -1,20 +1,21 @@
 name: live-check-ingest
 
-# Polls vngcloud/InferenceX every 15 min for completed Smoke Test workflow
-# runs and ingests any that aren't already in the dashboard DB. Also exposes
-# a manual dispatch that takes a run URL and force-ingests it.
+# Polls vngcloud/InferenceX every 15 min for completed Smoke Test AND
+# Throughput Test workflow runs and ingests any that aren't already in the
+# dashboard DB. Also exposes a manual dispatch that takes a run URL and
+# force-ingests it. The two are separate GitHub Actions workflows with no
+# shared run ID -- ingest-live-check.ts handles either one, detecting which
+# artifact family (smoke_test_results_* vs throughput_test_results_*) is
+# present. See design/new-test-design.md.
 #
 # Deliberately separate from auto-ingest.yml:
-#   - Matches the exact workflow `name:` ("Smoke Test"), not an [ingest]
-#     prefix -- InferenceX doesn't opt this workflow in per-config, it's
-#     always-on for every discovered stack.
+#   - Matches the exact workflow `name:` ("Smoke Test" / "Throughput Test"),
+#     not an [ingest] prefix -- InferenceX doesn't opt these workflows in
+#     per-config, they're always-on for every discovered/configured stack.
 #   - Does NOT filter on `status=success` / `conclusion`. smoke-test
 #     intentionally exits non-zero whenever any probe (e.g. tool-calling)
 #     fails, but still uploads a valid results artifact -- filtering to
-#     success would silently miss every run. See design/new-test-design.md.
-#
-# Throughput Test polling is deliberately not wired up yet -- see
-# packages/db/migrations/009_live_check_results.sql's header comment.
+#     success would silently miss every run.
 
 on:
   schedule:
@@ -36,7 +37,6 @@ permissions:
 env:
   COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
   SOURCE_REPO: vngcloud/InferenceX
-  WORKFLOW_NAME: 'Smoke Test'
 
 jobs:
   ingest:
@@ -57,9 +57,9 @@ jobs:
             exit 0
           fi
 
-          # Recent completed Smoke Test runs, any conclusion.
+          # Recent completed Smoke Test / Throughput Test runs, any conclusion.
           gh api "repos/$SOURCE_REPO/actions/runs?status=completed&per_page=50" \
-            --jq ".workflow_runs[] | select(.name == \"$WORKFLOW_NAME\") | .html_url" \
+            --jq '.workflow_runs[] | select(.name == "Smoke Test" or .name == "Throughput Test") | .html_url' \
             > candidates.txt
 
           # Already-ingested run IDs (newline-separated). live_check_results

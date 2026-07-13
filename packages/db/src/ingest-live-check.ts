@@ -1,9 +1,8 @@
 /**
- * Ingest a single Smoke Test workflow run's artifacts into `live_check_results`.
- *
- * Only smoke-test (`smoke_test_results_<stack>`) artifacts are handled here.
- * Throughput-test ingest is deliberately not wired up yet -- see migration
- * 009's header comment and design/new-test-design.md's open schema question.
+ * Ingest a single Smoke Test or Throughput Test workflow run's artifacts
+ * into `live_check_results`. The two are separate GitHub Actions workflows
+ * with no shared run ID (see design/new-test-design.md) -- this script
+ * handles either one, detecting which artifact family is present.
  *
  * Two modes:
  *   --download <run-url-or-id> [repo]  Download artifacts from GitHub then ingest
@@ -36,7 +35,7 @@ import { hasNoSslFlag } from './cli-utils';
 import { createAdminSql } from './etl/db-utils';
 import { isRunAttemptPurged } from './etl/run-overrides';
 import { createWorkflowRunServices } from './etl/workflow-run';
-import { mapSmokeTestRow } from './etl/live-check-mapper';
+import { mapSmokeTestRow, mapThroughputTestRow } from './etl/live-check-mapper';
 import { bulkIngestLiveCheckResults } from './etl/live-check-ingest';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -91,7 +90,12 @@ if (isDownloadMode) {
 
   const byName = new Map<string, (typeof allArtifacts)[0]>();
   for (const a of allArtifacts) {
-    if (!a.name.startsWith('smoke_test_results_')) continue;
+    if (
+      !a.name.startsWith('smoke_test_results_') &&
+      !a.name.startsWith('throughput_test_results_')
+    ) {
+      continue;
+    }
     const existing = byName.get(a.name);
     if (!existing || a.created_at > existing.created_at) {
       byName.set(a.name, a);
@@ -110,7 +114,7 @@ if (isDownloadMode) {
     fs.unlinkSync(zipPath);
   }
 
-  console.log(`\n  Downloaded ${byName.size} smoke-test artifact(s)`);
+  console.log(`\n  Downloaded ${byName.size} live-check artifact(s)`);
 
   const attemptStr = execSync(
     `gh api "repos/${REPO}/actions/runs/${runIdStr}" --jq '.run_attempt'`,
@@ -178,11 +182,13 @@ async function main(): Promise<void> {
   console.log(`  Attempt:     ${runAttemptNum}`);
   console.log(`  Artifacts:   ${artifactsDir}`);
   console.log(`  Repo:        ${REPO}`);
-  if (ghInfo?.name && ghInfo.name !== 'Smoke Test') {
+  if (ghInfo?.name && ghInfo.name !== 'Smoke Test' && ghInfo.name !== 'Throughput Test') {
     // GitHub reports a run's name from the workflow's `name:` key, not its
-    // filename -- warn (don't fail) if this doesn't look like a smoke-test
+    // filename -- warn (don't fail) if this doesn't look like a live-check
     // run, since that usually means the wrong run ID was passed.
-    console.warn(`  [WARN] run name is "${ghInfo.name}", expected "Smoke Test"`);
+    console.warn(
+      `  [WARN] run name is "${ghInfo.name}", expected "Smoke Test" or "Throughput Test"`,
+    );
   }
   if (ghInfo?.htmlUrl) {
     console.log(`  Run URL:     ${ghInfo.htmlUrl}/attempts/${runAttemptNum}`);
@@ -199,7 +205,7 @@ async function main(): Promise<void> {
   const workflowRunId = await getOrCreateWorkflowRun({
     githubRunId: runId,
     runAttempt: runAttemptNum,
-    name: ghInfo?.name || `Smoke Test ${runIdStr}`,
+    name: ghInfo?.name || `Live Check ${runIdStr}`,
     date,
     headBranch: ghInfo?.headBranch,
     headSha: ghInfo?.headSha,
@@ -214,17 +220,28 @@ async function main(): Promise<void> {
   }
   console.log(`  Workflow run DB id: ${workflowRunId}`);
 
-  console.log('\n--- Smoke Test Results ---');
-  const smokeDirs = fs
-    .readdirSync(artifactsDir)
-    .filter((d) => d.startsWith('smoke_test_results_'))
-    .map((d) => path.join(artifactsDir, d))
+  const allDirs = fs.readdirSync(artifactsDir).map((d) => path.join(artifactsDir, d));
+  const smokeDirs = allDirs
+    .filter((d) => path.basename(d).startsWith('smoke_test_results_'))
     .filter((d) => fs.statSync(d).isDirectory());
+  const throughputDirs = allDirs
+    .filter((d) => path.basename(d).startsWith('throughput_test_results_'))
+    .filter((d) => fs.statSync(d).isDirectory());
+
+  console.log('\n--- Live-Check Results ---');
   console.log(`  Found ${smokeDirs.length} smoke_test_results_* artifact(s)`);
+  console.log(`  Found ${throughputDirs.length} throughput_test_results_* artifact(s)`);
 
   const allRows = [];
   let badArtifacts = 0;
-  for (const dir of smokeDirs) {
+  for (const { dir, mapper, label } of [
+    ...smokeDirs.map((d) => ({ dir: d, mapper: mapSmokeTestRow, label: 'smoke-test' })),
+    ...throughputDirs.map((d) => ({
+      dir: d,
+      mapper: mapThroughputTestRow,
+      label: 'throughput-test',
+    })),
+  ]) {
     const jsonFile = fs.readdirSync(dir).find((f) => f.endsWith('.json'));
     if (!jsonFile) {
       console.warn(`  [WARN] ${path.basename(dir)}: no JSON file found`);
@@ -232,9 +249,9 @@ async function main(): Promise<void> {
       continue;
     }
     const data = readJson(path.join(dir, jsonFile));
-    const rows = mapSmokeTestRow(data);
+    const rows = mapper(data);
     if (rows.length === 0) {
-      console.warn(`  [WARN] ${path.basename(dir)}: no valid probes mapped`);
+      console.warn(`  [WARN] ${path.basename(dir)}: no valid ${label} rows mapped`);
       badArtifacts++;
       continue;
     }
