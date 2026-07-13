@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 
-import { getDb } from '@semianalysisai/inferencex-db/connection';
+import { FIXTURES_MODE, getDb } from '@semianalysisai/inferencex-db/connection';
 import { getLatestLiveCheckResults } from '@semianalysisai/inferencex-db/queries/live-check';
 
 import { cachedJson, cachedQuery } from '@/lib/api-cache';
+import { loadFixture } from '@/lib/test-fixtures';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +14,7 @@ const getCachedLiveCheckResults = cachedQuery(
 );
 
 export async function GET() {
+  if (FIXTURES_MODE) return cachedJson(loadFixture('live-check'));
   try {
     const rows = await getCachedLiveCheckResults();
     return cachedJson(rows);

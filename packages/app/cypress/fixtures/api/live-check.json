@@ -1,0 +1,189 @@
+[
+  {
+    "stack": "sglang-mooncake-store",
+    "test_type": "metadata",
+    "run_type": "live-check",
+    "date": "2026-07-12",
+    "ok": true,
+    "detail": "metadata matches expectations",
+    "data": {
+      "tp": 1,
+      "chart": "sglang-mooncake-store-0.1.0",
+      "image": "registry.example/inference/sglang:some-tag",
+      "model": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+      "framework": "sglang",
+      "precision": "fp8",
+      "servedName": "DeepSeek-Coder-V2-Lite-Instruct-FP8"
+    },
+    "gpu_model": null,
+    "github_run_id": "29214012782",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29214012782"
+  },
+  {
+    "stack": "sglang-mooncake-store",
+    "test_type": "tool-calling",
+    "run_type": "live-check",
+    "date": "2026-07-12",
+    "ok": false,
+    "detail": "server did not invoke the tool -- got a plain content response instead of tool_calls",
+    "data": {
+      "role": "assistant",
+      "content": "I'm unable to directly access real-time data or the internet to fetch current weather information.",
+      "tool_calls": null,
+      "reasoning_content": null
+    },
+    "gpu_model": null,
+    "github_run_id": "29214012782",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29214012782"
+  },
+  {
+    "stack": "sglang-pd-disaggregation",
+    "test_type": "metadata",
+    "run_type": "live-check",
+    "date": "2026-07-12",
+    "ok": true,
+    "detail": "metadata matches expectations",
+    "data": {
+      "tp": 1,
+      "chart": "sglang-pd-disaggregation-0.1.0",
+      "image": "registry.example/inference/sglang:some-tag",
+      "model": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+      "framework": "sglang",
+      "precision": "fp8",
+      "servedName": "DeepSeek-Coder-V2-Lite-Instruct-FP8",
+      "disaggregation": true
+    },
+    "gpu_model": null,
+    "github_run_id": "29214012782",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29214012782"
+  },
+  {
+    "stack": "sglang-pd-disaggregation",
+    "test_type": "tool-calling",
+    "run_type": "live-check",
+    "date": "2026-07-12",
+    "ok": false,
+    "detail": "server did not invoke the tool -- got a plain content response instead of tool_calls",
+    "data": {
+      "role": "assistant",
+      "content": "I'm unable to directly access real-time data or the internet to fetch current weather information.",
+      "tool_calls": null,
+      "reasoning_content": null
+    },
+    "gpu_model": null,
+    "github_run_id": "29214012782",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29214012782"
+  },
+  {
+    "stack": "sglang-pd-disaggregation",
+    "test_type": "throughput",
+    "run_type": "live-check",
+    "date": "2026-07-13",
+    "ok": true,
+    "detail": "completed sweep at conc=[1, 8, 16]",
+    "data": {
+      "dataset": "semianalysis_cc_traces_weka",
+      "num_dataset_entries": 20,
+      "gpu_model": "NVIDIA GeForce RTX 5090",
+      "framework": "sglang",
+      "precision": "fp8",
+      "tp": 1,
+      "disaggregation": true,
+      "sweep": [
+        {
+          "conc": 1,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 1
+        },
+        {
+          "conc": 8,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 8
+        },
+        {
+          "conc": 16,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 16
+        }
+      ],
+      "redeployed_mid_run": false
+    },
+    "gpu_model": "NVIDIA GeForce RTX 5090",
+    "github_run_id": "29220857835",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29220857835"
+  },
+  {
+    "stack": "sglang-vanilla",
+    "test_type": "metadata",
+    "run_type": "live-check",
+    "date": "2026-07-13",
+    "ok": true,
+    "detail": "metadata matches expectations",
+    "data": {
+      "tp": 2,
+      "chart": "sglang-vanilla-0.1.0",
+      "image": "registry.example/inference/sglang:some-tag",
+      "model": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+      "framework": "sglang",
+      "precision": "fp8",
+      "servedName": "DeepSeek-Coder-V2-Lite-Instruct-FP8"
+    },
+    "gpu_model": "NVIDIA GeForce RTX 5090",
+    "github_run_id": "29220293241",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29220293241"
+  },
+  {
+    "stack": "sglang-vanilla",
+    "test_type": "tool-calling",
+    "run_type": "live-check",
+    "date": "2026-07-13",
+    "ok": false,
+    "detail": "server did not invoke the tool -- got a plain content response instead of tool_calls",
+    "data": {
+      "role": "assistant",
+      "content": "I don't have direct access to real-time data or the ability to check the current weather in specific locations.",
+      "tool_calls": null,
+      "reasoning_content": null
+    },
+    "gpu_model": "NVIDIA GeForce RTX 5090",
+    "github_run_id": "29220293241",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29220293241"
+  },
+  {
+    "stack": "sglang-vanilla",
+    "test_type": "throughput",
+    "run_type": "live-check",
+    "date": "2026-07-13",
+    "ok": true,
+    "detail": "completed sweep at conc=[1, 8, 16]",
+    "data": {
+      "dataset": "semianalysis_cc_traces_weka",
+      "num_dataset_entries": 20,
+      "gpu_model": "NVIDIA GeForce RTX 5090",
+      "framework": "sglang",
+      "precision": "fp8",
+      "tp": 2,
+      "sweep": [
+        {
+          "conc": 1,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 1
+        },
+        {
+          "conc": 8,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 8
+        },
+        {
+          "conc": 16,
+          "model_id": "RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8",
+          "max_concurrency": 16
+        }
+      ],
+      "redeployed_mid_run": null
+    },
+    "gpu_model": "NVIDIA GeForce RTX 5090",
+    "github_run_id": "29221316729",
+    "html_url": "https://github.com/vngcloud/InferenceX/actions/runs/29221316729"
+  }
+]

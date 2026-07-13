@@ -130,7 +130,13 @@ export const HW_REGISTRY: Record<string, HwEntry> = {
   // Vast.ai, mid-2026) rather than list prices. `power` (all-in kW/GPU
   // incl. datacenter overhead) has no real basis for a standalone rig, so
   // it's a placeholder too.
-  'rtx-5090': {
+  //
+  // Key is `rtx5090` (no hyphen) even though every other key here is a
+  // single token too -- hwToGpuKey()/getGpuSpecs() split hardware strings
+  // on '-'/'_' and take the first segment as the base key, so a hyphenated
+  // key like `rtx-5090` would silently resolve to a nonexistent `rtx` base
+  // and fall back to zeroed-out specs (caught by constants.test.ts).
+  rtx5090: {
     vendor: 'NVIDIA',
     arch: 'Blackwell (consumer)',
     label: 'RTX 5090',

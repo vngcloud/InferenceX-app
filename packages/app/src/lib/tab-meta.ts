@@ -19,6 +19,7 @@ export const VALID_TABS = [
   'gpu-metrics',
   'submissions',
   'current-inferencex-image',
+  'live-check',
   'feedback',
 ] as const;
 
@@ -74,6 +75,11 @@ export const TAB_META: Record<TabKey, { title: string; description: string }> = 
     title: 'Current InferenceX Image',
     description:
       'Current InferenceX Docker image tags per model, GPU SKU, and configuration. Compares deployed images against latest vLLM and SGLang releases to flag outdated tags.',
+  },
+  'live-check': {
+    title: 'Live Check',
+    description:
+      'What is currently live on already-deployed inference stacks — metadata drift, tool-calling correctness, and a live throughput sweep, refreshed on every deploy.',
   },
   feedback: {
     title: 'User Feedback',

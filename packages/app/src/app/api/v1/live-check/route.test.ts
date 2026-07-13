@@ -7,6 +7,7 @@ const { mockGetLatestLiveCheckResults, mockGetDb } = vi.hoisted(() => ({
 
 vi.mock('@semianalysisai/inferencex-db/connection', () => ({
   getDb: mockGetDb,
+  FIXTURES_MODE: false,
 }));
 
 vi.mock('@semianalysisai/inferencex-db/queries/live-check', () => ({
