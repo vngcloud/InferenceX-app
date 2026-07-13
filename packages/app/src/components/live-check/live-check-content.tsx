@@ -53,49 +53,58 @@ function StatusBadge({ ok }: { ok: boolean }) {
   );
 }
 
+/** "servedName" / "num_dataset_entries" -> "Served Name" / "Num Dataset Entries". */
+function humanizeKey(key: string): string {
+  return key
+    .replaceAll('_', ' ')
+    .replaceAll(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .replace(/^./u, (c) => c.toUpperCase());
+}
+
+function formatDataValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  return JSON.stringify(value);
+}
+
+/**
+ * Renders every field in a probe's `data` generically -- these are verbatim
+ * snapshots of a live stack's self-report (`/version`, a chat response,
+ * etc.), and the field set varies per stack/failure-mode (design doc:
+ * "don't assume a fixed key set"). A hand-picked field list would silently
+ * hide anything not on the list.
+ */
+function DataFieldList({
+  data,
+  skipKeys,
+}: {
+  data: Record<string, unknown>;
+  skipKeys?: Set<string>;
+}) {
+  const entries = Object.entries(data).filter(([k]) => !skipKeys?.has(k));
+  if (entries.length === 0) return null;
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+      {entries.map(([key, value]) => {
+        const formatted = formatDataValue(value);
+        const isLong = formatted.length > 40;
+        return (
+          <div key={key} className={isLong ? 'col-span-2 sm:col-span-3' : undefined}>
+            <dt className="text-muted-foreground text-xs">{humanizeKey(key)}</dt>
+            <dd className={isLong ? 'break-all font-mono text-xs' : 'text-xs'}>{formatted}</dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
 function MetadataDetail({ row }: { row: LiveCheckRow }) {
-  const d = row.data;
   return (
     <div className="flex flex-col gap-2 text-sm">
       <p className="text-muted-foreground">{row.detail}</p>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
-        {typeof d.model === 'string' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Model</dt>
-            <dd className="font-mono text-xs">{d.model}</dd>
-          </div>
-        )}
-        {typeof d.framework === 'string' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Framework</dt>
-            <dd>{d.framework}</dd>
-          </div>
-        )}
-        {typeof d.precision === 'string' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Precision</dt>
-            <dd className="uppercase">{d.precision}</dd>
-          </div>
-        )}
-        {typeof d.tp === 'number' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">TP</dt>
-            <dd>{d.tp}</dd>
-          </div>
-        )}
-        {d.disaggregation === true && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Disaggregated</dt>
-            <dd>Yes</dd>
-          </div>
-        )}
-        {typeof d.image === 'string' && (
-          <div className="col-span-2 sm:col-span-3">
-            <dt className="text-muted-foreground text-xs">Image</dt>
-            <dd className="break-all font-mono text-xs">{d.image}</dd>
-          </div>
-        )}
-      </dl>
+      <DataFieldList data={row.data} />
     </div>
   );
 }
@@ -110,6 +119,10 @@ function ToolCallingDetail({ row }: { row: LiveCheckRow }) {
           {content}
         </blockquote>
       )}
+      {/* Failure shape varies: {"response_text": ...} for non-200, the raw
+          assistant message for a plain-text reply, or the full raw response
+          body for anything malformed -- show whatever else is here. */}
+      <DataFieldList data={row.data} skipKeys={content ? new Set(['content']) : undefined} />
     </div>
   );
 }
@@ -129,27 +142,21 @@ function ThroughputDetail({ row }: { row: LiveCheckRow }) {
         ? 'yes — points may span two deployments'
         : 'no';
 
+  // sweep is rendered as its own table below; gpu_model is already shown as
+  // the stack-level badge; redeployed_mid_run gets custom null/true/false
+  // labeling above the generic fields rather than a raw JSON dump.
+  const skipKeys = new Set(['sweep', 'gpu_model', 'redeployed_mid_run']);
+
   return (
     <div className="flex flex-col gap-3 text-sm">
       <p className="text-muted-foreground">{row.detail}</p>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
-        {typeof d.dataset === 'string' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Dataset</dt>
-            <dd className="font-mono text-xs">{d.dataset}</dd>
-          </div>
-        )}
-        {typeof d.num_dataset_entries === 'number' && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Trace Entries</dt>
-            <dd>{d.num_dataset_entries}</dd>
-          </div>
-        )}
         <div>
           <dt className="text-muted-foreground text-xs">Redeployed Mid-Run</dt>
           <dd className={redeployed ? 'text-amber-500' : undefined}>{redeployLabel}</dd>
         </div>
       </dl>
+      <DataFieldList data={d} skipKeys={skipKeys} />
       {sweep.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full border-collapse text-xs">
