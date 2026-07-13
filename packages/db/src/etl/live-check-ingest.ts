@@ -34,7 +34,7 @@ export async function bulkIngestLiveCheckResults(
 
   const result = await sql<{ inserted: boolean }[]>`
     insert into live_check_results (
-      workflow_run_id, stack, test_type, run_type, date, ok, detail, data
+      workflow_run_id, stack, test_type, run_type, date, ok, detail, data, gpu_model
     )
     select
       ${workflowRunId},
@@ -44,9 +44,11 @@ export async function bulkIngestLiveCheckResults(
       ${date}::date,
       unnest(${sql.array(deduped.map((r) => r.ok))}::bool[]),
       unnest(${sql.array(deduped.map((r) => r.detail))}::text[]),
-      unnest(${sql.array(deduped.map((r) => JSON.stringify(r.data)))}::jsonb[])
+      unnest(${sql.array(deduped.map((r) => JSON.stringify(r.data)))}::jsonb[]),
+      unnest(${sql.array(deduped.map((r) => r.gpuModel))}::text[])
     on conflict (workflow_run_id, stack, test_type)
-    do update set ok = excluded.ok, detail = excluded.detail, data = excluded.data
+    do update set
+      ok = excluded.ok, detail = excluded.detail, data = excluded.data, gpu_model = excluded.gpu_model
     returning (xmax = 0) as inserted
   `;
 

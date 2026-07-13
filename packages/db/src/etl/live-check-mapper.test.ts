@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { mapSmokeTestRow } from './live-check-mapper';
 
-// Real artifact from vngcloud/InferenceX run 29214012782 (smoke-test_results_sglang-vanilla.json).
+// Real artifact from vngcloud/InferenceX run 29220293241 (post gpu_model
+// rollout, feat/gpu-model-in-livecheck-artifacts -> merged to main).
 const REAL_SGLANG_VANILLA = {
   stack: 'sglang-vanilla',
   run_type: 'live-check',
+  gpu_model: 'NVIDIA GeForce RTX 5090',
   probes: {
     metadata: {
       ok: true,
@@ -72,11 +74,18 @@ describe('mapSmokeTestRow', () => {
     expect(metadata.detail).toBe('metadata matches expectations');
     expect(metadata.data.model).toBe('RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8');
     expect(metadata.data.tp).toBe(2);
+    expect(metadata.gpuModel).toBe('NVIDIA GeForce RTX 5090');
 
     const toolCalling = rows.find((r) => r.testType === 'tool-calling')!;
     expect(toolCalling.ok).toBe(false);
     expect(toolCalling.detail).toContain('did not invoke the tool');
     expect(toolCalling.data.role).toBe('assistant');
+    expect(toolCalling.gpuModel).toBe('NVIDIA GeForce RTX 5090');
+  });
+
+  it('defaults gpuModel to null for artifacts predating the gpu_model field', () => {
+    const rows = mapSmokeTestRow(REAL_SGLANG_PD_DISAGG);
+    expect(rows[0].gpuModel).toBeNull();
   });
 
   it('still ingests a run whose smoke test failed overall (conclusion !== success)', () => {

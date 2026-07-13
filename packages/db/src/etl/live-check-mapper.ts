@@ -13,6 +13,7 @@ export interface LiveCheckParams {
   ok: boolean;
   detail: string | null;
   data: Record<string, unknown>;
+  gpuModel: string | null;
 }
 
 /**
@@ -36,6 +37,9 @@ export function mapSmokeTestRow(raw: unknown): LiveCheckParams[] {
   if (!stack || typeof probes !== 'object' || probes === null) return [];
 
   const runType = typeof r.run_type === 'string' ? r.run_type.toLowerCase() : 'live-check';
+  // Snapshotted once per stack (DCGM `modelName`, e.g. "NVIDIA GeForce RTX
+  // 5090") -- verbatim, not a lookup key. Older artifacts predate this field.
+  const gpuModel = typeof r.gpu_model === 'string' ? r.gpu_model : null;
 
   const rows: LiveCheckParams[] = [];
   for (const [testType, probe] of Object.entries(probes as Record<string, any>)) {
@@ -51,6 +55,7 @@ export function mapSmokeTestRow(raw: unknown): LiveCheckParams[] {
       // Field set is probe- and stack-dependent (e.g. disaggregation-only
       // stacks add `disaggregation: true`) -- store verbatim, don't project.
       data: typeof probe.data === 'object' && probe.data !== null ? probe.data : {},
+      gpuModel,
     });
   }
   return rows;

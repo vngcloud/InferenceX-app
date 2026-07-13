@@ -8,6 +8,7 @@ export interface LiveCheckRow {
   ok: boolean;
   detail: string | null;
   data: Record<string, unknown>;
+  gpu_model: string | null;
   github_run_id: number;
   html_url: string | null;
 }
@@ -21,7 +22,7 @@ export async function getLatestLiveCheckResults(sql: DbClient): Promise<LiveChec
   const rows = await sql`
     SELECT
       lcr.stack, lcr.test_type, lcr.run_type, lcr.date::text,
-      lcr.ok, lcr.detail, lcr.data,
+      lcr.ok, lcr.detail, lcr.data, lcr.gpu_model,
       wr.github_run_id, wr.html_url
     FROM latest_live_check_results lcr
     JOIN workflow_runs wr ON wr.id = lcr.workflow_run_id

@@ -35,6 +35,7 @@ describe('GET /api/v1/live-check', () => {
         ok: true,
         detail: 'metadata matches expectations',
         data: { model: 'RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8', tp: 2 },
+        gpu_model: 'NVIDIA GeForce RTX 5090',
         github_run_id: 29214012782,
         html_url: 'https://github.com/vngcloud/InferenceX/actions/runs/29214012782',
       },
