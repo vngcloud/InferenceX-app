@@ -479,8 +479,17 @@ export default function ChartDisplay() {
     const overlayKeys = overlayRowsScopeChanged ? overlayScope : activeScopedOverlayKeys;
     const proposed = new Set(officialKeys);
     overlayKeys.forEach((key) => proposed.add(`overlay:${key}`));
-    const previous = new Set(activeOfficialKeys);
-    activeScopedOverlayKeys.forEach((key) => previous.add(`overlay:${key}`));
+    // Overlay-preferring sticky set (mirrors ScatterGraph's exclusionStickySet):
+    // an unofficial run loaded via `?unofficialrun=` exists to be seen, so its
+    // engine family wins cross-engine exclusion over the official selection.
+    // Otherwise this effect would strip the run's hw types from the provider
+    // before the chart ever renders them, with no legend affordance to recover.
+    const previous = new Set<string>();
+    if (overlayKeys.size > 0) {
+      overlayKeys.forEach((key) => previous.add(`overlay:${key}`));
+    } else {
+      activeOfficialKeys.forEach((key) => previous.add(key));
+    }
     const resolved = resolveComparisonSelection(proposed, previous).result;
     const overlay = new Set<string>();
     for (const key of resolved) {
@@ -541,17 +550,22 @@ export default function ChartDisplay() {
       const activeOfficialKeys = new Set(
         [...selectedOfficialHwTypes].filter((key) => availableOfficialKeys.has(key)),
       );
-      const activeScopedOverlayKeys = new Set(
-        [...activeOverlayHwTypes].filter((key) => availableOverlayKeys.has(key)),
-      );
       const officialKeys = activeOfficialKeys;
       const overlayKeys = new Set(
         [...resolvedScopedOverlayHwTypes].filter((key) => availableOverlayKeys.has(key)),
       );
       const proposed = new Set(officialKeys);
       overlayKeys.forEach((key) => proposed.add(`overlay:${key}`));
-      const previous = new Set(activeOfficialKeys);
-      activeScopedOverlayKeys.forEach((key) => previous.add(`overlay:${key}`));
+      // Same overlay-preferring sticky set as resolvedScopedOverlayHwTypes:
+      // while overlay rows are visible, the run's engine family wins. Built
+      // from the already-resolved overlayKeys (not the provider selection,
+      // which can lag by a render after a scope change).
+      const previous = new Set<string>();
+      if (overlayKeys.size > 0) {
+        overlayKeys.forEach((key) => previous.add(`overlay:${key}`));
+      } else {
+        activeOfficialKeys.forEach((key) => previous.add(key));
+      }
       const resolved = resolveComparisonSelection(proposed, previous).result;
 
       return {
@@ -565,7 +579,6 @@ export default function ChartDisplay() {
       selectedPrecisions,
       quickFilters,
       selectedOfficialHwTypes,
-      activeOverlayHwTypes,
       resolvedScopedOverlayHwTypes,
       resolveComparisonSelection,
     ],
