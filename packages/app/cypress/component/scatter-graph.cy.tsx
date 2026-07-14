@@ -123,6 +123,192 @@ describe('ScatterGraph', () => {
     cy.get('#test-scatter-points svg .visible-shape').should('have.length.greaterThan', 0);
   });
 
+  it('keeps official-only legend toggles active after a scope change', () => {
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      y_tpPerGpu_roofline: 'upper_left',
+    });
+    const officialData = ['b200_sglang', 'h100_vllm'].flatMap((hwKey, hwIndex) =>
+      [8, 16, 32].map((x, index) =>
+        createMockInferenceData({
+          hwKey,
+          x,
+          y: 320 - hwIndex * 20 - index * 40,
+          precision: Precision.FP4,
+        }),
+      ),
+    );
+    const baseInference = createMockInferenceContext();
+
+    function OfficialScopeHarness() {
+      const [secondScope, setSecondScope] = useState(false);
+      const activeHwTypes = new Set([secondScope ? 'h100_vllm' : 'b200_sglang']);
+      const selectedModel = secondScope ? Model.DeepSeek_R1 : Model.DeepSeek_V4_Pro;
+      const inference = {
+        ...baseInference,
+        hardwareConfig: hwConfig,
+        activeHwTypes,
+        hwTypesWithData: new Set(['b200_sglang', 'h100_vllm']),
+        selectedModel,
+        selectedSequence: Sequence.AgenticTraces,
+        selectedPrecisions: [Precision.FP4],
+      };
+
+      return (
+        <InferenceContext.Provider value={inference}>
+          <button data-testid="change-official-scope" onClick={() => setSecondScope(true)}>
+            Change official scope
+          </button>
+          <div style={{ width: 800, height: 600 }}>
+            <ScatterGraph
+              chartId="test-scatter-official-scope"
+              modelLabel={selectedModel}
+              data={officialData}
+              xLabel="Concurrency"
+              yLabel="Throughput / GPU (tok/s)"
+              chartDefinition={chartDefinition}
+            />
+          </div>
+        </InferenceContext.Provider>
+      );
+    }
+
+    mountWithProviders(<OfficialScopeHarness />, { unofficial: {} });
+
+    cy.get('#test-scatter-official-scope svg .roofline-path[data-hw-key="b200_sglang"]').should(
+      'have.css',
+      'opacity',
+      '1',
+    );
+    cy.get('#test-scatter-official-scope svg .roofline-path[data-hw-key="h100_vllm"]').should(
+      'have.css',
+      'opacity',
+      '0',
+    );
+
+    cy.get('[data-testid="change-official-scope"]').click();
+    cy.get('#test-scatter-official-scope svg .roofline-path[data-hw-key="b200_sglang"]').should(
+      'have.css',
+      'opacity',
+      '0',
+    );
+    cy.get('#test-scatter-official-scope svg .roofline-path[data-hw-key="h100_vllm"]').should(
+      'have.css',
+      'opacity',
+      '1',
+    );
+  });
+
+  it('keeps a preview scope pending until official data arrives', () => {
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      y_tpPerGpu_roofline: 'upper_left',
+    });
+    const baseInference = createMockInferenceContext();
+    const baseUnofficial = createMockUnofficialRunContext();
+
+    function DelayedOfficialScopeHarness() {
+      const [secondScope, setSecondScope] = useState(false);
+      const [secondScopeLoaded, setSecondScopeLoaded] = useState(false);
+      const [activeOverlayKeys, setActiveOverlayKeys] = useState(new Set(['h100_vllm']));
+      const [officialOverride, setOfficialOverride] = useState<Set<string> | null>(
+        new Set(['h100_sglang']),
+      );
+      const model = secondScope ? Model.DeepSeek_R1 : Model.DeepSeek_V4_Pro;
+      const officialKeys = secondScope ? ['b200_sglang', 'h100_vllm'] : ['h100_sglang'];
+      const visibleOfficialKeys = secondScope && !secondScopeLoaded ? [] : officialKeys;
+      const officialRows = visibleOfficialKeys.flatMap((hwKey, hwIndex) =>
+        [8, 16, 32].map((x, index) =>
+          createMockInferenceData({
+            hwKey,
+            model,
+            x,
+            y: 320 - hwIndex * 20 - index * 40,
+            precision: Precision.FP4,
+          }),
+        ),
+      );
+      const overlayKey = secondScope ? 'b200_vllm' : 'h100_vllm';
+      const overlayData = {
+        data: [8, 16, 32].map((x, index) =>
+          createMockInferenceData({
+            hwKey: overlayKey,
+            model,
+            x,
+            y: 260 - index * 40,
+            precision: Precision.FP4,
+          }),
+        ),
+        hardwareConfig: hwConfig,
+        label: 'delayed-official-scope',
+      };
+      const inference = {
+        ...baseInference,
+        hardwareConfig: hwConfig,
+        activeHwTypes: new Set([officialKeys[0]]),
+        hwTypesWithData: new Set(visibleOfficialKeys),
+        loading: secondScope && !secondScopeLoaded,
+        selectedModel: model,
+        selectedSequence: Sequence.AgenticTraces,
+        selectedPrecisions: [Precision.FP4],
+      };
+      const unofficial = {
+        ...baseUnofficial,
+        isUnofficialRun: true,
+        activeOverlayHwTypes: activeOverlayKeys,
+        setActiveOverlayHwTypes: setActiveOverlayKeys,
+        allOverlayHwTypes: new Set(['h100_vllm', 'b200_vllm']),
+        localOfficialOverride: officialOverride,
+        setLocalOfficialOverride: setOfficialOverride,
+      };
+
+      return (
+        <UnofficialRunContext.Provider value={unofficial}>
+          <InferenceContext.Provider value={inference}>
+            <button data-testid="change-delayed-chart-scope" onClick={() => setSecondScope(true)}>
+              Change scope
+            </button>
+            <button
+              data-testid="load-delayed-chart-scope"
+              onClick={() => {
+                setOfficialOverride(new Set(officialKeys));
+                setSecondScopeLoaded(true);
+              }}
+            >
+              Load official data
+            </button>
+            <output data-testid="official-preview-override">
+              {officialOverride === null ? 'none' : [...officialOverride].join(',')}
+            </output>
+            <div style={{ width: 800, height: 600 }}>
+              <ScatterGraph
+                chartId="test-scatter-delayed-official-scope"
+                modelLabel={model}
+                data={officialRows}
+                xLabel="Concurrency"
+                yLabel="Throughput / GPU (tok/s)"
+                chartDefinition={chartDefinition}
+                overlayData={overlayData}
+              />
+            </div>
+          </InferenceContext.Provider>
+        </UnofficialRunContext.Provider>
+      );
+    }
+
+    mountWithProviders(<DelayedOfficialScopeHarness />);
+    cy.get('[data-testid="change-delayed-chart-scope"]').click();
+    cy.get('[data-testid="official-preview-override"]').should('have.text', 'h100_sglang');
+
+    cy.get('[data-testid="load-delayed-chart-scope"]').click();
+    cy.get(
+      '#test-scatter-delayed-official-scope svg .roofline-path[data-hw-key="b200_sglang"]',
+    ).should('have.css', 'opacity', '1');
+    cy.get(
+      '#test-scatter-delayed-official-scope svg .roofline-path[data-hw-key="h100_vllm"]',
+    ).should('have.css', 'opacity', '1');
+  });
+
   it('renders legend with hardware items', () => {
     const data = [
       createMockInferenceData({ hwKey: 'b200_trt', x: 64, y: 320, precision: Precision.FP4 }),
@@ -511,9 +697,154 @@ describe('ScatterGraph', () => {
       '1',
     );
   });
+
+  it('removes unofficial marks when the last preview run is dismissed', () => {
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      y_tpPerGpu_roofline: 'upper_left',
+    });
+    const officialData = [8, 16, 32].map((x, index) =>
+      createMockInferenceData({
+        hwKey: 'b200_sglang',
+        x,
+        y: 320 - index * 40,
+        precision: Precision.FP4,
+      }),
+    );
+    const runUrl = 'https://github.com/x/y/actions/runs/dismissed-preview';
+    const overlayData = {
+      data: [8, 16, 32].map((x, index) =>
+        createMockInferenceData({
+          hwKey: 'h100_vllm',
+          x,
+          y: 260 - index * 40,
+          precision: Precision.FP4,
+          run_url: runUrl,
+        }),
+      ),
+      hardwareConfig: hwConfig,
+      label: 'dismissed-preview',
+      runUrl,
+    };
+
+    function DismissOverlayHarness() {
+      const [showOverlay, setShowOverlay] = useState(true);
+      return (
+        <div style={{ width: 800, height: 600 }}>
+          <button data-testid="dismiss-preview" onClick={() => setShowOverlay(false)}>
+            Dismiss preview
+          </button>
+          <ScatterGraph
+            chartId="test-scatter-dismiss-preview"
+            modelLabel="DeepSeek V4 Pro"
+            data={officialData}
+            xLabel="Concurrency"
+            yLabel="Throughput / GPU (tok/s)"
+            chartDefinition={chartDefinition}
+            overlayData={showOverlay ? overlayData : undefined}
+          />
+        </div>
+      );
+    }
+
+    mountWithProviders(<DismissOverlayHarness />, {
+      inference: {
+        hardwareConfig: hwConfig,
+        activeHwTypes: new Set(['b200_sglang']),
+        hwTypesWithData: new Set(['b200_sglang']),
+        selectedModel: Model.DeepSeek_V4_Pro,
+        selectedSequence: Sequence.AgenticTraces,
+        selectedPrecisions: [Precision.FP4],
+      },
+      unofficial: {
+        isUnofficialRun: true,
+        activeOverlayHwTypes: new Set(['h100_vllm']),
+        allOverlayHwTypes: new Set(['h100_vllm']),
+      },
+    });
+
+    cy.get('#test-scatter-dismiss-preview svg .unofficial-overlay-pt').should('have.length', 3);
+    cy.get('#test-scatter-dismiss-preview svg .overlay-roofline-path').should('exist');
+
+    cy.get('[data-testid="dismiss-preview"]').click();
+    cy.get('#test-scatter-dismiss-preview svg .unofficial-overlay-pt').should('not.exist');
+    cy.get('#test-scatter-dismiss-preview svg .overlay-roofline-path').should('not.exist');
+  });
 });
 
 describe('ChartDisplay engine comparison guard', () => {
+  it('keeps official table rows synchronized with legend state after a scope change', () => {
+    const chartDefinition = createMockChartDefinition({ chartType: 'interactivity' });
+    const baseInference = createMockInferenceContext();
+    const baseGlobalFilters = createMockGlobalFilterContext();
+
+    function OfficialRowsScopeHarness() {
+      const [secondScope, setSecondScope] = useState(false);
+      const [activeKeys, setActiveKeys] = useState(new Set(['b200_sglang']));
+      const model = secondScope ? Model.DeepSeek_R1 : Model.DeepSeek_V4_Pro;
+      const rows = (secondScope ? ['b200_sglang', 'h100_vllm'] : ['b200_sglang']).map((hwKey) =>
+        createMockInferenceData({
+          hwKey,
+          model,
+          precision: Precision.FP4,
+        }),
+      );
+      const inference = {
+        ...baseInference,
+        graphs: [
+          {
+            model,
+            sequence: Sequence.AgenticTraces,
+            chartDefinition,
+            data: rows,
+          },
+        ],
+        selectedModel: model,
+        selectedSequence: Sequence.AgenticTraces,
+        selectedXAxisMode: 'interactivity' as const,
+        activeHwTypes: activeKeys,
+        hwTypesWithData: new Set(rows.map((row) => String(row.hwKey))),
+      };
+      const globalFilters = {
+        ...baseGlobalFilters,
+        selectedModel: model,
+        selectedSequence: Sequence.AgenticTraces,
+        effectiveSequence: Sequence.AgenticTraces,
+      };
+
+      return (
+        <GlobalFilterContext.Provider value={globalFilters}>
+          <InferenceContext.Provider value={inference}>
+            <button data-testid="change-official-table-scope" onClick={() => setSecondScope(true)}>
+              Change scope
+            </button>
+            <button
+              data-testid="select-official-vllm"
+              onClick={() => setActiveKeys(new Set(['h100_vllm']))}
+            >
+              Select vLLM
+            </button>
+            <ChartDisplay />
+          </InferenceContext.Provider>
+        </GlobalFilterContext.Provider>
+      );
+    }
+
+    mountWithProviders(<OfficialRowsScopeHarness />, { unofficial: {} });
+    cy.get('[data-testid="inference-table-view-btn"]').click();
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
+
+    cy.get('[data-testid="change-official-table-scope"]').click();
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
+    cy.get('[data-testid="inference-results-table"] tbody').contains('SGLang').should('exist');
+
+    cy.get('[data-testid="select-official-vllm"]').click();
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
+    cy.get('[data-testid="inference-results-table"] tbody').contains('vLLM').should('exist');
+    cy.get('[data-testid="inference-results-table"] tbody').contains('SGLang').should('not.exist');
+    cy.get('@setLocalOfficialOverride').should('not.have.been.called');
+  });
+
   it('keeps cross-engine AgentX STP rows out of table mode', () => {
     const chartDefinition = createMockChartDefinition({ chartType: 'interactivity' });
     const sglangRow = createMockInferenceData({
@@ -672,7 +1003,7 @@ describe('ChartDisplay engine comparison guard', () => {
         selectedSequence: Sequence.AgenticTraces,
         effectiveSequence: Sequence.AgenticTraces,
       },
-      unofficial: { localOfficialOverride: new Set() },
+      unofficial: { isUnofficialRun: true, localOfficialOverride: new Set() },
     });
 
     cy.get('[data-testid="inference-table-view-btn"]').click();
@@ -710,20 +1041,25 @@ describe('ChartDisplay engine comparison guard', () => {
 
     function OverlayScopeHarness() {
       const [secondScope, setSecondScope] = useState(false);
+      const [secondScopeLoaded, setSecondScopeLoaded] = useState(false);
       const [activeOverlayKeys, setActiveOverlayKeys] = useState(new Set(['h100_sglang']));
+      const [officialOverride, setOfficialOverride] = useState<Set<string> | null>(null);
       const [, setRenderVersion] = useState(0);
       const model = secondScope ? Model.DeepSeek_R1 : Model.DeepSeek_V4_Pro;
-      const officialKey = secondScope ? 'h100_vllm' : 'b200_sglang';
+      const officialKeys = secondScope ? ['h100_vllm', 'b200_sglang'] : ['b200_sglang'];
       const overlayKeys = secondScope
         ? ['b200_vllm', 'h200_sglang']
         : ['h100_sglang', 'h200_sglang'];
-      const officialRows = [
-        createMockInferenceData({
-          hwKey: officialKey,
-          model,
-          precision: Precision.FP4,
-        }),
-      ];
+      const officialRows =
+        secondScope && !secondScopeLoaded
+          ? []
+          : officialKeys.map((hwKey) =>
+              createMockInferenceData({
+                hwKey,
+                model,
+                precision: Precision.FP4,
+              }),
+            );
       const overlayRows = overlayKeys.map((hwKey, index) =>
         createMockInferenceData({
           hwKey,
@@ -743,12 +1079,13 @@ describe('ChartDisplay engine comparison guard', () => {
             data: officialRows,
           },
         ],
+        loading: secondScope && !secondScopeLoaded,
         selectedModel: model,
         selectedSequence: Sequence.AgenticTraces,
         selectedXAxisMode: 'interactivity' as const,
         selectedXAxisMetric: 'p90_ttft',
-        activeHwTypes: new Set([officialKey]),
-        hwTypesWithData: new Set([officialKey]),
+        activeHwTypes: new Set([officialKeys[0]]),
+        hwTypesWithData: new Set(officialKeys),
         resolveComparisonSelection: resolveSelection,
       };
       const globalFilters = {
@@ -767,6 +1104,8 @@ describe('ChartDisplay engine comparison guard', () => {
         activeOverlayHwTypes: activeOverlayKeys,
         setActiveOverlayHwTypes: setActiveOverlayKeys,
         allOverlayHwTypes: new Set(['h100_sglang', 'h200_sglang', 'b200_vllm']),
+        localOfficialOverride: officialOverride,
+        setLocalOfficialOverride: setOfficialOverride,
       };
 
       return (
@@ -775,6 +1114,9 @@ describe('ChartDisplay engine comparison guard', () => {
             <InferenceContext.Provider value={inference}>
               <button data-testid="change-overlay-scope" onClick={() => setSecondScope(true)}>
                 Change scope
+              </button>
+              <button data-testid="load-official-scope" onClick={() => setSecondScopeLoaded(true)}>
+                Load official scope
               </button>
               <button
                 data-testid="clear-overlay-scope"
@@ -800,14 +1142,18 @@ describe('ChartDisplay engine comparison guard', () => {
     cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 2);
 
     cy.get('[data-testid="change-overlay-scope"]').click();
-    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 3);
+    // The new overlay scope can arrive before the official query. Its empty
+    // graph must not be persisted as an intentional empty official selection.
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 2);
+    cy.get('[data-testid="load-official-scope"]').click();
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 4);
     cy.get('[data-testid="rerender-overlay-scope"]').click();
-    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 3);
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 4);
 
     cy.get('[data-testid="clear-overlay-scope"]').click();
-    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 2);
     cy.get('[data-testid="rerender-overlay-scope"]').click();
-    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
+    cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 2);
     cy.get('[data-testid="inference-chart-view-btn"]').click();
     cy.get('#chart-0 svg .unofficial-overlay-pt').should('not.exist');
   });

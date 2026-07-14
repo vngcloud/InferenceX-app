@@ -443,15 +443,31 @@ export default function ChartDisplay() {
     }
     return eligibleKeys;
   }, [overlayDataByChartType, selectedPrecisions, quickFilters]);
+  const officialScope = useMemo(() => {
+    const eligibleKeys = new Set<string>();
+    for (const graph of graphs) {
+      for (const point of graph.data) {
+        if (
+          selectedPrecisions.includes(point.precision) &&
+          matchesQuickFilters(point, quickFilters)
+        ) {
+          eligibleKeys.add(String(point.hwKey));
+        }
+      }
+    }
+    return eligibleKeys;
+  }, [graphs, selectedPrecisions, quickFilters]);
   const overlayRowsScopeKey = `${selectedModel}|${selectedSequence}|${selectedPrecisions.join(
     ',',
   )}|${unofficialRunInfos.map((run) => run.url).join(',')}`;
   const [appliedOverlayRowsScopeKey, setAppliedOverlayRowsScopeKey] = useState(overlayRowsScopeKey);
-  const overlayRowsScopeChanged = appliedOverlayRowsScopeKey !== overlayRowsScopeKey;
-  const selectedOfficialHwTypes =
-    overlayRowsScopeChanged || localOfficialOverride === null
-      ? activeHwTypes
-      : localOfficialOverride;
+  const overlayRowsScopeChanged =
+    isUnofficialRun && appliedOverlayRowsScopeKey !== overlayRowsScopeKey;
+  const selectedOfficialHwTypes = overlayRowsScopeChanged
+    ? officialScope
+    : isUnofficialRun
+      ? (localOfficialOverride ?? activeHwTypes)
+      : activeHwTypes;
   // Preview tables follow the same policy as ScatterGraph: preserve every
   // active engine family instead of applying the production comparison guard.
   const scopedActiveOverlayHwTypes = useMemo(() => {
@@ -474,18 +490,21 @@ export default function ChartDisplay() {
       }
     }
     if (selectionChanged) setActiveOverlayHwTypes(merged);
-    if (overlayRowsScopeChanged && localOfficialOverride !== null) {
-      setLocalOfficialOverride(null);
+    // A scope change can render once before its official graphs arrive. Do not
+    // persist that transient empty set as an intentional legend selection.
+    if (overlayRowsScopeChanged && (!loading || officialScope.size > 0)) {
+      setLocalOfficialOverride(officialScope);
+      setAppliedOverlayRowsScopeKey(overlayRowsScopeKey);
     }
-    if (overlayRowsScopeChanged) setAppliedOverlayRowsScopeKey(overlayRowsScopeKey);
   }, [
     overlayRowsScopeChanged,
     overlayRowsScopeKey,
     activeOverlayHwTypes,
+    loading,
+    officialScope,
     overlayScope,
     scopedActiveOverlayHwTypes,
     setActiveOverlayHwTypes,
-    localOfficialOverride,
     setLocalOfficialOverride,
   ]);
 

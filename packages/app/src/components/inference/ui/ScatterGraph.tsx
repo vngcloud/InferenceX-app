@@ -383,6 +383,7 @@ const ScatterGraph = React.memo(
       selectedSequence,
       selectedModel,
       quickFilters,
+      loading,
     } = useInference();
     const locale = useLocale();
     const legendT = SCATTER_STRINGS[locale];
@@ -417,7 +418,11 @@ const ScatterGraph = React.memo(
     }, [overlayData, selectedPrecisions, quickFilters]);
     const overlayScopeKey = `${selectedModel}|${selectedSequence}|${selectedPrecisions.join(',')}`;
     const previousOverlayScopeRef = useRef(overlayScopeKey);
-    const overlayScopeChanged = previousOverlayScopeRef.current !== overlayScopeKey;
+    // Scope seeding is preview-only. Official charts have no overlay lifecycle
+    // to commit the ref below, so treating their key changes as pending would
+    // bypass subsequent activeHwTypes legend toggles indefinitely.
+    const overlayScopeChanged =
+      Boolean(overlayData) && previousOverlayScopeRef.current !== overlayScopeKey;
 
     const localOfficialOverrideIsStale = useMemo(() => {
       if (localOfficialOverride === null) return false;
@@ -429,11 +434,19 @@ const ScatterGraph = React.memo(
       return true;
     }, [localOfficialOverride, overlayScopeChanged, hwTypesWithData]);
     const rawOfficialHwTypes = useMemo(() => {
-      const source = localOfficialOverrideIsStale
-        ? activeHwTypes
-        : (localOfficialOverride ?? activeHwTypes);
+      const source = overlayScopeChanged
+        ? hwTypesWithData
+        : localOfficialOverrideIsStale
+          ? activeHwTypes
+          : (localOfficialOverride ?? activeHwTypes);
       return new Set([...source].filter((key) => hwTypesWithData.has(key)));
-    }, [activeHwTypes, hwTypesWithData, localOfficialOverride, localOfficialOverrideIsStale]);
+    }, [
+      activeHwTypes,
+      hwTypesWithData,
+      localOfficialOverride,
+      localOfficialOverrideIsStale,
+      overlayScopeChanged,
+    ]);
     const rawOverlayHwTypes = useMemo(
       () =>
         overlayScopeChanged
@@ -495,10 +508,20 @@ const ScatterGraph = React.memo(
 
     useEffect(() => {
       if (!overlayData) return;
-      previousOverlayScopeRef.current = overlayScopeKey;
-      if (localOfficialOverrideIsStale) {
+      // Keep the scope pending while the official query is between scopes.
+      // ChartDisplay uses the same readiness rule before seeding the full
+      // mixed-engine override, so a rerender from overlay reconciliation cannot
+      // fall back to the production-filtered active set in the meantime.
+      if (!overlayScopeChanged || !loading || hwTypesWithData.size > 0) {
+        previousOverlayScopeRef.current = overlayScopeKey;
+      }
+      // ChartDisplay seeds the new preview scope with every eligible official
+      // series. Avoid replacing it with the production-filtered active set while
+      // that parent update is being committed.
+      if (localOfficialOverrideIsStale && !overlayScopeChanged) {
         setLocalOfficialOverride(null);
       } else if (
+        !overlayScopeChanged &&
         localOfficialOverride !== null &&
         !setsEqual(localOfficialOverride, effectiveOfficialHwTypes)
       ) {
@@ -511,6 +534,9 @@ const ScatterGraph = React.memo(
     }, [
       overlayData,
       overlayScopeKey,
+      overlayScopeChanged,
+      loading,
+      hwTypesWithData,
       localOfficialOverride,
       localOfficialOverrideIsStale,
       effectiveOfficialHwTypes,
@@ -2640,6 +2666,16 @@ const ScatterGraph = React.memo(
       showLineLabels,
       gradientColorByPoint,
     ]);
+
+    // D3 custom layers are keyed additions, so removing the overlay layer from
+    // the config does not delete DOM that the previous render created. Clear
+    // those marks explicitly when the last unofficial run is dismissed.
+    useLayoutEffect(() => {
+      if (overlayData) return;
+      const svg = chartRef.current?.getSvgElement?.();
+      if (!svg) return;
+      d3.select(svg).selectAll('.unofficial-overlay-pt, .overlay-roofline-path').remove();
+    }, [overlayData]);
 
     // Dismiss tooltip on filter changes
     useEffect(() => {
