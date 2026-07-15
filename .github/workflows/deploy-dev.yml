@@ -55,6 +55,28 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
+      - name: Run DB migrations (pre-build)
+        # See deploy.yml's identical step for why this has to run before
+        # the build, and why it uses a throwaway node container instead
+        # of the (not-yet-built) app image.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5433/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/app" -w /app \
+            -e CI=true \
+            -e DATABASE_READONLY_URL="$db_url" \
+            -e DATABASE_WRITE_URL="$db_url" \
+            -e DATABASE_DRIVER=postgres \
+            -e DATABASE_SSL=false \
+            node:24-bookworm-slim \
+            sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
+
       - name: Build image
         # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
         # dev build can't leak into the prod container on its next recreate.

@@ -52,6 +52,35 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
+      - name: Run DB migrations (pre-build)
+        # Some pages' generateStaticParams query columns/tables that only
+        # exist after pending migrations run, so the schema has to be
+        # caught up *before* the image build, not after. The normal
+        # post-build migrate step (below) can't run this early — it uses
+        # the app image, which doesn't exist until the build succeeds. So
+        # this uses a throwaway node container instead: mounts the already
+        # checked-out source and calls the exact same real migrate script
+        # (packages/db/src/migrate.ts, via the same `db:migrate` pnpm
+        # script `admin:db:migrate` runs) — not a reimplementation.
+        # --network host + 127.0.0.1:5432: see Build image's comment below.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/app" -w /app \
+            -e CI=true \
+            -e DATABASE_READONLY_URL="$db_url" \
+            -e DATABASE_WRITE_URL="$db_url" \
+            -e DATABASE_DRIVER=postgres \
+            -e DATABASE_SSL=false \
+            node:24-bookworm-slim \
+            sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
+
       - name: Build image
         # Tag both :latest (consumed by compose) and :<sha> so we can
         # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
