@@ -77,6 +77,16 @@ jobs:
             node:24-bookworm-slim \
             sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
 
+      - name: Fix workspace ownership
+        # Mirrors deploy.yml's identical step: the migration container above
+        # runs as root and bind-mounts $GITHUB_WORKSPACE, leaving root-owned
+        # files (.pnpm-store/, node_modules/) that the next run's
+        # actions/checkout (unprivileged runner user) can't remove.
+        if: always()
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/app" node:24-bookworm-slim \
+            chown -R "$(id -u):$(id -g)" /app
+
       - name: Build image
         # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
         # dev build can't leak into the prod container on its next recreate.

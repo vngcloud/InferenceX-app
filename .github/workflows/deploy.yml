@@ -81,6 +81,18 @@ jobs:
             node:24-bookworm-slim \
             sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
 
+      - name: Fix workspace ownership
+        # The migration container above runs as root and bind-mounts
+        # $GITHUB_WORKSPACE, so `pnpm install` leaves root-owned files
+        # (.pnpm-store/, node_modules/) in the checked-out tree. The next
+        # run's actions/checkout (running as the unprivileged runner user)
+        # can't remove them and fails outright. Reclaim ownership every time,
+        # regardless of whether the step above succeeded.
+        if: always()
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/app" node:24-bookworm-slim \
+            chown -R "$(id -u):$(id -g)" /app
+
       - name: Build image
         # Tag both :latest (consumed by compose) and :<sha> so we can
         # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
