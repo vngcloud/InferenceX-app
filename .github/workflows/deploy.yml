@@ -1,0 +1,131 @@
+name: deploy
+
+# Push to master → self-hosted dashboard runner rebuilds the image and
+# restarts the stack. `workflow_dispatch` lets you re-deploy without a
+# code change (e.g. to pick up an .env edit).
+on:
+  push:
+    branches: [master]
+    # Don't redeploy prod for changes that can't affect the app image:
+    # CI workflow edits (incl. the dev deploy/ingest workflows) and docs.
+    # A commit that also touches app code (packages/**, Dockerfile, lockfile,
+    # …) still triggers — paths-ignore only skips when ALL changed files match.
+    # To force a redeploy after a workflow edit, use the workflow_dispatch below.
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+# Only one deploy at a time — newer pushes supersede in-progress runs so
+# we don't queue up redundant rebuilds.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    env:
+      COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
+      IMAGE_TAG: inferencex-app:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        # Tag both :latest (consumed by compose) and :<sha> so we can
+        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
+        # then `docker compose up -d` without re-pulling the source.
+        run: |
+          docker build \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app:${GITHUB_SHA::7}" \
+            .
+
+      - name: Start postgres + wait for healthy
+        run: |
+          docker compose -f "$COMPOSE_FILE" up -d postgres
+          # Compose names containers `<project>-<service>-N`; project is
+          # `inferencex` (set via `name:` in compose).
+          for i in {1..30}; do
+            status=$(docker inspect inferencex-postgres-1 --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+            echo "postgres health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo "postgres failed to become healthy" >&2
+          docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
+          exit 1
+
+      - name: Run DB migrations
+        # `pnpm admin:db:migrate` is idempotent — already-applied migrations
+        # are skipped. Safe to run on every deploy.
+        # --yes: skip the y/N confirm (we're non-interactive in CI).
+        # --no-ssl: local compose postgres doesn't speak TLS; admin scripts
+        # default to `ssl: require` regardless of DATABASE_SSL env.
+        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
+
+      - name: Sync GITHUB_TOKEN into compose .env
+        # Writes the INGEST_GITHUB_TOKEN repo secret into
+        # /opt/docker-compose/.env as GITHUB_TOKEN so the app container can
+        # authenticate `gh api` during `pnpm admin:db:ingest:run`.
+        # Rotation = update the secret + redeploy.
+        #
+        # .env is owned by the runner user and already 0600 — write directly
+        # (no sudo, no chown). `docker compose` runs as the runner user, so
+        # rewriting it as root would break compose's ability to read .env on
+        # the next step.
+        env:
+          INGEST_GITHUB_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$INGEST_GITHUB_TOKEN" ]; then
+            echo "INGEST_GITHUB_TOKEN secret is unset; leaving .env untouched. Ingest will fail to auth until this is set." >&2
+            exit 0
+          fi
+          # Atomic rewrite: write to .env.new with 0600, then mv into place.
+          # Same filesystem → mv is atomic, so .env is either fully-old or
+          # fully-new even on crash.
+          install -m 0600 /dev/null /opt/docker-compose/.env.new
+          {
+            grep -v '^GITHUB_TOKEN=' /opt/docker-compose/.env || true
+            printf 'GITHUB_TOKEN=%s\n' "$INGEST_GITHUB_TOKEN"
+          } >> /opt/docker-compose/.env.new
+          mv -f /opt/docker-compose/.env.new /opt/docker-compose/.env
+
+      - name: Recreate app + nginx
+        # Compose detects the new image and recreates the app container.
+        # nginx restarts as a dependency so it picks up the fresh upstream.
+        run: docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+      - name: Smoke-test
+        run: |
+          for i in {1..30}; do
+            if curl -fsS -o /dev/null http://127.0.0.1/; then
+              echo "app responding on :80"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app did not respond" >&2
+          docker compose -f "$COMPOSE_FILE" logs app | tail -50
+          exit 1
+
+      - name: Prune images + build cache
+        # Bound disk growth. `docker image prune -f` only removes *dangling*
+        # layers — the per-sha rollback tags built above are NOT dangling, so
+        # they used to accumulate indefinitely until the disk filled. Keep the
+        # newest $KEEP_TAGS per-sha tags for rollback and drop older ones;
+        # `:latest` and the image the running container uses are never removed
+        # (rmi of an in-use image fails, which we ignore). Also cap the
+        # buildkit cache by age.
+        if: always()
+        env:
+          KEEP_TAGS: '5'
+        run: |
+          docker image prune -f
+          docker images inferencex-app --format '{{.Tag}}' \
+            | grep -vx latest \
+            | tail -n +$((KEEP_TAGS + 1)) \
+            | while read -r t; do [ -n "$t" ] && docker rmi "inferencex-app:$t" || true; done
+          docker builder prune -f --filter until=72h

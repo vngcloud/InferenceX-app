@@ -1,0 +1,114 @@
+name: deploy-dev
+
+# Push to dev → same self-hosted dashboard runner builds a SEPARATE dev image
+# and brings up a parallel stack that is fully isolated from prod:
+#   - compose project `inferencex-dev` (own containers + own postgres volume,
+#     i.e. a brand-new database — prod's `inferencex` stack is untouched)
+#   - image tag `inferencex-app-dev:latest` (prod consumes `inferencex-app:latest`,
+#     so a dev build never clobbers what prod recreates from)
+#   - app published directly on host :8080 (no nginx/TLS) → http://<host>:8080
+# `workflow_dispatch` lets you re-deploy dev without a code change.
+on:
+  push:
+    branches: [dev]
+    # A workflow- or docs-only commit can't change the app image, so don't
+    # rebuild the dev stack for those (mirrors prod's deploy.yml guard).
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+# Separate from prod's `deploy` group so a dev push never cancels a prod
+# deploy (and vice-versa). They still serialize on the single self-hosted
+# runner — one job at a time — which is fine.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    env:
+      COMPOSE_FILE: /opt/docker-compose-dev/docker-compose.yml
+      IMAGE_TAG: inferencex-app-dev:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
+        # dev build can't leak into the prod container on its next recreate.
+        run: |
+          docker build \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app-dev:${GITHUB_SHA::7}" \
+            .
+
+      - name: Start postgres + wait for healthy
+        run: |
+          docker compose -f "$COMPOSE_FILE" up -d postgres
+          # Project name is `inferencex-dev` (set via `name:` in compose), so
+          # the container is `inferencex-dev-postgres-1`.
+          for i in {1..30}; do
+            status=$(docker inspect inferencex-dev-postgres-1 --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+            echo "postgres health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo "postgres failed to become healthy" >&2
+          docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
+          exit 1
+
+      - name: Run DB migrations
+        # Idempotent. On a brand-new dev DB this applies the full schema.
+        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
+
+      - name: Sync GITHUB_TOKEN into compose .env
+        # Mirrors prod: write the INGEST_GITHUB_TOKEN repo secret into the dev
+        # stack's .env as GITHUB_TOKEN. Atomic rewrite, 0600, owned by runner.
+        env:
+          INGEST_GITHUB_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$INGEST_GITHUB_TOKEN" ]; then
+            echo "INGEST_GITHUB_TOKEN secret is unset; leaving .env untouched. Ingest will fail to auth until this is set." >&2
+            exit 0
+          fi
+          install -m 0600 /dev/null /opt/docker-compose-dev/.env.new
+          {
+            grep -v '^GITHUB_TOKEN=' /opt/docker-compose-dev/.env || true
+            printf 'GITHUB_TOKEN=%s\n' "$INGEST_GITHUB_TOKEN"
+          } >> /opt/docker-compose-dev/.env.new
+          mv -f /opt/docker-compose-dev/.env.new /opt/docker-compose-dev/.env
+
+      - name: Recreate app
+        # No nginx/certbot in the dev stack — the app is published directly.
+        run: docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+      - name: Smoke-test
+        run: |
+          for i in {1..30}; do
+            if curl -fsS -o /dev/null http://127.0.0.1:8080/; then
+              echo "dev app responding on :8080"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "dev app did not respond" >&2
+          docker compose -f "$COMPOSE_FILE" logs app | tail -50
+          exit 1
+
+      - name: Prune images + build cache
+        # Same bounded cleanup as prod: dangling layers + all but the newest
+        # $KEEP_TAGS per-sha dev tags + buildkit cache older than 72h. Only
+        # touches inferencex-app-dev:* — prod's inferencex-app:* are untouched.
+        if: always()
+        env:
+          KEEP_TAGS: '5'
+        run: |
+          docker image prune -f
+          docker images inferencex-app-dev --format '{{.Tag}}' \
+            | grep -vx latest \
+            | tail -n +$((KEEP_TAGS + 1)) \
+            | while read -r t; do [ -n "$t" ] && docker rmi "inferencex-app-dev:$t" || true; done
+          docker builder prune -f --filter until=72h
