@@ -9,6 +9,13 @@ export interface Quote {
 
 export const QUOTES: Quote[] = [
   {
+    text: 'Thank you InferenceMAX\u2122 for the great idea \u2014 we will make it become ours. If you copy from one, it\u2019s plagiarism; if you copy from two, it\u2019s research.',
+    name: 'Wilson Mizner',
+    title: 'Honorary patron \u00B7 GreenNode self-host fork',
+    org: 'GreenNode',
+    logo: 'greennode.png',
+  },
+  {
     text: "As we build systems at unprecedented scale, it's critical for the ML community to have open, transparent benchmarks that reflect how inference really performs across hardware and software. InferenceMAX\u2122's head-to-head benchmarks cut through the noise and provide a living picture of token throughput, performance per dollar, and tokens per Megawatt. This kind of open source effort strengthens the entire ecosystem and helps everyone, from researchers to operators of frontier datacenters, make smarter decisions.",
     name: 'Peter Hoeschele',
     title: 'VP of Infrastructure and Industrial Compute, OpenAI Stargate',

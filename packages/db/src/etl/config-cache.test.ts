@@ -7,7 +7,6 @@ function makeConfig(overrides: Partial<ConfigParams> = {}): ConfigParams {
     framework: 'vllm',
     model: 'dsr1',
     precision: 'fp8',
-    specMethod: 'none',
     disagg: false,
     isMultinode: false,
     prefillTp: 8,
@@ -27,7 +26,7 @@ function makeConfig(overrides: Partial<ConfigParams> = {}): ConfigParams {
 describe('configCacheKey', () => {
   it('produces a colon-joined string of all config fields', () => {
     const key = configCacheKey(makeConfig());
-    expect(key).toBe('h200:vllm:dsr1:fp8:none:false:false:8:1:false:0:8:1:false:0:8:8');
+    expect(key).toBe('h200:vllm:dsr1:fp8:false:false:8:1:false:0:8:1:false:0:8:8');
   });
 
   it('is deterministic — same input produces same output', () => {
@@ -44,7 +43,6 @@ describe('configCacheKey', () => {
     expect(configCacheKey(makeConfig({ framework: 'sglang' }))).not.toBe(base);
     expect(configCacheKey(makeConfig({ model: 'llama70b' }))).not.toBe(base);
     expect(configCacheKey(makeConfig({ precision: 'fp4' }))).not.toBe(base);
-    expect(configCacheKey(makeConfig({ specMethod: 'eagle' }))).not.toBe(base);
     expect(configCacheKey(makeConfig({ disagg: true }))).not.toBe(base);
     expect(configCacheKey(makeConfig({ isMultinode: true }))).not.toBe(base);
     expect(configCacheKey(makeConfig({ prefillTp: 4 }))).not.toBe(base);
@@ -59,10 +57,10 @@ describe('configCacheKey', () => {
     expect(configCacheKey(makeConfig({ numDecodeGpu: 4 }))).not.toBe(base);
   });
 
-  it('includes all 17 fields in the key', () => {
+  it('includes all 16 fields in the key (spec_method moved to techniques)', () => {
     const key = configCacheKey(makeConfig());
-    // 17 fields = 16 colons
-    expect(key.split(':').length).toBe(17);
+    // 16 fields = 15 colons
+    expect(key.split(':').length).toBe(16);
   });
 
   it('handles boolean fields correctly', () => {

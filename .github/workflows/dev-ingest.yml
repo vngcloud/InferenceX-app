@@ -1,0 +1,114 @@
+name: dev-ingest
+
+# Ingest benchmark data into the DEV dashboard DB (the `inferencex-dev` stack
+# on :8080), so the dev environment isn't empty. This is the dev sibling of
+# `auto-ingest.yml`, with two deliberate differences:
+#
+#   1. MANUAL DISPATCH ONLY (no cron). GitHub only fires `schedule` triggers
+#      on the DEFAULT branch (master), so a cron defined on the `dev` branch
+#      would never run. Dev data is also a "populate on demand" thing, not a
+#      continuous feed — so we dispatch it by hand. To auto-feed dev, add a
+#      cron to a copy of this workflow on master that targets the dev stack.
+#   2. Targets /opt/docker-compose-dev (project `inferencex-dev`) and its DB
+#      role/db `inferencex_dev`, never the prod stack.
+#
+# Run it:
+#   gh workflow run dev-ingest.yml -R vngcloud/InferenceX-app --ref dev
+#   gh workflow run dev-ingest.yml -R vngcloud/InferenceX-app --ref dev \
+#     -f run_url=https://github.com/vngcloud/InferenceX/actions/runs/<id>
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_url:
+        description: 'Force-ingest this run URL (bypasses scan + prefix filter)'
+        required: false
+        type: string
+
+# Serialize with itself; don't cancel an in-flight ingest when a new dispatch
+# arrives. Separate group from prod's `auto-ingest`.
+concurrency:
+  group: dev-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMPOSE_FILE: /opt/docker-compose-dev/docker-compose.yml
+  SOURCE_REPO: vngcloud/InferenceX
+  INGEST_PREFIX: '[ingest]'
+  PG_USER: inferencex_dev
+  PG_DB: inferencex_dev
+
+jobs:
+  ingest:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    timeout-minutes: 20
+    steps:
+      - name: Resolve runs to ingest
+        env:
+          GH_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+          MANUAL_URL: ${{ inputs.run_url }}
+        run: |
+          set -euo pipefail
+          : > urls.txt
+
+          if [ -n "${MANUAL_URL:-}" ]; then
+            echo "manual dispatch: $MANUAL_URL"
+            echo "$MANUAL_URL" > urls.txt
+            exit 0
+          fi
+
+          # Recent successful runs whose workflow name starts with the marker.
+          gh api "repos/$SOURCE_REPO/actions/runs?status=success&per_page=50" \
+            --jq ".workflow_runs[] | select(.name | startswith(\"$INGEST_PREFIX\")) | .html_url" \
+            > candidates.txt
+
+          # Already-ingested run IDs in the DEV DB (newline-separated).
+          existing=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            psql -U "$PG_USER" -d "$PG_DB" -tAc \
+            "SELECT github_run_id FROM workflow_runs" | tr -d '\r')
+
+          new=0; skipped=0
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            id="${url##*/}"
+            if printf '%s\n' "$existing" | grep -qFx "$id"; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "new: $url"
+            echo "$url" >> urls.txt
+            new=$((new + 1))
+          done < candidates.txt
+          echo "scan summary: $new new, $skipped already ingested"
+
+      - name: Ingest each new run
+        run: |
+          set -euo pipefail
+          if [ ! -s urls.txt ]; then
+            echo "Nothing to ingest."
+            exit 0
+          fi
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            echo "=== ingesting $url ==="
+            docker compose -f "$COMPOSE_FILE" exec -T app \
+              pnpm admin:db:ingest:run "$url" "$SOURCE_REPO" --no-ssl
+          done < urls.txt
+
+      - name: Apply run overrides
+        if: success()
+        run: |
+          if [ -s urls.txt ]; then
+            docker compose -f "$COMPOSE_FILE" exec -T app \
+              pnpm admin:db:apply-overrides --yes --no-ssl
+          fi
+
+      - name: Invalidate cache
+        if: success()
+        run: |
+          if [ -s urls.txt ]; then
+            docker compose -f "$COMPOSE_FILE" exec -T app pnpm admin:cache:invalidate
+          fi

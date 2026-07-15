@@ -3,7 +3,10 @@ export const GITHUB_REPO = 'InferenceX';
 export const GITHUB_REPO_FULL = `${GITHUB_OWNER}/${GITHUB_REPO}`;
 
 /** Current + legacy repo slugs (for matching old workflow runs). */
-export const GITHUB_REPOS = [GITHUB_REPO_FULL, 'InferenceMAX/InferenceMAX'];
+// vngcloud/InferenceX listed first: it's the source for this self-host fork.
+// Upstream slugs are kept so any historical workflow_run_ids that originated
+// upstream still resolve through the GitHub API enrichment fallback.
+export const GITHUB_REPOS = ['vngcloud/InferenceX', GITHUB_REPO_FULL, 'InferenceMAX/InferenceMAX'];
 
 export const GITHUB_API_BASE = 'https://api.github.com';
 

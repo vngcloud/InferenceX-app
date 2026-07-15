@@ -11,7 +11,7 @@ import {
   hwToGpuKey,
   normalizeFramework,
   normalizePrecision,
-  normalizeSpecMethod,
+  parseTechniques,
   parseBool,
   parseNum,
   parseInt2,
@@ -41,7 +41,13 @@ const NON_METRIC_KEYS = new Set([
   'image',
   'disagg',
   'is_multinode',
+  // techniques (legacy + new-shape) — extracted into BenchmarkParams.techniques
   'spec_decoding',
+  'techniques',
+  'num_speculative_tokens',
+  'max_num_batched_tokens',
+  'kv_cache_dtype',
+  'prefix_cache',
   // v1 parallelism
   'tp',
   'ep',
@@ -75,6 +81,7 @@ export interface BenchmarkParams {
   conc: number;
   image: string | null;
   metrics: Record<string, number>;
+  techniques: Record<string, string | number>;
 }
 
 /**
@@ -128,7 +135,7 @@ export function mapBenchmarkRow(
   if (!PRECISION_KEYS.has(precision)) {
     tracker.unmappedPrecisions.add(precision);
   }
-  const specMethod = normalizeSpecMethod(row.spec_decoding);
+  const techniques = parseTechniques(row);
 
   let prefillTp: number, prefillEp: number, prefillDpAttn: boolean, prefillNumWorkers: number;
   let decodeTp: number, decodeEp: number, decodeDpAttn: boolean, decodeNumWorkers: number;
@@ -191,7 +198,6 @@ export function mapBenchmarkRow(
       framework,
       model: modelKey,
       precision,
-      specMethod,
       disagg,
       isMultinode,
       prefillTp,
@@ -210,5 +216,6 @@ export function mapBenchmarkRow(
     conc,
     image,
     metrics,
+    techniques,
   };
 }

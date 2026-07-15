@@ -31,7 +31,6 @@ interface RawConfig {
   framework: string;
   model: string;
   precision: string;
-  spec_method: string;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -72,6 +71,7 @@ interface RawBenchmarkResult {
   conc: number;
   image: string | null;
   metrics: Record<string, number>;
+  techniques: Record<string, string | number>;
   error: string | null;
   server_log_id: number | null;
 }
@@ -96,6 +96,7 @@ interface RawEvalResult {
   conc: number | null;
   lm_eval_version: string | null;
   metrics: Record<string, number>;
+  techniques: Record<string, string | number>;
 }
 
 interface RawChangelogEntry {
@@ -272,12 +273,15 @@ function toBenchmarkRow(
   wr: RawWorkflowRun,
   metrics?: Record<string, number>,
 ): BenchmarkRow {
+  const techniques = br.techniques ?? {};
+  const specMethod = typeof techniques.spec_method === 'string' ? techniques.spec_method : 'none';
   return {
     hardware: c.hardware,
     framework: c.framework,
     model: c.model,
     precision: c.precision,
-    spec_method: c.spec_method,
+    spec_method: specMethod,
+    techniques,
     disagg: c.disagg,
     is_multinode: c.is_multinode,
     prefill_tp: c.prefill_tp,
@@ -446,6 +450,9 @@ export function getAllEvalResults(): EvalRow[] {
     const wr = s.latestRunsById.get(er.workflow_run_id);
     if (!wr) continue;
 
+    const techniques = er.techniques ?? {};
+    const specMethod = typeof techniques.spec_method === 'string' ? techniques.spec_method : 'none';
+
     rows.push({
       id: er.id,
       config_id: er.config_id,
@@ -453,7 +460,8 @@ export function getAllEvalResults(): EvalRow[] {
       framework: c.framework,
       model: c.model,
       precision: c.precision,
-      spec_method: c.spec_method,
+      spec_method: specMethod,
+      techniques,
       disagg: c.disagg,
       is_multinode: c.is_multinode,
       prefill_tp: c.prefill_tp,
@@ -548,7 +556,9 @@ export function getDateConfigs(date: string): DateConfigRow[] {
     const c = s.configs.get(br.config_id);
     if (!c) continue;
 
-    const key = `${c.model}|${br.isl}|${br.osl}|${c.precision}|${c.hardware}|${c.framework}|${c.spec_method}|${c.disagg}`;
+    const techniques = br.techniques ?? {};
+    const specMethod = typeof techniques.spec_method === 'string' ? techniques.spec_method : 'none';
+    const key = `${c.model}|${br.isl}|${br.osl}|${c.precision}|${c.hardware}|${c.framework}|${specMethod}|${c.disagg}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
@@ -559,7 +569,7 @@ export function getDateConfigs(date: string): DateConfigRow[] {
       precision: c.precision,
       hardware: c.hardware,
       framework: c.framework,
-      spec_method: c.spec_method,
+      spec_method: specMethod,
       disagg: c.disagg,
     });
   }

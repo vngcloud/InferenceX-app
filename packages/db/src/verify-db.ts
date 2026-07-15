@@ -141,12 +141,12 @@ async function verify(): Promise<void> {
 
   sub('spec_method');
   const specs = await sql`
-    select c.spec_method,
-           count(distinct c.id)::int as configs,
+    select coalesce(br.techniques->>'spec_method', 'none') as spec_method,
+           count(distinct br.config_id)::int as configs,
            count(br.id)::int as bmk_rows
-    from configs c
-    left join benchmark_results br on br.config_id = c.id
-    group by c.spec_method order by c.spec_method
+    from benchmark_results br
+    group by (br.techniques->>'spec_method')
+    order by 1
   `;
   console.log(`  ${'SPEC_METHOD'.padEnd(10)} ${'configs'.padStart(8)} ${'bmk_rows'.padStart(10)}`);
   specs.forEach((r) =>
@@ -316,13 +316,13 @@ async function verify(): Promise<void> {
 
   sub('configs (5 most recent)');
   const sampleConfigs = await sql`
-    select id, hardware, framework, model, precision, spec_method, disagg,
+    select id, hardware, framework, model, precision, disagg,
            prefill_tp, prefill_ep, num_prefill_gpu, decode_tp, decode_ep, num_decode_gpu
     from configs order by id desc limit 5
   `;
   sampleConfigs.forEach((r) =>
     console.log(
-      `  [${r.id}] ${r.hardware} ${r.framework} ${r.model} ${r.precision} ${r.spec_method} disagg=${r.disagg} tp=${r.prefill_tp}/${r.decode_tp}`,
+      `  [${r.id}] ${r.hardware} ${r.framework} ${r.model} ${r.precision} disagg=${r.disagg} tp=${r.prefill_tp}/${r.decode_tp}`,
     ),
   );
 

@@ -4,10 +4,12 @@ export enum Model {
   DeepSeek_R1 = 'DeepSeek-R1-0528',
   GptOss = 'gpt-oss-120b',
   Qwen3_5 = 'Qwen-3.5-397B-A17B',
+  Qwen3_5_27B = 'Qwen-3.5-27B',
   Kimi_K2_5 = 'Kimi-K2.5',
   MiniMax_M2_5 = 'MiniMax-M2.5',
   GLM_5 = 'GLM-5',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
+  Gemma_4_31B = 'Gemma-4-31B-it',
 }
 
 export type CategoryTag = 'default' | 'experimental' | 'deprecated' | 'hidden';
@@ -62,6 +64,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     category: 'default',
   },
   [Model.Qwen3_5]: { label: 'Qwen3.5', prefix: 'qwen3.5', category: 'default' },
+  [Model.Qwen3_5_27B]: { label: 'Qwen3.5 27B', prefix: 'qwen3.5-27b', category: 'default' },
   [Model.GLM_5]: { label: 'GLM5/5.1', prefix: 'glm5', category: 'default' },
   [Model.MiniMax_M2_5]: {
     label: 'MiniMax M2.5',
@@ -71,6 +74,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
   [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'default' },
   [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
   [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
+  [Model.Gemma_4_31B]: { label: 'Gemma-4 31B', prefix: 'gemma4', category: 'default' },
 };
 
 function modelsByCategory(cat: CategoryTag): ReadonlySet<Model> {
@@ -138,6 +142,7 @@ export enum Sequence {
   OneK_OneK = '1k/1k',
   OneK_EightK = '1k/8k',
   EightK_OneK = '8k/1k',
+  SixteenK_OneK = '16k/1k',
 }
 
 const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; category: CategoryTag }> =
@@ -145,6 +150,7 @@ const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; catego
     [Sequence.OneK_OneK]: { label: '1K / 1K', compact: '1k1k', category: 'default' },
     [Sequence.OneK_EightK]: { label: '1K / 8K', compact: '1k8k', category: 'deprecated' },
     [Sequence.EightK_OneK]: { label: '8K / 1K', compact: '8k1k', category: 'default' },
+    [Sequence.SixteenK_OneK]: { label: '16K / 1K', compact: '16k1k', category: 'default' },
   };
 
 export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];

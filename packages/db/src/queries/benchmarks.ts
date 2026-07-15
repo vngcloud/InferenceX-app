@@ -5,7 +5,9 @@ export interface BenchmarkRow {
   framework: string;
   model: string;
   precision: string;
+  /** Derived from techniques.spec_method via SQL COALESCE; 'none' when absent. */
   spec_method: string;
+  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -50,12 +52,13 @@ export async function getLatestBenchmarks(
     // exact=false (default): return latest data as of this date (for main chart)
     const dateFilter = exact ? sql`br.date = ${date}::date` : sql`br.date <= ${date}::date`;
     const rows = await sql`
-      SELECT DISTINCT ON (br.config_id, br.conc, br.isl, br.osl)
+      SELECT DISTINCT ON (br.config_id, br.conc, br.isl, br.osl, br.techniques)
         c.hardware,
         c.framework,
         c.model,
         c.precision,
-        c.spec_method,
+        COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
+        br.techniques,
         c.disagg,
         c.is_multinode,
         c.prefill_tp,
@@ -81,7 +84,7 @@ export async function getLatestBenchmarks(
       WHERE c.model = ANY(${modelKeys})
         AND br.error IS NULL
         AND ${dateFilter}
-      ORDER BY br.config_id, br.conc, br.isl, br.osl, br.date DESC
+      ORDER BY br.config_id, br.conc, br.isl, br.osl, br.techniques, br.date DESC
     `;
     return rows as unknown as BenchmarkRow[];
   }
@@ -93,7 +96,8 @@ export async function getLatestBenchmarks(
       c.framework,
       c.model,
       c.precision,
-      c.spec_method,
+      COALESCE(lb.techniques->>'spec_method', 'none') AS spec_method,
+      lb.techniques,
       c.disagg,
       c.is_multinode,
       c.prefill_tp,
@@ -140,7 +144,8 @@ export async function getAllBenchmarksForHistory(
       c.framework,
       c.model,
       c.precision,
-      c.spec_method,
+      COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
+      br.techniques,
       c.disagg,
       c.is_multinode,
       c.prefill_tp,

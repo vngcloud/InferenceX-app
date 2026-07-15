@@ -58,7 +58,7 @@ describe('mapBenchmarkRow', () => {
       expect(result!.config.framework).toBe('vllm');
       expect(result!.config.model).toBe('dsr1');
       expect(result!.config.precision).toBe('fp8');
-      expect(result!.config.specMethod).toBe('none');
+      expect(result!.techniques).toEqual({});
       expect(result!.config.disagg).toBe(false);
       expect(result!.config.isMultinode).toBe(false);
       expect(result!.isl).toBe(1024);
@@ -286,11 +286,11 @@ describe('mapBenchmarkRow', () => {
       expect(result!.config.disagg).toBe(true);
     });
 
-    it('handles spec_decoding=mtp', () => {
+    it('handles spec_decoding=mtp (legacy field → techniques.spec_method)', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(makeV1Row({ spec_decoding: 'mtp' }), tracker);
 
-      expect(result!.config.specMethod).toBe('mtp');
+      expect(result!.techniques.spec_method).toBe('mtp');
     });
   });
 
@@ -331,19 +331,38 @@ describe('mapBenchmarkRow', () => {
     });
   });
 
-  describe('spec_decoding', () => {
-    it('normalizes spec_decoding to lowercase', () => {
+  describe('techniques (spec_decoding legacy + new shape)', () => {
+    it('normalizes legacy spec_decoding to lowercase under techniques.spec_method', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(makeV1Row({ spec_decoding: 'Eagle' }), tracker);
 
-      expect(result!.config.specMethod).toBe('eagle');
+      expect(result!.techniques.spec_method).toBe('eagle');
     });
 
-    it('defaults to none when absent', () => {
+    it('omits spec_method when absent (techniques bag stays empty)', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(makeV1Row(), tracker);
 
-      expect(result!.config.specMethod).toBe('none');
+      expect(result!.techniques).toEqual({});
+    });
+
+    it('reads new-shape techniques object directly', () => {
+      const tracker = createSkipTracker();
+      const result = mapBenchmarkRow(
+        makeV1Row({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 } }),
+        tracker,
+      );
+
+      expect(result!.techniques).toEqual({ spec_method: 'mtp', num_speculative_tokens: 4 });
+    });
+
+    it('infers num_speculative_tokens from gemma4n4/gemma4n6 model prefix (legacy)', () => {
+      const tracker = createSkipTracker();
+      const result = mapBenchmarkRow(makeV1Row({ infmax_model_prefix: 'gemma4n6' }), tracker);
+
+      expect(result!.config.model).toBe('gemma4');
+      expect(result!.techniques.num_speculative_tokens).toBe(6);
+      expect(result!.techniques.spec_method).toBe('mtp');
     });
   });
 

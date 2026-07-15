@@ -15,3 +15,4 @@ Design rationale and non-obvious conventions. See [CLAUDE.md](../CLAUDE.md) for 
 - [Data Transforms](./data-transforms.md) — Full pipeline from BenchmarkRow to RenderableGraph: type hierarchy, hardware key construction, derived metrics, memoization strategy
 - [State Ownership](./state-ownership.md) — Which context owns which state, availability filtering cascade, comparison date mechanics, URL param sync
 - [Blog](./blog.md) — MDX content system, SEO features (OG images, RSS, llms.txt, JSON-LD), TOC sidebar, reading progress, heading links, analytics events
+- [Dev Environment](./dev-environment.md) — Isolated `dev`-branch stack on `:8080`: push-to-deploy flow, manual data ingest, where to look, prod-isolation guarantees

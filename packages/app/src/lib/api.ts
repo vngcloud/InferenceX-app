@@ -10,7 +10,9 @@ export interface BenchmarkRow {
   framework: string;
   model: string;
   precision: string;
+  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
+  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -83,7 +85,9 @@ export interface EvalRow {
   framework: string;
   model: string;
   precision: string;
+  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
+  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -286,6 +290,29 @@ export interface LatestImageRow {
 
 export function fetchLatestImages() {
   return fetchJson<LatestImageRow[]>('/api/v1/latest-images');
+}
+
+/** One "what's currently live" check for a stack: metadata drift, tool-calling, or throughput. */
+export interface LiveCheckRow {
+  stack: string;
+  test_type: 'metadata' | 'tool-calling' | 'throughput';
+  run_type: string;
+  date: string;
+  ok: boolean;
+  detail: string | null;
+  /**
+   * Probe-specific payload snapshotted verbatim from the live stack --
+   * shape varies by test_type and stack (e.g. only pd-disaggregation
+   * reports `disaggregation: true`). Treat as loosely typed.
+   */
+  data: Record<string, unknown>;
+  gpu_model: string | null;
+  github_run_id: number;
+  html_url: string | null;
+}
+
+export function fetchLiveCheck(signal?: AbortSignal) {
+  return fetchJson<LiveCheckRow[]>('/api/v1/live-check', signal);
 }
 
 export type FrameworkReleases = Record<string, string | null>;

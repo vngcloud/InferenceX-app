@@ -49,4 +49,15 @@ describe('Inference Chart', () => {
   it('shows the sidebar legend for GPU types', () => {
     cy.get('.sidebar-legend').should('be.visible');
   });
+
+  it('renders the SLA reference line + label on the interactivity chart', () => {
+    // The vertical SLA guide (x = 20 tok/s/user) is drawn only on the
+    // interactivity chart; at least one chart on the page must carry it.
+    cy.get('[data-testid="inference-chart-display"]')
+      .find('line.sla-line')
+      .should('have.length.at.least', 1);
+    cy.get('[data-testid="inference-chart-display"]')
+      .find('text.sla-line-label')
+      .should('contain', 'SLA');
+  });
 });

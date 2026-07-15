@@ -1,18 +1,58 @@
 'use client';
 
-import { ArrowRight, BarChart3, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
 import { Card } from '@/components/ui/card';
-import { IntroSection } from '@/components/intro-section';
-import { CuratedViewCard } from '@/components/landing/curated-view-card';
-import { NudgeEngine } from '@/components/nudge-engine';
-import { FAVORITE_PRESETS } from '@/components/favorites/favorite-presets';
 import { track } from '@/lib/analytics';
 import { navigateInApp } from '@/lib/client-navigation';
-import { GITHUB_OWNER, GITHUB_REPO } from '@semianalysisai/inferencex-constants';
+
+interface WorkflowEntry {
+  href: string;
+  label: string;
+  description: string;
+}
+
+const WORKFLOW: WorkflowEntry[] = [
+  {
+    href: '/live-check',
+    label: 'Pipelines',
+    description:
+      "What's currently live on already-deployed inference stacks — metadata drift, tool-calling correctness, and a live throughput sweep, refreshed on every deploy.",
+  },
+  {
+    href: '/inference',
+    label: 'Inference',
+    description:
+      'Pick a serving config to deploy. Throughput-vs-latency frontier across hardware, framework, precision, and parallelism.',
+  },
+  {
+    href: '/evaluation',
+    label: 'Recipe Compare',
+    description:
+      'Compare runtime knobs (MTP layers, speculative decoding, kv-cache dtype, …) on the same deployment. Speedup, TPOT, acceptance rate, accuracy delta side-by-side.',
+  },
+  {
+    href: '/historical',
+    label: 'Historical Trends',
+    description:
+      'Week-over-week throughput at a fixed config. Track software improvement and regressions with PR-level changelogs.',
+  },
+  {
+    href: '/calculator',
+    label: 'TCO Calculator',
+    description:
+      'Capacity × cost sizing. Given QPS and SLO, how many GPUs are needed and what does the deployment cost.',
+  },
+  {
+    href: '/gpu-specs',
+    label: 'GPU Specs',
+    description:
+      'Reference card for FLOPS, memory bandwidth, and $/hr across the GPUs we benchmark.',
+  },
+];
 
 export function LandingPage() {
   const router = useRouter();
@@ -23,115 +63,42 @@ export function LandingPage() {
 
   return (
     <main className="relative">
-      <NudgeEngine scope="landing" />
-      <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-6 lg:gap-4">
-        <IntroSection />
+      <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-6 py-8">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-2xl lg:text-3xl font-semibold">MLOps Team Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Self-hosted inference benchmark for the VNGCloud / GreenNode team. Pick the tab that
+            matches what you&apos;re doing.
+          </p>
+        </header>
 
-        {/* Split: Dashboard vs Presets */}
-        <section className="flex flex-col gap-4 pb-8">
-          {/* Left - Full Dashboard */}
-          <Card>
-            <div className="flex items-center gap-2 mb-3">
-              <BarChart3 className="size-5 shrink-0 text-brand" />
-              <h2 className="text-lg font-semibold">Full Dashboard</h2>
-            </div>
-            <p className="text-sm text-muted-foreground mb-2">
-              Every model, GPU, framework, and metric. Fully configurable inference benchmark charts
-              with date ranges, concurrency sweeps, and raw data export.
-            </p>
-            <p className="text-sm text-muted-foreground mb-6">
-              Compare NVIDIA B200, H200, H100, AMD MI355X, MI325X, MI300X and more across DeepSeek,
-              gpt-oss, Llama, Qwen, and other models.
-            </p>
-            <div className="mt-auto">
-              <Link
-                href="/inference"
-                onClick={(e) => {
-                  track('landing_full_dashboard_clicked');
-                  navigateInApp(e, router, '/inference');
-                }}
-                className="inline-flex items-center justify-center gap-2 rounded-md text-sm sm:text-base font-medium h-12 px-8 bg-brand text-primary-foreground hover:bg-brand/90 transition-colors"
-              >
-                Open Dashboard
-                <ArrowRight className="size-4" />
-              </Link>
-            </div>
-          </Card>
-
-          {/* Reproducibility callout */}
-          <Card>
-            <div className="flex items-center gap-2 mb-3">
-              <ShieldCheck className="size-5 shrink-0 text-brand" />
-              <h2 className="text-lg font-semibold">
-                Every Result Is Transparently done through Public GitHub Actions Automation
-              </h2>
-            </div>
-            <p className="text-sm text-muted-foreground mb-4">
-              Every data point on the dashboard is produced by a public GitHub Actions workflow run.
-              The recipe lives in the repo, the run executes on the actual target hardware, and the
-              full logs and artifacts are publicly viewable. Click any point on a chart to jump
-              straight to the run that produced it. All reproducible, auditable, and open source.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-              <div className="rounded-md border border-border bg-card p-3">
-                <div className="text-sm font-semibold text-foreground">Public Actions runs</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Every benchmark executes on GitHub Actions with full logs visible while the run is
-                  in progress.
-                </div>
-              </div>
-              <div className="rounded-md border border-border bg-card p-3">
-                <div className="text-sm font-semibold text-foreground">Open recipes</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Every model, framework, precision, and parallelism setting is committed to the
-                  public repo as a shell script.
-                </div>
-              </div>
-              <div className="rounded-md border border-border bg-card p-3">
-                <div className="text-sm font-semibold text-foreground">Weekly DB snapshots</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  The full benchmark database is published as a public GitHub Release every week so
-                  the historical dataset stays auditable.
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-3 text-sm">
-              <a
-                href={`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/actions?query=branch%3Amain+event%3Apush`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => track('landing_reproducibility_actions_clicked')}
-                className="inline-flex items-center gap-1.5 rounded-md bg-brand text-primary-foreground hover:bg-brand/90 px-3 py-1.5 transition-colors font-medium"
-              >
-                View benchmark runs on GitHub Actions
-                <ArrowRight className="size-3.5" />
-              </a>
-              <Link
-                href="/about#reproducibility"
-                onClick={() => track('landing_reproducibility_about_clicked')}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 hover:bg-accent transition-colors"
-              >
-                How it works
-              </Link>
-            </div>
-          </Card>
-
-          {/* Right - Curated Presets */}
-          <Card>
-            <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="size-5 shrink-0 text-brand" />
-              <h2 className="text-lg font-semibold">Quick Comparisons</h2>
-            </div>
-            <p className="text-sm text-muted-foreground mb-4">
-              Jump straight into the most popular GPU inference benchmark comparisons, curated and
-              ready to explore.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {FAVORITE_PRESETS.filter((preset) => !preset.hidden).map((preset) => (
-                <CuratedViewCard key={preset.id} preset={preset} />
-              ))}
-            </div>
-          </Card>
+        <section className="flex flex-col gap-3">
+          {WORKFLOW.map((entry) => {
+            const slug = entry.href.slice(1).replaceAll('-', '_');
+            return (
+              <Card key={entry.href}>
+                <Link
+                  href={entry.href}
+                  onClick={(e) => {
+                    track(`landing_${slug}_clicked`);
+                    navigateInApp(e, router, entry.href);
+                  }}
+                  className="group flex items-start justify-between gap-4"
+                >
+                  <div className="flex flex-col gap-1">
+                    <span className="text-lg font-semibold transition-colors group-hover:text-brand">
+                      {entry.label}
+                    </span>
+                    <span className="text-sm text-muted-foreground">{entry.description}</span>
+                    <span className="mt-1 font-mono text-xs text-muted-foreground/70">
+                      {entry.href}
+                    </span>
+                  </div>
+                  <ArrowRight className="mt-1 size-5 shrink-0 text-muted-foreground transition-colors group-hover:text-brand" />
+                </Link>
+              </Card>
+            );
+          })}
         </section>
       </div>
     </main>
