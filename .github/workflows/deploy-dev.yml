@@ -55,40 +55,28 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
-      - name: Ensure network-attached builder
-        # See deploy.yml's identical step. Separate builder + network
-        # because the dev stack is a fully isolated compose project.
-        run: |
-          docker buildx inspect inferencex-dev-builder >/dev/null 2>&1 || \
-            docker buildx create --name inferencex-dev-builder \
-              --driver docker-container \
-              --driver-opt network=inferencex-dev_default
-          docker buildx use inferencex-dev-builder
-
       - name: Build image
         # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
         # dev build can't leak into the prod container on its next recreate.
         #
-        # --network joins the build to postgres's compose network so
-        # generateStaticParams can resolve the `postgres` service by name.
-        # --secret passes the DB URLs as mounted files (see Dockerfile),
-        # not as --build-arg, so they never land in image layers/history.
-        # --load: pull the docker-container builder's result into the
-        # local docker daemon so `docker compose up` can see it.
+        # --network host + 127.0.0.1:5433: dev's postgres is published to
+        # loopback on its own port (5433, so it doesn't collide with prod's
+        # 5432 — see docker-compose.yml) specifically so the build can
+        # reach it — see deploy.yml's identical comment for why.
+        # --secret passes the DB URL as a mounted file (see Dockerfile),
+        # not as --build-arg, so it never lands in image layers/history.
         run: |
           set -a
           # shellcheck disable=SC1091
           source "$(dirname "$COMPOSE_FILE")/.env"
           set +a
-          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5433/${POSTGRES_DB}"
           echo "::add-mask::$db_url"
           echo "::add-mask::$POSTGRES_PASSWORD"
           export DATABASE_READONLY_URL="$db_url"
           export DATABASE_WRITE_URL="$db_url"
-          docker buildx build \
-            --builder inferencex-dev-builder \
-            --load \
-            --network inferencex-dev_default \
+          docker build \
+            --network host \
             --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
             --secret id=database_write_url,env=DATABASE_WRITE_URL \
             -t "$IMAGE_TAG" \
