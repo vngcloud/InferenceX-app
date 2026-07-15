@@ -55,6 +55,16 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
+      - name: Ensure network-attached builder
+        # See deploy.yml's identical step. Separate builder + network
+        # because the dev stack is a fully isolated compose project.
+        run: |
+          docker buildx inspect inferencex-dev-builder >/dev/null 2>&1 || \
+            docker buildx create --name inferencex-dev-builder \
+              --driver docker-container \
+              --driver-opt network=inferencex-dev_default
+          docker buildx use inferencex-dev-builder
+
       - name: Build image
         # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
         # dev build can't leak into the prod container on its next recreate.
@@ -63,6 +73,8 @@ jobs:
         # generateStaticParams can resolve the `postgres` service by name.
         # --secret passes the DB URLs as mounted files (see Dockerfile),
         # not as --build-arg, so they never land in image layers/history.
+        # --load: pull the docker-container builder's result into the
+        # local docker daemon so `docker compose up` can see it.
         run: |
           set -a
           # shellcheck disable=SC1091
@@ -74,6 +86,7 @@ jobs:
           export DATABASE_READONLY_URL="$db_url"
           export DATABASE_WRITE_URL="$db_url"
           docker build \
+            --load \
             --network inferencex-dev_default \
             --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
             --secret id=database_write_url,env=DATABASE_WRITE_URL \

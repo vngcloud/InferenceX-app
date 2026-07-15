@@ -52,6 +52,21 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
+      - name: Ensure network-attached builder
+        # The default buildx builder uses the `docker` driver, which can't
+        # join an arbitrary user-defined bridge network (only `default`,
+        # `none`, or `host` are supported there). The `docker-container`
+        # driver can, if created with the network as a driver-opt — but
+        # that's fixed at creation time, so a plain `buildx use` can't
+        # attach it after the fact. Idempotent: reuses the builder across
+        # runs, only (re)creates it if missing.
+        run: |
+          docker buildx inspect inferencex-builder >/dev/null 2>&1 || \
+            docker buildx create --name inferencex-builder \
+              --driver docker-container \
+              --driver-opt network=inferencex_default
+          docker buildx use inferencex-builder
+
       - name: Build image
         # Tag both :latest (consumed by compose) and :<sha> so we can
         # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
@@ -61,6 +76,11 @@ jobs:
         # generateStaticParams can resolve the `postgres` service by name.
         # --secret passes the DB URLs as mounted files (see Dockerfile),
         # not as --build-arg, so they never land in image layers/history.
+        #
+        # --load: the docker-container driver builds in a separate
+        # buildkit container and doesn't put images in the local docker
+        # daemon by default — --load pulls the result back in so `docker
+        # compose up` (plain docker, not buildx) can see it.
         run: |
           set -a
           # shellcheck disable=SC1091
@@ -72,6 +92,7 @@ jobs:
           export DATABASE_READONLY_URL="$db_url"
           export DATABASE_WRITE_URL="$db_url"
           docker build \
+            --load \
             --network inferencex_default \
             --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
             --secret id=database_write_url,env=DATABASE_WRITE_URL \
