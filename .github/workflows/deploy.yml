@@ -33,17 +33,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build image
-        # Tag both :latest (consumed by compose) and :<sha> so we can
-        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
-        # then `docker compose up -d` without re-pulling the source.
-        run: |
-          docker build \
-            -t "$IMAGE_TAG" \
-            -t "inferencex-app:${GITHUB_SHA::7}" \
-            .
-
       - name: Start postgres + wait for healthy
+        # Runs before the image build: some pages' generateStaticParams
+        # (e.g. compare-precision/compare-spec-decode OG images) query
+        # Postgres during `next build`, so the build needs a real,
+        # reachable database — not just the runtime container.
         run: |
           docker compose -f "$COMPOSE_FILE" up -d postgres
           # Compose names containers `<project>-<service>-N`; project is
@@ -57,6 +51,33 @@ jobs:
           echo "postgres failed to become healthy" >&2
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
+
+      - name: Build image
+        # Tag both :latest (consumed by compose) and :<sha> so we can
+        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
+        # then `docker compose up -d` without re-pulling the source.
+        #
+        # --network joins the build to postgres's compose network so
+        # generateStaticParams can resolve the `postgres` service by name.
+        # --secret passes the DB URLs as mounted files (see Dockerfile),
+        # not as --build-arg, so they never land in image layers/history.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          export DATABASE_READONLY_URL="$db_url"
+          export DATABASE_WRITE_URL="$db_url"
+          docker build \
+            --network inferencex_default \
+            --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
+            --secret id=database_write_url,env=DATABASE_WRITE_URL \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app:${GITHUB_SHA::7}" \
+            .
 
       - name: Run DB migrations
         # `pnpm admin:db:migrate` is idempotent — already-applied migrations
