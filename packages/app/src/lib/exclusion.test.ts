@@ -28,6 +28,7 @@ const STP_SPEC: ExclusionSpec[] = [
     suffix: null,
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
     groupAliases: { atom: 'sglang' },
+    scope: 'hardware',
   },
 ];
 const agenticEx = buildExclusion([...MTP_SPEC, ...STP_SPEC]);
@@ -36,6 +37,8 @@ const namespacedAgenticEx = {
     agenticEx.familyOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
   groupOf: (key: string) =>
     agenticEx.groupOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
+  scopesOf: (key: string) =>
+    agenticEx.scopesOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
 };
 
 describe('buildExclusion — familyOf', () => {
@@ -95,6 +98,18 @@ describe('exclusionResolutionFamilies', () => {
     expect(exclusionResolutionFamilies(proposed, result, ex)).toEqual({
       kept: ['atom', 'sglang'],
       dropped: ['vllm'],
+      partial: [],
+    });
+  });
+
+  it('reports families retained only on other hardware scopes as partial', () => {
+    const proposed = new Set(['b200_vllm', 'b200_sglang', 'mi355x_sglang']);
+    const result = new Set(['b200_vllm', 'mi355x_sglang']);
+
+    expect(exclusionResolutionFamilies(proposed, result, agenticEx)).toEqual({
+      kept: ['vllm'],
+      dropped: [],
+      partial: ['sglang'],
     });
   });
 });
@@ -120,11 +135,29 @@ describe('AgentX STP engine exclusion', () => {
     });
   });
 
+  it('allows different engine families on different hardware SKUs', () => {
+    const prev = new Set(['b200_sglang']);
+    const all = new Set(['b200_sglang', 'mi355x_vllm']);
+    expect(resolveExclusionToggle(prev, 'mi355x_vllm', all, agenticEx, 'keep-sticky')).toEqual({
+      kind: 'fallthrough',
+    });
+  });
+
   it('allows STP and MTP configs from the same engine family', () => {
     const prev = new Set(['b300_vllm']);
     const all = new Set(['b300_vllm', 'b300_vllm_mtp']);
     expect(resolveExclusionToggle(prev, 'b300_vllm_mtp', all, agenticEx, 'keep-sticky')).toEqual({
       kind: 'fallthrough',
+    });
+  });
+
+  it('blocks cross-engine STP and MTP configs on the same hardware SKU', () => {
+    const prev = new Set(['b300_sglang']);
+    const all = new Set(['b300_sglang', 'b300_vllm_mtp']);
+    expect(resolveExclusionToggle(prev, 'b300_vllm_mtp', all, agenticEx, 'keep-sticky')).toEqual({
+      kind: 'block',
+      attempted: 'vllm',
+      existing: 'sglang',
     });
   });
 
@@ -139,6 +172,36 @@ describe('AgentX STP engine exclusion', () => {
     expect([...resolved.result].toSorted()).toEqual(['b300_vllm', 'b300_vllm_mtp']);
     expect(resolved.keptGroup).toBe('vllm');
     expect(resolved.droppedGroups).toEqual(['sglang']);
+  });
+
+  it('uses hardware STP state to choose the compatible global MTP engine', () => {
+    const proposed = new Set(['b200_vllm', 'b200_vllm_mtp', 'mi355x_sglang_mtp']);
+    const resolved = resolveExclusionGroups(
+      proposed,
+      new Set(['b200_vllm']),
+      agenticEx,
+      'keep-sticky',
+    );
+
+    expect(resolved.result).toEqual(new Set(['b200_vllm', 'b200_vllm_mtp']));
+    expect(resolved.keptGroup).toBe('vllm');
+    expect(resolved.droppedGroups).toEqual(['sglang']);
+  });
+
+  it.each([
+    ['SGLang MTP first', ['b200_sglang', 'mi355x_vllm', 'b200_sglang_mtp', 'mi355x_vllm_mtp']],
+    ['vLLM MTP first', ['b200_sglang', 'mi355x_vllm', 'mi355x_vllm_mtp', 'b200_sglang_mtp']],
+  ])('breaks multiple correlated MTP ties alphabetically with %s', (_label, keys) => {
+    const resolved = resolveExclusionGroups(
+      new Set(keys),
+      new Set(['b200_sglang', 'mi355x_vllm']),
+      agenticEx,
+      'keep-sticky',
+    );
+
+    expect(resolved.result).toEqual(new Set(['b200_sglang', 'mi355x_vllm', 'b200_sglang_mtp']));
+    expect(resolved.keptGroup).toBe('sglang');
+    expect(resolved.droppedGroups).toEqual(['vllm']);
   });
 
   it('blocks cross-engine adds across official and overlay namespaces', () => {
@@ -351,6 +414,27 @@ describe('effectiveLegendItems', () => {
     const active = new Set(['h100_vllm', 'h100_vllm_mtp']);
     const out = effectiveLegendItems(all, active, ex);
     expect([...out].toSorted()).toEqual(['h100_dynamo-vllm_mtp', 'h100_vllm', 'h100_vllm_mtp']);
+  });
+
+  it('keeps idle hardware scopes in the restore-all universe', () => {
+    const all = new Set(['b200_sglang', 'b200_vllm', 'mi355x_vllm']);
+    const active = new Set(['b200_sglang']);
+    const effective = effectiveLegendItems(all, active, agenticEx);
+
+    expect(effective).toEqual(new Set(['b200_sglang', 'mi355x_vllm']));
+    expect(computeToggle(active, 'b200_sglang', effective)).toEqual(effective);
+  });
+
+  it('restores the remembered engine for a temporarily idle hardware scope', () => {
+    const all = new Set(['b200_sglang', 'mi355x_sglang', 'mi355x_vllm']);
+    const preferred = new Set(['b200_sglang', 'mi355x_vllm']);
+    const initialUniverse = effectiveLegendItems(all, preferred, agenticEx, preferred);
+    const solo = computeToggle(preferred, 'b200_sglang', initialUniverse);
+    const restoreUniverse = effectiveLegendItems(all, solo, agenticEx, preferred);
+
+    expect(solo).toEqual(new Set(['b200_sglang']));
+    expect(restoreUniverse).toEqual(preferred);
+    expect(computeToggle(solo, 'b200_sglang', restoreUniverse)).toEqual(preferred);
   });
 
   it('makes computeToggle solo on click in the default-deselected state', () => {

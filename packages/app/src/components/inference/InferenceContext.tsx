@@ -201,11 +201,12 @@ export function InferenceProvider({
     if (!selectedGpuResolution) return;
     setSelectedGpuState(selectedGpuResolution.selection);
     setUrlParam('i_gpus', selectedGpuResolution.selection.join(','));
-    if (selectedGpuResolution.dropped.length > 0) {
+    if (selectedGpuResolution.dropped.length > 0 || selectedGpuResolution.partial.length > 0) {
       setEngineConflict({
         kind: 'resolved',
         kept: selectedGpuResolution.kept,
         dropped: selectedGpuResolution.dropped,
+        partial: selectedGpuResolution.partial,
       });
     }
   }, [selectedGpuResolution, setUrlParam]);
@@ -801,12 +802,16 @@ export function InferenceProvider({
               exclusion.familyOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
             groupOf: (key: string) =>
               exclusion.groupOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
+            scopesOf: (key: string) =>
+              exclusion.scopesOf(key.startsWith('overlay:') ? key.slice('overlay:'.length) : key),
           }
         : null,
     [exclusion],
   );
   const activeHwTypesRef = useRef(activeHwTypes);
   activeHwTypesRef.current = activeHwTypes;
+  const preferredHwTypesRef = useRef(activeHwTypes);
+  if (activeHwTypes.size > 1) preferredHwTypesRef.current = activeHwTypes;
   const exclusionRef = useRef(comparisonExclusion);
   exclusionRef.current = comparisonExclusion;
   const exclusionPolicyRef = useRef(exclusionPolicy);
@@ -827,7 +832,7 @@ export function InferenceProvider({
     (prev: Set<string>, item: string, allItems: Set<string>): Set<string> | null => {
       const currentExclusion = exclusionRef.current;
       const toggleUniverse = currentExclusion
-        ? effectiveLegendItems(allItems, prev, currentExclusion)
+        ? effectiveLegendItems(allItems, prev, currentExclusion, preferredHwTypesRef.current)
         : allItems;
       if (currentExclusion) {
         const decision = resolveExclusionToggle(
@@ -845,9 +850,14 @@ export function InferenceProvider({
           });
           return null;
         }
-        if (decision.kind === 'silent-resolve') return decision.result;
+        if (decision.kind === 'silent-resolve') {
+          if (decision.result.size > 1) preferredHwTypesRef.current = decision.result;
+          return decision.result;
+        }
       }
-      return computeToggle(prev, item, toggleUniverse);
+      const result = computeToggle(prev, item, toggleUniverse);
+      if (result.size > 1) preferredHwTypesRef.current = result;
+      return result;
     },
     [],
   );
