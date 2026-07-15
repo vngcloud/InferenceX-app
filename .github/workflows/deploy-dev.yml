@@ -85,7 +85,8 @@ jobs:
           echo "::add-mask::$POSTGRES_PASSWORD"
           export DATABASE_READONLY_URL="$db_url"
           export DATABASE_WRITE_URL="$db_url"
-          docker build \
+          docker buildx build \
+            --builder inferencex-dev-builder \
             --load \
             --network inferencex-dev_default \
             --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
