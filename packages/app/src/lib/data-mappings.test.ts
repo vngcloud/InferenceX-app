@@ -57,6 +57,11 @@ describe('getModelAndSequence', () => {
     expect(result).toEqual({ model: Model.Kimi_K2_5, sequence: Sequence.OneK_OneK });
   });
 
+  it('prefers the specific glm5.2 prefix over the glm5 family prefix', () => {
+    const result = getModelAndSequence('results_glm5.2_1k1k');
+    expect(result).toEqual({ model: Model.GLM_5_2, sequence: Sequence.OneK_OneK });
+  });
+
   it('returns undefined for unrecognized model prefix', () => {
     expect(getModelAndSequence('results_unknown_1k1k')).toBeUndefined();
   });
@@ -224,7 +229,8 @@ describe('getModelLabel', () => {
     expect(getModelLabel(Model.GptOss)).toBe('gpt-oss 120B');
     expect(getModelLabel(Model.Qwen3_5)).toBe('Qwen3.5 397B');
     expect(getModelLabel(Model.Kimi_K2_5)).toBe('Kimi K2.5/2.6/2.7-Code 1T');
-    expect(getModelLabel(Model.GLM_5)).toBe('GLM5/5.1/5.2 744B');
+    expect(getModelLabel(Model.GLM_5)).toBe('GLM5/5.1 744B');
+    expect(getModelLabel(Model.GLM_5_2)).toBe('GLM5.2');
     expect(getModelLabel(Model.MiniMax_M2_5)).toBe('MiniMax M2.5/2.7 230B');
   });
 
