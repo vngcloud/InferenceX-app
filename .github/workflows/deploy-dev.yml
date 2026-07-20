@@ -115,10 +115,6 @@ jobs:
             -t "inferencex-app-dev:${GITHUB_SHA::7}" \
             .
 
-      - name: Run DB migrations
-        # Idempotent. On a brand-new dev DB this applies the full schema.
-        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
-
       - name: Sync GITHUB_TOKEN into compose .env
         # Mirrors prod: write the INGEST_GITHUB_TOKEN repo secret into the dev
         # stack's .env as GITHUB_TOKEN. Atomic rewrite, 0600, owned by runner.
