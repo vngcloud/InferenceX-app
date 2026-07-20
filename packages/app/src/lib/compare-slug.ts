@@ -66,10 +66,15 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
   {
     slug: 'glm-5-1',
     displayName: 'GLM-5',
-    // GLM-5.0 and GLM-5.1 share an architecture per the model card; the slug
-    // uses the newer version name but the data pull covers both DB buckets.
+    // GLM-5 and GLM-5.1 remain grouped under the stable canonical slug.
     dbKeys: ['glm5.1', 'glm5'],
     label: 'GLM 5/5.1',
+  },
+  {
+    slug: 'glm-5-2',
+    displayName: 'GLM-5.2',
+    dbKeys: ['glm5.2'],
+    label: 'GLM 5.2',
   },
   {
     slug: 'minimax-m3',

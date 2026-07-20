@@ -17,7 +17,7 @@ import { BottomToast } from '@/components/ui/bottom-toast';
  */
 export type EngineComparisonConflictDetail =
   | { kind: 'blocked'; attempted: string; existing: string | null }
-  | { kind: 'resolved'; kept: string[]; dropped: string[] };
+  | { kind: 'resolved'; kept: string[]; dropped: string[]; partial: string[] };
 
 function familyLabel(family: string): string {
   return FRAMEWORK_LABELS[family] ?? family;
@@ -37,7 +37,10 @@ function joinListZh(parts: string[]): string {
   return `${parts.slice(0, -1).join('、')}和 ${parts.at(-1)}`;
 }
 
-function describe(detail: EngineComparisonConflictDetail, locale: Locale): string {
+export function describeEngineComparisonConflict(
+  detail: EngineComparisonConflictDetail,
+  locale: Locale,
+): string {
   if (locale === 'zh') return describeZh(detail);
   if (detail.kind === 'blocked') {
     const attempted = familyLabel(detail.attempted);
@@ -49,6 +52,11 @@ function describe(detail: EngineComparisonConflictDetail, locale: Locale): strin
   }
   const kept = [...detail.kept].toSorted().map(familyLabel);
   const dropped = [...detail.dropped].toSorted().map(familyLabel);
+  const partial = [...detail.partial].toSorted().map(familyLabel);
+  if (partial.length > 0) {
+    const removed = dropped.length > 0 ? ` Removed ${joinList(dropped)} configs.` : '';
+    return `Only compatible engine configurations can be shown together in this view.${removed} Disabled conflicting ${joinList(partial)} configs while compatible ${joinList(partial)} configs remain shown.`;
+  }
   if (kept.length > 0) {
     return `Only compatible engine families can be shown together in this view. Kept ${joinList(kept)} and removed ${joinList(dropped)} configs.`;
   }
@@ -69,6 +77,11 @@ function describeZh(detail: EngineComparisonConflictDetail): string {
   }
   const kept = [...detail.kept].toSorted().map(familyLabel);
   const dropped = [...detail.dropped].toSorted().map(familyLabel);
+  const partial = [...detail.partial].toSorted().map(familyLabel);
+  if (partial.length > 0) {
+    const removed = dropped.length > 0 ? ` 已移除 ${joinListZh(dropped)} 配置。` : '';
+    return `此视图只能同时显示相互兼容的引擎配置。${removed}已禁用冲突的 ${joinListZh(partial)} 配置，同时保留兼容的 ${joinListZh(partial)} 配置。`;
+  }
   if (kept.length > 0) {
     return `此视图只能同时显示相互兼容的引擎系列。已保留 ${joinListZh(kept)}，并移除 ${joinListZh(dropped)} 配置。`;
   }
@@ -101,6 +114,7 @@ export function EngineComparisonConflictToast({ detail, onDismiss }: Props) {
       existing: detail.kind === 'blocked' ? detail.existing : null,
       kept: detail.kind === 'resolved' ? detail.kept : null,
       dropped: detail.kind === 'resolved' ? detail.dropped : null,
+      partial: detail.kind === 'resolved' ? detail.partial : null,
     });
   }, [detail]);
 
@@ -112,7 +126,7 @@ export function EngineComparisonConflictToast({ detail, onDismiss }: Props) {
       testId="engine-comparison-conflict-toast"
       icon={<AlertTriangle className="text-amber-500" />}
       title={TITLES[locale]}
-      description={describe(detail, locale)}
+      description={describeEngineComparisonConflict(detail, locale)}
       onDismiss={onDismiss}
     />
   );

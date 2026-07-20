@@ -10,6 +10,7 @@ export enum Model {
   MiniMax_M2_5 = 'MiniMax-M2.5',
   MiniMax_M3 = 'MiniMax-M3',
   GLM_5 = 'GLM-5',
+  GLM_5_2 = 'GLM-5.2',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
 }
 
@@ -67,15 +68,17 @@ const MTP_ENGINE_EXCLUSION: ExclusionSpec[] = [
 ];
 
 /**
- * AgentX STP exclusion: unsuffixed standard-token configs from different engine
- * families can't be active together. Fixed-sequence STP comparisons remain
- * available; this rule is attached only to the Agentic Traces sequence.
+ * AgentX STP exclusion: unsuffixed standard-token configs for the same hardware
+ * SKU can't mix engine families. Different hardware may use different engines
+ * on one graph. Fixed-sequence STP comparisons remain available; this rule is
+ * attached only to the Agentic Traces sequence.
  */
 const AGENTIC_STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
   {
     suffix: null,
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
     groupAliases: { atom: 'sglang' },
+    scope: 'hardware',
   },
 ];
 
@@ -109,7 +112,8 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     prefix: 'dsr1',
     category: 'maintenance',
   },
-  [Model.GLM_5]: { label: 'GLM5/5.1 744B', prefix: 'glm5', category: 'default' },
+  [Model.GLM_5]: { label: 'GLM5/5.1 744B', prefix: 'glm5', category: 'deprecated' },
+  [Model.GLM_5_2]: { label: 'GLM5.2', prefix: 'glm5.2', category: 'default' },
   [Model.Qwen3_5]: { label: 'Qwen3.5 397B', prefix: 'qwen3.5', category: 'default' },
   [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'deprecated' },
   [Model.MiniMax_M2_5]: {
@@ -189,6 +193,12 @@ export const MODEL_PREFIX_MAPPING: Record<string, Model> = Object.fromEntries(
     .map(([m, c]) => [c.prefix, m]),
 );
 
+// Specific point-release prefixes must win over family prefixes such as
+// `glm5`; precompute once rather than sorting for every artifact.
+const MODEL_PREFIXES_LONGEST_FIRST = Object.keys(MODEL_PREFIX_MAPPING).toSorted(
+  (a, b) => b.length - a.length,
+);
+
 // ---------------------------------------------------------------------------
 // Sequences
 // ---------------------------------------------------------------------------
@@ -222,7 +232,7 @@ const SEQUENCE_CONFIG: Record<Sequence, SequenceConfig> = {
   [Sequence.OneK_OneK]: {
     label: '1K / 1K',
     compact: '1k1k',
-    category: 'default',
+    category: 'deprecated',
     kind: 'fixed-seq',
   },
   [Sequence.OneK_EightK]: {
@@ -354,7 +364,7 @@ export function getModelAndSequence(
   let model: Model | undefined;
   let sequence: Sequence | undefined;
 
-  for (const key in MODEL_PREFIX_MAPPING) {
+  for (const key of MODEL_PREFIXES_LONGEST_FIRST) {
     if (artifactName.includes(key)) {
       model = MODEL_PREFIX_MAPPING[key];
       break;
