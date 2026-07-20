@@ -83,6 +83,13 @@ RUN apt-get update \
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
+# CI=true again: `pnpm start` runs pnpm's dependency-status check, which can
+# invoke the root `prepare` script (`is-ci || lefthook install`). This stage
+# has no .git (COPY --from=builder doesn't bring it, and it's
+# .dockerignore'd besides), so without CI=true short-circuiting is-ci,
+# lefthook fails and crash-loops the container.
+ENV CI=true
+
 WORKDIR /app
 COPY --from=builder /app ./
 
