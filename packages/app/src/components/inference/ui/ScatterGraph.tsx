@@ -52,11 +52,8 @@ import {
   getShapeKeyForPrecision,
 } from '@/lib/chart-rendering';
 import { useThemeColors } from '@/hooks/useThemeColors';
-import {
-  isFrontierEligible,
-  paretoFrontForDirection,
-  type ParetoDirection,
-} from '@/lib/chart-utils';
+import { paretoFrontForDirection, type ParetoDirection } from '@/lib/chart-utils';
+import { e2eRestrictedSeed } from '@/components/inference/utils/e2eFrontier';
 import { type RooflineDirection, getSpeedOverlayCorners } from '@/lib/speed-overlay';
 import type {
   ChartDefinition,
@@ -659,17 +656,9 @@ const ScatterGraph = React.memo(
       for (const hwKey of Object.keys(groupedData)) {
         const combined: InferenceData[] = [];
         for (const datePoints of groupPointsByDate(groupedData[hwKey]).values()) {
-          // In non-e2e xmodes, useChartData stamps every point with an
-          // `isOnE2eFrontier` flag so the line is restricted to the
-          // e2e-Pareto winners — same set of points across every chart,
-          // just re-plotted at the chosen x metric. When the flag is
-          // present on ANY point in the bucket, narrow to the winners
-          // before paretoing (otherwise we'd recompute a fresh frontier
-          // on the swapped x axis and reintroduce the benchmark hack).
-          const flagged = datePoints.some((p) => p.isOnE2eFrontier !== undefined);
-          const seedPoints = (
-            flagged ? datePoints.filter((p) => p.isOnE2eFrontier === true) : datePoints
-          ).filter(isFrontierEligible);
+          // e2eRestrictedSeed narrows to the e2e-Pareto winners when the
+          // isOnE2eFrontier flag is present (agentic non-e2e xmodes).
+          const seedPoints = e2eRestrictedSeed(datePoints);
           if (seedPoints.length === 0) continue;
           combined.push(...frontierFn(seedPoints));
         }
@@ -791,12 +780,39 @@ const ScatterGraph = React.memo(
       const frontierFn = paretoFrontForDirection(dir ?? 'lower_right');
       const result: Record<string, Entry> = {};
       for (const [key, group] of Object.entries(grouped)) {
-        const front = frontierFn(group.points.filter(isFrontierEligible));
+        // Same e2e-winner narrowing the official `rooflines` memo applies
+        // (flags stamped per run in processOverlayChartData).
+        const front = frontierFn(e2eRestrictedSeed(group.points));
         front.sort((a, b) => a.x - b.x);
         result[key] = { hwKey: group.hwKey, runIndex: group.runIndex, points: front };
       }
       return result;
     }, [processedOverlayData, selectedYAxisMetric, chartDefinition, runIndexByUrl]);
+
+    // Overlay counterpart of `optimalPointKeys`: the points on any overlay
+    // run's drawn roofline (already e2e-restricted for agentic non-e2e modes).
+    // Frontier arrays hold the same object references as `processedOverlayData`
+    // items — the pareto fns return the refs they're handed — so identity
+    // membership is exact, and unlike composite string keys it can't collide
+    // across runs sharing a (hw, precision, tp, conc) tuple.
+    const overlayOptimalPoints = useMemo(() => {
+      const set = new Set<InferenceData>();
+      for (const group of Object.values(overlayRooflines)) {
+        for (const p of group.points) set.add(p);
+      }
+      return set;
+    }, [overlayRooflines]);
+
+    // Overlay points respect the Optimal Only toggle exactly like official
+    // points do — "optimal" = on the overlay run's drawn roofline. Without
+    // this, an e2e-dominated overlay config (hidden on the official side) kept
+    // its X marker sitting on the dashed roofline and read as a pareto point.
+    // Hardware/precision/quick filters are applied upstream in
+    // `processedOverlayData`, so optimality is the only condition here.
+    const isOverlayPointVisible = useCallback(
+      (d: InferenceData) => !hideNonOptimal || overlayOptimalPoints.has(d),
+      [hideNonOptimal, overlayOptimalPoints],
+    );
 
     // All official points for rendering (unfiltered — visibility via opacity)
     const pointsData = useMemo(() => Object.values(groupedData).flat(), [groupedData]);
@@ -840,11 +856,13 @@ const ScatterGraph = React.memo(
         };
       }
       const { runIndex, runId, branch } = pointsTableTarget;
-      // Overlay series: this run's points, respecting the overlay hw toggles.
+      // Overlay series: this run's points, respecting the overlay hw toggles
+      // and Optimal Only (same visibility filters as the official branch above).
       const pts = processedOverlayData.filter(
         (p) =>
           overlayRunIndex(p.run_url ?? null, runIndexByUrl) === runIndex &&
-          activeOverlayHwTypes.has(p.hwKey as string),
+          activeOverlayHwTypes.has(p.hwKey as string) &&
+          isOverlayPointVisible(p),
       );
       return {
         hw: `overlay-run-${runId}`,
@@ -860,6 +878,7 @@ const ScatterGraph = React.memo(
       selectedPrecisions,
       hideNonOptimal,
       optimalPointKeys,
+      isOverlayPointVisible,
       resolveColor,
       processedOverlayData,
       runIndexByUrl,
@@ -907,8 +926,17 @@ const ScatterGraph = React.memo(
       if (hideNonOptimal) {
         pts = pts.filter((d) => optimalPointKeys.has(optimalPointKey(d)));
       }
-      return processedOverlayData.length > 0 ? [...pts, ...processedOverlayData] : pts;
-    }, [filteredData, processedOverlayData, hideNonOptimal, optimalPointKeys]);
+      // Overlay points hidden by Optimal Only are excluded from the domain too
+      // so hidden outliers don't stretch the axes.
+      const overlayPts = processedOverlayData.filter(isOverlayPointVisible);
+      return overlayPts.length > 0 ? [...pts, ...overlayPts] : pts;
+    }, [
+      filteredData,
+      processedOverlayData,
+      hideNonOptimal,
+      optimalPointKeys,
+      isOverlayPointVisible,
+    ]);
 
     const isInputTputMetric = selectedYAxisMetric === 'y_inputTputPerGpu';
 
@@ -1021,6 +1049,7 @@ const ScatterGraph = React.memo(
     // Handlers".
     const interactionRef = useRef({
       isPointVisible,
+      isOverlayPointVisible,
       effectiveActiveHwTypes,
       selectedPrecisions,
       activeOverlayHwTypes,
@@ -1030,6 +1059,7 @@ const ScatterGraph = React.memo(
     });
     interactionRef.current = {
       isPointVisible,
+      isOverlayPointVisible,
       effectiveActiveHwTypes,
       selectedPrecisions,
       activeOverlayHwTypes,
@@ -2118,6 +2148,15 @@ const ScatterGraph = React.memo(
 
               overlayPoints.attr('transform', (d) => `translate(${xScale(d.x)},${yScale(d.y)})`);
               overlayPoints.style('filter', null);
+              // Optimal Only parity with official points (see isOverlayPointVisible).
+              // Read through the interaction ref so this long-lived closure sees
+              // the current toggle state on zoom/label re-renders.
+              overlayPoints.each(function (d) {
+                const visible = interactionRef.current.isOverlayPointVisible(d);
+                d3.select(this)
+                  .style('opacity', visible ? 1 : 0)
+                  .style('pointer-events', visible ? 'auto' : 'none');
+              });
               overlayPoints
                 .select('.overlay-x')
                 .attr('stroke', (d) =>
@@ -2591,6 +2630,16 @@ const ScatterGraph = React.memo(
         sel.select('.tracked-ring').attr('stroke', color);
       });
 
+      // Overlay X markers: Optimal Only visibility (mirrors the official dot
+      // loop above — the overlay layer render applies the same predicate, but
+      // a toggle flip must restyle existing DOM without a chart rebuild).
+      zoomGroup.selectAll<SVGGElement, InferenceData>('.unofficial-overlay-pt').each(function (d) {
+        const visible = ir.isOverlayPointVisible(d);
+        d3.select(this)
+          .style('opacity', visible ? 1 : 0)
+          .style('pointer-events', visible ? 'auto' : 'none');
+      });
+
       // Rooflines: visibility + solid-stroke recolor as direct writes (never
       // `d`). Gradient strokes keep their url(#…) reference — gradient stop
       // colors come from the fixed parallelism palette and don't change with
@@ -2656,6 +2705,7 @@ const ScatterGraph = React.memo(
       }
     }, [
       isPointVisible,
+      isOverlayPointVisible,
       effectiveActiveHwTypes,
       selectedPrecisions,
       activeOverlayHwTypes,
