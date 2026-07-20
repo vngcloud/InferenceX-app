@@ -19,6 +19,8 @@ import {
   blogDescription,
   getAllPosts,
   getAdjacentPosts,
+  buildBlogBreadcrumbJsonLd,
+  buildBlogPostingJsonLd,
   extractHeadings,
   getPostBySlug,
   hasZhTranslation,
@@ -136,34 +138,21 @@ export default async function BlogPostPage({ params }: Props) {
     },
   });
 
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'BlogPosting',
-    headline: meta.title,
-    author: { '@type': 'Person', name: AUTHOR_NAME },
-    publisher: { '@type': 'Organization', name: AUTHOR_NAME },
-    datePublished: `${meta.date}T00:00:00Z`,
-    ...(meta.modifiedDate && { dateModified: `${meta.modifiedDate}T00:00:00Z` }),
-    // Keep structured-data description in sync with the SERP/OG/Twitter meta
-    // (both go through blogDescription) so they never diverge for posts with a
-    // seoDescription or a long subtitle.
-    description: blogDescription(meta),
-    url: `${SITE_URL}/blog/${slug}`,
-    wordCount: raw.trim().split(/\s+/u).length,
-    timeRequired: `PT${meta.readingTime}M`,
-  };
+  const jsonLd = buildBlogPostingJsonLd(meta, raw);
+  const breadcrumbJsonLd = buildBlogBreadcrumbJsonLd(slug, meta.title);
 
   return (
     <main className="relative">
       <HashScroll />
       <ReadingProgressBar slug={slug} />
       <JsonLd data={jsonLd} />
+      <JsonLd data={breadcrumbJsonLd} />
       <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4">
         <section data-blog-section="true" className="flex flex-col gap-4">
           <Card>
             <BlogBackLink />
             <header>
-              <h2 className="text-2xl lg:text-4xl font-bold tracking-tight">{meta.title}</h2>
+              <h1 className="text-2xl lg:text-4xl font-bold tracking-tight">{meta.title}</h1>
               <p className="mt-3 text-base lg:text-lg text-muted-foreground">{meta.subtitle}</p>
               <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground mt-3">
                 <span>{AUTHOR_NAME}</span>
