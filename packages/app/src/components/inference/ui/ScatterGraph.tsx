@@ -1204,6 +1204,7 @@ const ScatterGraph = React.memo(
             isTracked: trackedConfigIdsRef.current.has(buildPointConfigId(d)),
             runUrl: d.run_url ? updateRepoUrl(d.run_url) : undefined,
             hasTrace: typeof d.id === 'number' ? traceAvailability?.[d.id] === true : false,
+            locale,
           }),
         getRulerX: (d: InferenceData, xScale: any) => (xScale as ContinuousScale)(d.x),
         getRulerY: (d: InferenceData, yScale: any) => (yScale as ContinuousScale)(d.y),
@@ -1270,6 +1271,7 @@ const ScatterGraph = React.memo(
         // tooltip content closure (the "View charts" button), so rebuild the
         // config when the presence fetch resolves.
         traceAvailability,
+        locale,
       ],
     );
 
@@ -2211,8 +2213,7 @@ const ScatterGraph = React.memo(
               // Overlay tooltip handlers
               const svgNode = ctx.layout.svg.node()!;
               const container = svgNode.parentElement as HTMLDivElement;
-              const tooltipDiv = svgNode.nextElementSibling as HTMLDivElement;
-              const tooltip = d3.select(tooltipDiv);
+              const tooltip = d3.select(ctx.tooltipElement);
 
               const createOverlayConfig = (d: InferenceData, pinned: boolean) => ({
                 data: d,
@@ -2222,6 +2223,7 @@ const ScatterGraph = React.memo(
                 selectedYAxisMetric,
                 hardwareConfig: overlayData.hardwareConfig,
                 overlayData,
+                locale,
               });
 
               overlayPoints
@@ -2493,6 +2495,7 @@ const ScatterGraph = React.memo(
       yLabel,
       selectedYAxisMetric,
       chartDefinition,
+      locale,
     ]);
 
     // Layers handle for the decoration effect — lets it re-run individual
