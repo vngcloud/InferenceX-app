@@ -17,6 +17,7 @@ import { GitHubStars } from './GithubStars';
 
 /** Dashboard tab paths that should highlight the "Dashboard" nav link. */
 const DASHBOARD_TABS = [
+  '/overview',
   '/inference',
   '/evaluation',
   '/historical',
@@ -75,16 +76,34 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 /** EN ↔ 中文 switcher; maps the current page to its sibling in the other language. */
-function LanguageToggle({ pathname }: { pathname: string }) {
+function LanguageToggle({
+  pathname,
+  router,
+}: {
+  pathname: string;
+  router: ReturnType<typeof useRouter>;
+}) {
   const isZh = isZhPathname(pathname);
   const target = switchLocalePath(pathname);
+  // The href carries the query too, so modified clicks and copied links keep
+  // shareable state (e.g. the overview's ?tier=) — same sync as TabNav's.
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    const sync = () => setSearch(window.location.search);
+    sync();
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, [pathname]);
   return (
     <Link
-      href={target}
+      href={target + search}
       data-testid="language-toggle"
       hrefLang={isZh ? 'en' : 'zh-CN'}
-      className="px-2 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors whitespace-nowrap"
-      onClick={() => track('header_language_toggled', { to: isZh ? 'en' : 'zh' })}
+      className="inline-flex items-center min-h-11 px-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors whitespace-nowrap"
+      onClick={(event) => {
+        track('header_language_toggled', { to: isZh ? 'en' : 'zh' });
+        navigateInApp(event, router, target + window.location.search);
+      }}
     >
       {isZh ? 'EN' : '中文'}
     </Link>
@@ -145,7 +164,11 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
       <div className="container mx-auto px-4 lg:px-8">
         <div className="flex h-14 items-center gap-6">
           {/* Brand */}
-          <Link href={isZh ? '/zh' : '/'} className="flex items-center gap-2 shrink-0">
+          <Link
+            href={isZh ? '/zh' : '/'}
+            data-testid="header-brand"
+            className="flex items-center min-h-11 gap-2 shrink-0"
+          >
             <span className="pride-wordmark text-lg font-bold tracking-tight">InferenceX</span>
             <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
               by
@@ -184,9 +207,15 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
 
           {/* Right side */}
           <div className="ml-auto flex items-center gap-2">
-            <GitHubStars owner="SemiAnalysisAI" repo="InferenceX" starCount={starCount} />
-            <LanguageToggle pathname={pathname} />
-            <MinecraftToggles />
+            <span className="hidden sm:flex">
+              <GitHubStars owner="SemiAnalysisAI" repo="InferenceX" starCount={starCount} />
+            </span>
+            <LanguageToggle pathname={pathname} router={router} />
+            {/* Below `sm` these move into the mobile menu — they are what push
+                a 320px header past its bounds in minecraft mode. */}
+            <span className="hidden items-center gap-2 sm:flex">
+              <MinecraftToggles />
+            </span>
             <ModeToggle />
 
             {/* Mobile hamburger */}
@@ -195,7 +224,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                 type="button"
                 data-testid="mobile-menu-toggle"
                 onClick={toggleMenu}
-                className="flex items-center justify-center size-9 rounded-md transition-colors hover:bg-muted cursor-pointer"
+                className="flex items-center justify-center size-11 rounded-md transition-colors hover:bg-muted cursor-pointer"
                 aria-expanded={mobileMenuOpen}
                 aria-label="Navigation menu"
               >
@@ -224,7 +253,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                       key={href}
                       href={displayHref}
                       className={cn(
-                        'px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                        'flex items-center min-h-11 px-3 rounded-md text-sm font-medium transition-colors',
                         isActive(pathname, href)
                           ? 'text-brand bg-brand/10'
                           : 'text-muted-foreground hover:text-foreground hover:bg-muted',
@@ -237,6 +266,9 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                       {label}
                     </Link>
                   ))}
+                  <span className="flex items-center gap-2 px-3 sm:hidden">
+                    <MinecraftToggles />
+                  </span>
                 </div>
               )}
             </div>
