@@ -45,6 +45,7 @@ export const KNOWN_MODELS = new Set([
   'Llama-3.3-70B-Instruct-FP8',
   'Llama-3.1-70B-Instruct-FP8-KV',
   'DeepSeek-R1-0528',
+  'DeepSeek-Coder-V2-Lite-Instruct',
   'gpt-oss-120b',
   'Qwen-3.5-397B-A17B',
   'Kimi-K2.5',

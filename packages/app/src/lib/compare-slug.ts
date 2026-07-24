@@ -60,6 +60,13 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
     seoName: 'DeepSeek R1',
   },
   {
+    slug: 'deepseek-coder-v2-lite',
+    displayName: 'DeepSeek-Coder-V2-Lite-Instruct',
+    dbKeys: ['dsv2lite'],
+    label: 'DeepSeek Coder V2 Lite 16B',
+    seoName: 'DeepSeek Coder V2 Lite',
+  },
+  {
     slug: 'kimi-k26',
     displayName: 'Kimi-K2.5',
     // K2.5, K2.6, and K2.7-Code point releases share an architecture (mirroring

@@ -266,6 +266,7 @@ describe('compareModelSeoName', () => {
   const EXPECTED: Record<string, string> = {
     'deepseek-v4': 'DeepSeek V4 Pro',
     'deepseek-r1': 'DeepSeek R1',
+    'deepseek-coder-v2-lite': 'DeepSeek Coder V2 Lite',
     'kimi-k26': 'Kimi K2.6',
     'glm-5-1': 'GLM-5',
     'glm-5-2': 'GLM-5.2',
