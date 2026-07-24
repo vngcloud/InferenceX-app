@@ -36,6 +36,13 @@ the commit diff.
 - **Why:** this fork ran a `Remote Bench E2E` smoke test (`vngcloud/InferenceX` run `30077858703`, RTX 5090, sglang, fp8) against a model upstream has never benchmarked. Without a registered DB key, ingest silently skips every row for an unmapped model — nothing errors, the data just never lands.
 - **Watch for:** if upstream ever adds its own entry for this model (or a similarly-named one) with a different DB key or display name, reconcile rather than duplicate — check `DB_MODEL_TO_DISPLAY` for a collision on the display name first.
 
+### 2026-07-24 — RTX 5090 registered in `HW_REGISTRY`
+
+- **File:** `packages/constants/src/gpu-keys.ts`
+- **What:** adds `rtx5090` (NVIDIA GeForce RTX 5090, Blackwell consumer, 32 GB GDDR7) to `HW_REGISTRY`, with `costh`/`power` as explicit `9.99` placeholders (no hyperscaler offers this consumer card, no real all-in-power basis for a standalone rig) and `costn`/`costr` as approximate TensorDock/Vast.ai rental rates (~$0.57-0.60/hr as of 2026-07), not list prices.
+- **Why:** ingest of `vngcloud/InferenceX` run `30077858703` (DeepSeek-Coder-V2-Lite smoke test) was silently skipping 6 rows with `unmapped hw: rtx5090` — this is test-rig hardware upstream has never benchmarked on.
+- **Watch for:** if upstream later adds real fleet pricing for a similar consumer/workstation card (e.g. RTX PRO 6000, already upstream-only per a past diff check), don't confuse the two entries — they're separate keys with separate placeholder rationales.
+
 ## When merging upstream
 
 For each entry above: confirm the file still contains the described change
