@@ -83,6 +83,8 @@ export const MODEL_TO_KEY: Record<string, string> = {
   'dsr1-0528-fp8': 'dsr1',
   'dsr1-0528-nvfp4-v2': 'dsr1',
   'dsr1-fp8': 'dsr1',
+  // DeepSeek-Coder-V2-Lite-Instruct
+  'RedHatAI/DeepSeek-Coder-V2-Lite-Instruct-FP8': 'dsv2lite',
   // GPT-OSS-120B
   'openai/gpt-oss-120b': 'gptoss120b',
   '/mnt/lustre01/models/gpt-oss-120b': 'gptoss120b',
