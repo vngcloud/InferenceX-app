@@ -2,16 +2,20 @@ import { describe, it, expect, vi } from 'vitest';
 
 import type { BenchmarkRow } from '@/lib/api';
 
-import { rowToAggDataEntry, transformBenchmarkRows } from './benchmark-transform';
+import {
+  mergeRunScopedRows,
+  rowToAggDataEntry,
+  transformBenchmarkRows,
+} from './benchmark-transform';
 
 function makeRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
   return {
+    id: 1,
     hardware: 'h200',
     framework: 'trt',
     model: 'dsr1',
     precision: 'fp8',
     spec_method: 'none',
-    techniques: {},
     disagg: false,
     is_multinode: false,
     prefill_tp: 8,
@@ -24,6 +28,8 @@ function makeRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
     decode_num_workers: 0,
     num_prefill_gpu: 8,
     num_decode_gpu: 8,
+    benchmark_type: 'single_turn',
+    offload_mode: 'off',
     isl: 1024,
     osl: 1024,
     conc: 64,
@@ -116,6 +122,156 @@ describe('rowToAggDataEntry', () => {
     const entryNull = rowToAggDataEntry(makeRow({ image: null }));
     expect(entryNull.image).toBeUndefined();
   });
+
+  it('passes runtime cache metadata through to chart points', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        metrics: {
+          kv_offloading: 'dram',
+          kv_offload_backend: 'mooncake',
+          kv_offload_backend_version: '0.3.11.post1',
+          kv_p2p_transfer: 'nixl',
+          router_name: 'vllm-router',
+          router_version: '0.1.14',
+        } as unknown as BenchmarkRow['metrics'],
+      }),
+    );
+
+    expect(entry.kv_offloading).toBe('dram');
+    expect(entry.kv_offload_backend).toBe('mooncake');
+    expect(entry.kv_offload_backend_version).toBe('0.3.11.post1');
+    expect(entry.kv_p2p_transfer).toBe('nixl');
+    expect(entry.router_name).toBe('vllm-router');
+    expect(entry.router_version).toBe('0.1.14');
+  });
+
+  it('passes through measured power telemetry fields when present', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        metrics: { tput_per_gpu: 100, avg_power_w: 685.5, joules_per_output_token: 8.4 },
+      }),
+    );
+    expect(entry.avg_power_w).toBe(685.5);
+    expect(entry.joules_per_output_token).toBe(8.4);
+  });
+
+  it('leaves measured power fields undefined for rows that predate the metric', () => {
+    // Distinguishing "no measurement" from "0 W" matters: createChartDataPoint
+    // uses typeof===number to decide whether to emit the measuredAvgPower field.
+    const entry = rowToAggDataEntry(makeRow({ metrics: {} }));
+    expect(entry.avg_power_w).toBeUndefined();
+    expect(entry.joules_per_output_token).toBeUndefined();
+  });
+
+  it('passes through multinode / disagg role-split power scalars when present', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        metrics: {
+          tput_per_gpu: 100,
+          prefill_avg_power_w: 612.3,
+          decode_avg_power_w: 701.5,
+          joules_per_input_token: 1.2,
+          // disagg: joules_per_output_token IS the per-stage decode value.
+          joules_per_output_token: 9.7,
+        },
+      }),
+    );
+    expect(entry.prefill_avg_power_w).toBe(612.3);
+    expect(entry.decode_avg_power_w).toBe(701.5);
+    expect(entry.joules_per_input_token).toBe(1.2);
+    expect(entry.joules_per_output_token).toBe(9.7);
+  });
+
+  it('passes through per-worker measured power array intact', () => {
+    const workers = [
+      { role: 'prefill' as const, worker_idx: 0, num_gpus: 4, avg_power_w: 588.4 },
+      { role: 'prefill' as const, worker_idx: 1, num_gpus: 4, avg_power_w: 601.2 },
+      { role: 'decode' as const, worker_idx: 0, num_gpus: 8, avg_power_w: 712.1 },
+      { role: 'frontend' as const, worker_idx: 0, num_gpus: 0, avg_power_w: 0 },
+    ];
+    const entry = rowToAggDataEntry(makeRow({ workers }));
+    expect(entry.workers).toEqual(workers);
+  });
+
+  it('defensively drops a non-array workers payload', () => {
+    // The DB JSONB column is untyped at the wire boundary, so guard against a
+    // malformed row reaching downstream consumers.
+    const entry = rowToAggDataEntry(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeRow({ workers: 'oops' as any }),
+    );
+    expect(entry.workers).toBeUndefined();
+  });
+
+  it('leaves multinode role-split scalars and workers undefined for legacy rows', () => {
+    // Single-node configs predating the multinode runner don't emit any of
+    // the role-split fields; transform must yield undefined (not 0) so the
+    // chart layer can distinguish "no measurement" from a real zero.
+    const entry = rowToAggDataEntry(makeRow({ metrics: {} }));
+    expect(entry.prefill_avg_power_w).toBeUndefined();
+    expect(entry.decode_avg_power_w).toBeUndefined();
+    expect(entry.joules_per_input_token).toBeUndefined();
+    expect(entry.workers).toBeUndefined();
+  });
+
+  it('passes through cluster-wide temp/util/mem scalars when present', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        metrics: {
+          tput_per_gpu: 100,
+          avg_temp_c: 68.4,
+          peak_temp_c: 79.2,
+          avg_util_pct: 88.5,
+          avg_mem_used_mb: 71234.5,
+        },
+      }),
+    );
+    expect(entry.avg_temp_c).toBe(68.4);
+    expect(entry.peak_temp_c).toBe(79.2);
+    expect(entry.avg_util_pct).toBe(88.5);
+    expect(entry.avg_mem_used_mb).toBe(71234.5);
+  });
+
+  it('leaves cluster-wide temp/util/mem fields undefined when absent (legacy rows)', () => {
+    // Same undefined-vs-zero distinction as the measured-power scalars —
+    // historic rows predate the perfmon CSV scrape, so missing values must
+    // not be silently coerced to 0.
+    const entry = rowToAggDataEntry(makeRow({ metrics: {} }));
+    expect(entry.avg_temp_c).toBeUndefined();
+    expect(entry.peak_temp_c).toBeUndefined();
+    expect(entry.avg_util_pct).toBeUndefined();
+    expect(entry.avg_mem_used_mb).toBeUndefined();
+  });
+
+  it('preserves new optional WorkerPower fields (hosts, telemetry) on workers entries', () => {
+    const workers = [
+      {
+        role: 'prefill' as const,
+        worker_idx: 0,
+        hosts: ['pn0'],
+        num_gpus: 4,
+        avg_power_w: 612.3,
+        avg_temp_c: 71.2,
+        peak_temp_c: 78,
+        avg_util_pct: 92.1,
+        avg_mem_used_mb: 65432,
+      },
+      {
+        role: 'decode' as const,
+        worker_idx: 0,
+        hosts: ['dn0', 'dn1', 'dn2', 'dn3'],
+        num_gpus: 16,
+        avg_power_w: 712.1,
+      },
+    ];
+    const entry = rowToAggDataEntry(makeRow({ workers }));
+    expect(entry.workers).toEqual(workers);
+    expect(entry.workers![0].hosts).toEqual(['pn0']);
+    expect(entry.workers![0].avg_temp_c).toBe(71.2);
+    expect(entry.workers![1].hosts).toEqual(['dn0', 'dn1', 'dn2', 'dn3']);
+    // Optional telemetry fields stay undefined when source omits them.
+    expect(entry.workers![1].avg_temp_c).toBeUndefined();
+  });
 });
 
 describe('transformBenchmarkRows', () => {
@@ -174,6 +330,40 @@ describe('transformBenchmarkRows', () => {
     const { hardwareConfig } = transformBenchmarkRows(rows);
     const hwKeys = Object.keys(hardwareConfig);
     expect(hwKeys.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('labels M3 mtp configs with the "M3 EAGLE" suffix', () => {
+    const rows = [
+      makeRow({
+        model: 'minimaxm3',
+        hardware: 'h100',
+        framework: 'vllm',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
+    const { hardwareConfig } = transformBenchmarkRows(rows);
+    const entry = hardwareConfig['h100_vllm_mtp'];
+    expect(entry).toBeDefined();
+    expect(entry.suffix).toBe('(vLLM, M3 EAGLE)');
+  });
+
+  it('keeps the generic MTP suffix for non-M3 mtp configs', () => {
+    const rows = [
+      makeRow({
+        model: 'dsr1',
+        hardware: 'h200',
+        framework: 'sglang',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
+    const { hardwareConfig } = transformBenchmarkRows(rows);
+    const entry = hardwareConfig['h200_sglang_mtp'];
+    expect(entry).toBeDefined();
+    expect(entry.suffix).toBe('(SGLang, MTP)');
   });
 });
 
@@ -424,7 +614,9 @@ describe('transformBenchmarkRows — disaggregated configs', () => {
 
 describe('transformBenchmarkRows — hardware key resolution', () => {
   it('constructs hwKey from hardware + framework', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt' })];
+    const rows = [
+      makeRow({ hardware: 'h200', framework: 'trt', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     // getHardwareKey normalizes: h200 + trt => h200_trt
     const point = chartData.flat()[0];
@@ -433,7 +625,15 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
   });
 
   it('appends _mtp suffix when spec_method is mtp', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'mtp' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     const point = chartData.flat()[0];
     expect(point.hwKey).toBe('h200_trt_mtp');
@@ -441,7 +641,9 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
   });
 
   it('handles AMD hardware with vllm framework', () => {
-    const rows = [makeRow({ hardware: 'mi300x', framework: 'vllm' })];
+    const rows = [
+      makeRow({ hardware: 'mi300x', framework: 'vllm', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     const point = chartData.flat()[0];
     expect(point.hwKey).toBe('mi300x_vllm');
@@ -469,9 +671,27 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
 describe('transformBenchmarkRows — hardware config caching', () => {
   it('deduplicates hardware config for rows with the same hwKey', () => {
     const rows = [
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 16 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 64 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 128 }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 16,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 64,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 128,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig, chartData } = transformBenchmarkRows(rows);
     // All three rows produce the same hwKey, so hardwareConfig should have exactly 1 entry
@@ -487,8 +707,14 @@ describe('transformBenchmarkRows — hardware config caching', () => {
 
   it('creates separate config entries for different frameworks on same GPU', () => {
     const rows = [
-      makeRow({ hardware: 'h100', framework: 'vllm' }),
-      makeRow({ hardware: 'h100', framework: 'dynamo-trt', conc: 32 }),
+      makeRow({ hardware: 'h100', framework: 'vllm', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+      makeRow({
+        hardware: 'h100',
+        framework: 'dynamo-trt',
+        conc: 32,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig } = transformBenchmarkRows(rows);
     const hwKeys = Object.keys(hardwareConfig);
@@ -588,9 +814,27 @@ describe('transformBenchmarkRows — data point values', () => {
 
   it('groups data points by hwKey within each chart', () => {
     const rows = [
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 16 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 64 }),
-      makeRow({ hardware: 'mi300x', framework: 'vllm', conc: 32 }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 16,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 64,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'mi300x',
+        framework: 'vllm',
+        conc: 32,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { chartData } = transformBenchmarkRows(rows);
     // All points should have their hwKey set correctly
@@ -605,7 +849,15 @@ describe('transformBenchmarkRows — data point values', () => {
 
 describe('transformBenchmarkRows — spec decoding variants', () => {
   it('does not append suffix when spec_method is none', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'none' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'none',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData } = transformBenchmarkRows(rows);
     expect(chartData.flat()[0].hwKey).toBe('h200_trt');
   });
@@ -615,7 +867,15 @@ describe('transformBenchmarkRows — spec decoding variants', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'eagle' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'eagle',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData } = transformBenchmarkRows(rows);
     expect(chartData.flat()[0].hwKey).toBe('h200_trt_eagle');
 
@@ -644,5 +904,168 @@ describe('transformBenchmarkRows — dp_attention narrowing', () => {
     const { chartData } = transformBenchmarkRows(rows);
     const point = chartData.flat()[0];
     expect(point.decode_dp_attention).toBe(true);
+  });
+});
+
+describe('mergeRunScopedRows', () => {
+  const vllmRun = (over: Partial<BenchmarkRow> = {}) =>
+    makeRow({ model: 'dsv4', hardware: 'b300', framework: 'vllm', precision: 'fp4', ...over });
+  const sglangBase = (over: Partial<BenchmarkRow> = {}) =>
+    makeRow({ model: 'dsv4', hardware: 'b300', framework: 'sglang', precision: 'fp4', ...over });
+
+  it('pins configs the run covers to the run rows, replacing base rows', () => {
+    const runRows = [vllmRun({ id: 10, conc: 32 }), vllmRun({ id: 11, conc: 64 })];
+    const baseRows = [vllmRun({ id: 90, conc: 32 }), vllmRun({ id: 91, conc: 128 })];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    // All vllm base rows dropped (incl. conc=128 the run didn't cover) — a
+    // partial-sweep run must fully own its config or the DISTINCT-ON mixing
+    // the scoping exists to prevent comes right back.
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 11]);
+  });
+
+  it('carries forward configs the run does not cover (the same-day other-framework curve)', () => {
+    const runRows = [vllmRun({ id: 10 })];
+    const baseRows = [
+      vllmRun({ id: 90 }),
+      sglangBase({ id: 91 }),
+      sglangBase({ id: 92, conc: 128 }),
+    ];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 91, 92]);
+  });
+
+  it('keeps base rows of other hardware / precision / model untouched', () => {
+    const runRows = [vllmRun({ id: 10 })];
+    const baseRows = [
+      vllmRun({ id: 90, hardware: 'b200' }),
+      vllmRun({ id: 91, precision: 'fp8' }),
+      vllmRun({ id: 92, model: 'kimik2.5' }),
+    ];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 90, 91, 92]);
+  });
+
+  it('scopes per benchmark_type — an agentic run does not hide fixed-seq carry-forward', () => {
+    const runRows = [vllmRun({ id: 10, benchmark_type: 'agentic_traces' })];
+    const baseRows = [
+      vllmRun({ id: 90, benchmark_type: 'agentic_traces' }),
+      vllmRun({ id: 91, benchmark_type: 'single_turn' }),
+    ];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 91]);
+  });
+
+  it('returns base rows unchanged when the run produced nothing', () => {
+    const baseRows = [vllmRun({ id: 90 }), sglangBase({ id: 91 })];
+    expect(mergeRunScopedRows([], baseRows)).toBe(baseRows);
+  });
+});
+
+describe('rowToAggDataEntry — agentic interactivity invariant', () => {
+  // Agentic artifacts have shipped *_intvty under two definitions across harness
+  // versions (slow-tail 1/p(ITL) vs fast-tail p(1/ITL)). The chart's
+  // interactivity selector is slow-tail, so we always derive intvty = 1/itl and
+  // discard the artifact value. Mirrors the ingest mapper + backfill.
+  const agentic = (metrics: Record<string, number>) =>
+    rowToAggDataEntry(makeRow({ benchmark_type: 'agentic_traces', isl: null, osl: null, metrics }));
+
+  it('overrides an artifact-supplied (fast-tail) *_intvty with 1/*_itl', () => {
+    const entry = agentic({
+      p90_itl: 0.0893, // slow-tail 1/itl ≈ 11.198
+      p90_intvty: 23.91, // fast-tail contamination — must be discarded
+      p75_itl: 0.0692,
+      p75_intvty: 19, // must be discarded
+    });
+    expect(entry.p90_intvty).toBeCloseTo(1 / 0.0893, 6);
+    expect(entry.p75_intvty).toBeCloseTo(1 / 0.0692, 6);
+    expect(entry.p90_intvty).not.toBeCloseTo(23.91, 1);
+  });
+
+  it('derives intvty from itl when the artifact omits intvty entirely', () => {
+    const entry = agentic({ p90_itl: 0.1, p95_itl: 0.2 });
+    expect(entry.p90_intvty).toBeCloseTo(10, 6);
+    expect(entry.p95_intvty).toBeCloseTo(5, 6);
+  });
+
+  it('does not invert interactivity for single_turn rows', () => {
+    const entry = rowToAggDataEntry(makeRow({ metrics: { p90_itl: 0.05, p90_intvty: 999 } }));
+    expect(entry.p90_intvty).toBe(999);
+  });
+
+  it('DROPS a stale artifact *_intvty when the matching *_itl is absent (overlay mirror of the ETL fix)', () => {
+    // Artifact carries intvty (possibly the drifted p(1/ITL) definition) but no
+    // itl for that percentile — the value can't be reconciled to 1/p(ITL), so it
+    // must be discarded, not passed through. rowToAggDataEntry then coerces the
+    // now-missing key to 0.
+    const entry = agentic({ p90_intvty: 42, p95_itl: 0.2 });
+    expect(entry.p90_intvty).toBe(0); // dropped → default 0
+    expect(entry.p95_intvty).toBeCloseTo(5, 6); // derived from itl
+  });
+
+  it('DROPS a stale artifact *_intvty when the matching *_itl is zero/invalid', () => {
+    const entry = agentic({ p90_itl: 0, p90_intvty: 42 });
+    expect(entry.p90_intvty).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rowToAggDataEntry — persisted-id guard (overlay rows carry no DB id)
+// ---------------------------------------------------------------------------
+describe('rowToAggDataEntry — id coercion', () => {
+  it('coerces a stringified bigint id to a number', () => {
+    const entry = rowToAggDataEntry(makeRow({ id: '206863' as unknown as number }));
+    expect(entry.id).toBe(206863);
+  });
+
+  it('yields undefined (not NaN) for a missing id — overlay rows have no persisted id', () => {
+    const entry = rowToAggDataEntry(makeRow({ id: undefined as unknown as number }));
+    expect(entry.id).toBeUndefined();
+  });
+
+  it('yields undefined for a non-positive or non-numeric id', () => {
+    expect(rowToAggDataEntry(makeRow({ id: 0 })).id).toBeUndefined();
+    expect(rowToAggDataEntry(makeRow({ id: 'abc' as unknown as number })).id).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mergeRunScopedRows — offload-aware scoping (data-loss guard)
+// ---------------------------------------------------------------------------
+describe('mergeRunScopedRows — offload variants are distinct series', () => {
+  const agenticRow = (over: Partial<BenchmarkRow> = {}) =>
+    makeRow({
+      model: 'dsr1',
+      hardware: 'b300',
+      framework: 'vllm',
+      precision: 'fp4',
+      benchmark_type: 'agentic_traces',
+      isl: null,
+      osl: null,
+      ...over,
+    });
+
+  it('a run row for offload=on does NOT claim/suppress the base offload=off rows', () => {
+    // The selected run produced only the offload=on variant. The offload=off base
+    // rows are a separate series and must carry forward, not vanish.
+    const runRows = [agenticRow({ id: 10, offload_mode: 'on' })];
+    const baseRows = [
+      agenticRow({ id: 90, offload_mode: 'on' }), // same series as the run → replaced
+      agenticRow({ id: 91, offload_mode: 'off' }), // distinct series → kept
+    ];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 91]);
+  });
+
+  it('a run covering both offload variants pins both', () => {
+    const runRows = [
+      agenticRow({ id: 10, offload_mode: 'on' }),
+      agenticRow({ id: 11, offload_mode: 'off' }),
+    ];
+    const baseRows = [
+      agenticRow({ id: 90, offload_mode: 'on' }),
+      agenticRow({ id: 91, offload_mode: 'off' }),
+    ];
+    const merged = mergeRunScopedRows(runRows, baseRows);
+    expect(merged.map((r) => r.id).toSorted((a, b) => a - b)).toEqual([10, 11]);
   });
 });

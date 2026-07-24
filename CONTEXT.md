@@ -32,7 +32,7 @@ _Avoid_: synthetic benchmark (too broad).
 ### Storage
 
 **benchmark_results**:
-The table holding one row per `(workflow_run, config, benchmark_type, isl, osl, conc, techniques)`. Because `conc` is in the key, a full ladder lands as many rows — one per concurrency — which existing charts plot directly. Fastfood candidates are stored here under `benchmark_type = single_turn`.
+The table holding one row per `(workflow_run, config, benchmark_type, isl, osl, conc, offload_mode)`. Because `conc` is in the key, a full ladder lands as many rows — one per concurrency — which existing charts plot directly. Fastfood candidates are stored here under `benchmark_type = single_turn`.
 
 **aiperf_search_candidates**:
 A hypothetical dedicated table for search-space data (candidate identity, iteration index, feasibility, objective). Considered and _not_ built — see `docs/adr/0001`. Listed here so the term is not reintroduced as if it exists.

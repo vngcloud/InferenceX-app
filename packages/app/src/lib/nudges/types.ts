@@ -45,6 +45,7 @@ export interface NudgeCondition {
 
 export interface NudgeAction {
   label: string;
+  labelZh?: string;
   icon?: ReactNode;
   /**
    * Called when the user clicks the action button.
@@ -62,7 +63,9 @@ export interface NudgeContent {
   icon: ComponentType<{ className?: string }>;
   iconClassName?: string;
   title: string;
+  titleZh?: string;
   description: string;
+  descriptionZh?: string;
   action?: NudgeAction;
   /** data-testid on the nudge container (preserves existing selectors). */
   testId?: string;
@@ -74,14 +77,18 @@ export interface NudgeContent {
 
   /** Label for the dismiss button (default "Maybe Later"). */
   dismissLabel?: string;
+  dismissLabelZh?: string;
   /** Label + handler for the primary CTA (modals only). */
   primaryAction?: NudgeAction;
   /** Extra CSS class on the modal container (e.g. branded border). */
   containerClassName?: string;
+  /** Render as a true center-of-page modal with a backdrop instead of a bottom-right card. */
+  centered?: boolean;
   /** Extra CSS class on the primary action button (e.g. glow effect). */
   actionClassName?: string;
   /** Badge text rendered next to the title (e.g. "New"). */
   badge?: string;
+  badgeZh?: string;
 
   // -- Banner-specific (ignored by toasts/modals) --
 
@@ -121,6 +128,11 @@ export interface NudgeDefinition {
   priority: number;
   /** Which NudgeEngine instance manages this nudge. */
   scope: 'dashboard' | 'landing' | 'evaluation';
+  /**
+   * Render an immediate banner in the server response so hydration cannot
+   * insert it above existing content and cause a layout shift.
+   */
+  renderOnInitialLoad?: boolean;
 
   // Scheduling (time-bound campaigns)
   schedule?: {

@@ -8,20 +8,34 @@ export function benchmarkQueryOptions(
   date: string,
   enabled = true,
   exact?: boolean,
+  /** GitHub run id for the "as of run" view (main chart) or the exact-run comparison. */
+  runId?: string,
+  /** When true with a runId, fetch exactly that run's results (GPU comparison). */
+  exactRun?: boolean,
 ) {
-  // 'latest' is only a queryKey marker meaning "no specific date" — must NOT
-  // be sent to the API as a date filter (postgres-js coerces `${date}::date`
-  // params via `new Date(date)`, which on 'latest' produces NaN and throws
-  // `Invalid time value` from toISOString → 500 to the client).
-  const dateForFetch = date === 'latest' ? undefined : date;
   return {
-    queryKey: ['benchmarks', model, date, exact ? 'exact' : 'latest'] as const,
+    queryKey: [
+      'benchmarks',
+      model,
+      date,
+      exact ? 'exact' : 'latest',
+      runId ?? 'all',
+      exactRun ? 'run' : 'asof',
+    ] as const,
     queryFn: ({ signal }: { signal: AbortSignal }) =>
-      fetchBenchmarks(model, dateForFetch, exact, signal),
+      fetchBenchmarks(model, date, exact, signal, runId, exactRun),
     enabled: enabled && Boolean(model),
   };
 }
 
-export function useBenchmarks(model: string, date?: string, enabled = true) {
-  return useQuery(benchmarkQueryOptions(model, date ?? 'latest', enabled));
+export function useBenchmarks(
+  model: string,
+  date?: string,
+  enabled = true,
+  runId?: string,
+  exactRun?: boolean,
+) {
+  return useQuery(
+    benchmarkQueryOptions(model, date ?? 'latest', enabled, undefined, runId, exactRun),
+  );
 }

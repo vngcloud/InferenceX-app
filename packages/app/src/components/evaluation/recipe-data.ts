@@ -178,6 +178,29 @@ function isBaseline(t: Record<string, string | number>): boolean {
   return t.spec_method === 'none';
 }
 
+/**
+ * KNOWN LIMITATION (post migration-006/007 revert, see chore/sync-dev-with-master):
+ * `benchmark_results.techniques` (a per-measurement JSONB bag of
+ * spec_method/num_speculative_tokens/max_num_batched_tokens/kv_cache_dtype/
+ * prefix_cache) was dropped when the schema reverted to master's single
+ * `configs.spec_method` column. This shim reconstructs only the `spec_method`
+ * key from `BenchmarkRow.spec_method` so Recipe Comparison keeps working for
+ * its most common case (spec-decoding variants). It CANNOT recover:
+ *   - num_speculative_tokens (e.g. MTP×4 vs MTP×6 collapse into one variant —
+ *     they also collide at the DB level now since the unique constraint no
+ *     longer includes techniques, so one silently overwrites the other on
+ *     ingest).
+ *   - max_num_batched_tokens / kv_cache_dtype / prefix_cache — the
+ *     'batch-size' / 'kv-cache' / 'prefix-cache' filter chips in
+ *     TECHNIQUE_CATEGORIES will never match any row.
+ * Follow-up: either reintroduce a narrower technique-tracking column (a design
+ * discussion, not a merge-conflict resolution) or scope this feature down to
+ * spec_method-only comparisons explicitly.
+ */
+function techniquesFromRow(r: Pick<BenchmarkRow, 'spec_method'>): Record<string, string | number> {
+  return r.spec_method && r.spec_method !== 'none' ? { spec_method: r.spec_method } : {};
+}
+
 export function buildRecipeRows(benchmarks: BenchmarkRow[], evals: EvalRow[]): RecipeRow[] {
   // Index eval rows by accuracy key → latest em_strict.
   const accuracyByKey = new Map<string, number>();
@@ -187,9 +210,15 @@ export function buildRecipeRows(benchmarks: BenchmarkRow[], evals: EvalRow[]): R
     accuracyByKey.set(accuracyKey(e), v);
   }
 
+  // Recipe comparison is a fixed-sequence-length feature; agentic_traces rows
+  // (isl/osl null) don't have a sequence dimension to group on and are excluded.
+  const fixedSeqBenchmarks = benchmarks.filter(
+    (b): b is BenchmarkRow & { isl: number; osl: number } => b.isl !== null && b.osl !== null,
+  );
+
   // Bucket benchmark rows by deployment-context groupKey.
-  const groups = new Map<string, BenchmarkRow[]>();
-  for (const b of benchmarks) {
+  const groups = new Map<string, (BenchmarkRow & { isl: number; osl: number })[]>();
+  for (const b of fixedSeqBenchmarks) {
     const k = groupKey(b);
     const existing = groups.get(k);
     if (existing) existing.push(b);
@@ -198,7 +227,7 @@ export function buildRecipeRows(benchmarks: BenchmarkRow[], evals: EvalRow[]): R
 
   const out: RecipeRow[] = [];
   for (const [k, rows] of groups) {
-    const baseline = rows.find((r) => isBaseline(r.techniques)) ?? null;
+    const baseline = rows.find((r) => isBaseline(techniquesFromRow(r))) ?? null;
     const baselineAccuracy = baseline ? (accuracyByKey.get(accuracyKey(baseline)) ?? null) : null;
     for (const r of rows) {
       const tput = Number(r.metrics?.tput_per_gpu ?? 0);
@@ -217,7 +246,7 @@ export function buildRecipeRows(benchmarks: BenchmarkRow[], evals: EvalRow[]): R
         baseline && baseline.metrics?.median_tpot
           ? tpot / Number(baseline.metrics.median_tpot)
           : null;
-      const techniques = r.techniques ?? {};
+      const techniques = techniquesFromRow(r);
       out.push({
         groupKey: k,
         model: r.model,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import iwanthue from 'iwanthue';
 
 import type * as ConstantsModule from '@/lib/constants';
 import type { AggDataEntry, ChartDefinition, InferenceData } from '@/components/inference/types';
@@ -16,6 +17,8 @@ import {
   paretoFrontLowerRight,
   paretoFrontLowerLeft,
   paretoFrontUpperLeft,
+  metricTitle,
+  metricLabel,
 } from '@/lib/chart-utils';
 
 // mock constants so createChartDataPoint (also in this module) doesn't call
@@ -28,6 +31,10 @@ vi.mock('@/lib/constants', async (importOriginal) => {
     getGpuSpecs: vi.fn(() => ({ power: 700, costh: 2.8, costn: 1.4, costr: 0.7 })),
   };
 });
+
+// spy-wrap iwanthue (real implementation) so the palette-cache tests can
+// assert how often the expensive clustering actually runs.
+vi.mock('iwanthue', { spy: true });
 
 // ---------------------------------------------------------------------------
 // fixture factory
@@ -272,9 +279,9 @@ describe('buildAvailabilityHwKey', () => {
 
 /** Parse a hex (#rrggbb) or rgb() color into [r, g, b]. */
 function parseRgb(color: string): [number, number, number] {
-  const hex = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/iu);
+  const hex = color.match(/^#(?<r>[0-9a-f]{2})(?<g>[0-9a-f]{2})(?<b>[0-9a-f]{2})$/iu);
   if (hex) return [parseInt(hex[1], 16), parseInt(hex[2], 16), parseInt(hex[3], 16)];
-  const rgb = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/u);
+  const rgb = color.match(/rgb\((?<r>\d+),\s*(?<g>\d+),\s*(?<b>\d+)\)/u);
   if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
   throw new Error(`Cannot parse color: ${color}`);
 }
@@ -348,30 +355,29 @@ describe('generateHighContrastColors', () => {
     expect(Object.values(dark).join(',')).not.toEqual(Object.values(light).join(','));
   });
 
-  // ---------- Tier 1: few items → brand zone ----------
+  // ---------- Single vendor: full wheel for maximum contrast ----------
+  // Brand-zone / rival-ban only apply when MULTIPLE vendors are present (so the
+  // vendors stay visually separable). With a single vendor there's no rival to
+  // distinguish from, so HC opens the full hue wheel — brand hue is sacrificed
+  // for the contrast HC exists to provide (fixes the all-NVIDIA agentic case
+  // where every series otherwise collapsed into the green brand band).
 
-  it('3 NVIDIA GPUs are not red', () => {
+  it('3 NVIDIA GPUs (single vendor) are distinguishable across the full wheel', () => {
     const result = generateHighContrastColors(['h100_vllm', 'h200_vllm', 'b200_vllm'], 'dark');
-    for (const color of Object.values(result)) {
-      expect(isNotReddish(parseRgb(color))).toBe(true);
-    }
+    expect(Object.keys(result)).toHaveLength(3);
     assertMinDist(result, 30);
   });
 
-  it('2 AMD GPUs are not green', () => {
+  it('2 AMD GPUs (single vendor) are distinguishable across the full wheel', () => {
     const result = generateHighContrastColors(['mi300x_sglang', 'mi325x_sglang'], 'dark');
-    for (const color of Object.values(result)) {
-      expect(isNotGreenish(parseRgb(color))).toBe(true);
-    }
+    expect(Object.keys(result)).toHaveLength(2);
     assertMinDist(result, 30);
   });
 
-  it('4 NVIDIA GPUs stay in brand zone and are distinguishable', () => {
+  it('4 NVIDIA GPUs (single vendor) use the full wheel and stay well-separated', () => {
     const keys = ['h100_vllm', 'h200_vllm', 'b200_vllm', 'b300_vllm'];
     const result = generateHighContrastColors(keys, 'dark');
-    for (const color of Object.values(result)) {
-      expect(isNotReddish(parseRgb(color))).toBe(true);
-    }
+    expect(Object.keys(result)).toHaveLength(4);
     assertMinDist(result, 25);
   });
 
@@ -396,19 +402,13 @@ describe('generateHighContrastColors', () => {
     assertMinDist(result, 25);
   });
 
-  // ---------- Tier 2: moderate items → full wheel minus rival color ----------
+  // ---------- Single vendor, many items → full wheel, best spacing ----------
 
-  it('10 NVIDIA GPUs: no red hues, still distinguishable', () => {
+  it('10 NVIDIA GPUs (single vendor) are well-separated across the full wheel', () => {
     const gpus = ['h100', 'h200', 'b200', 'b300', 'gb200'];
     const keys = gpus.flatMap((g) => [`${g}_vllm`, `${g}_sglang`]);
     const result = generateHighContrastColors(keys, 'dark');
-    // Should not be reddish (banned)
-    for (const color of Object.values(result)) {
-      const rgb = parseRgb(color);
-      // Not red-dominant with low green — i.e. not in the red/pink zone
-      const isRedPink = rgb[0] > 150 && rgb[1] < 80 && rgb[2] < 150;
-      expect(isRedPink).toBe(false);
-    }
+    expect(Object.keys(result)).toHaveLength(10);
     assertMinDist(result, 20);
   });
 
@@ -438,6 +438,46 @@ describe('generateHighContrastColors', () => {
     const result = generateHighContrastColors(['h100_vllm', 'mi300x_sglang'], 'dark');
     expect(isNotReddish(parseRgb(result['h100_vllm']))).toBe(true);
     expect(isNotGreenish(parseRgb(result['mi300x_sglang']))).toBe(true);
+  });
+
+  // ---------- Palette caching ----------
+  // iwanthue's force-vector clustering costs tens of ms per call; results are
+  // deterministic per (vendor, theme, count, mode), so repeats must be free.
+  // These tests use signatures (5 NVIDIA keys, light theme) no other test in
+  // this file requests, since the cache is module-level.
+
+  it('caches palettes — a repeated request does not re-run iwanthue', () => {
+    const keys = ['h100_vllm', 'h200_vllm', 'b200_vllm', 'b300_vllm', 'gb200_vllm'];
+
+    const callsBefore = vi.mocked(iwanthue).mock.calls.length;
+    const first = generateHighContrastColors(keys, 'light');
+    expect(vi.mocked(iwanthue).mock.calls.length).toBe(callsBefore + 1);
+
+    const second = generateHighContrastColors(keys, 'light');
+    expect(vi.mocked(iwanthue).mock.calls.length).toBe(callsBefore + 1); // cache hit
+    expect(second).toEqual(first);
+  });
+
+  it('cache is key-name independent — same vendor/count/theme reuses the palette', () => {
+    // Same signature as the test above (NVIDIA × 5 × light), different names:
+    // palettes depend on the group shape, not on which GPUs are in it.
+    const callsBefore = vi.mocked(iwanthue).mock.calls.length;
+    const result = generateHighContrastColors(
+      ['h100_sglang', 'h200_sglang', 'b200_sglang', 'b300_sglang', 'gb300_sglang'],
+      'light',
+    );
+    expect(vi.mocked(iwanthue).mock.calls.length).toBe(callsBefore); // cache hit
+    expect(Object.keys(result)).toHaveLength(5);
+    expect(new Set(Object.values(result)).size).toBe(5); // still distinct colors
+  });
+
+  it('a different count is a different cache entry', () => {
+    const callsBefore = vi.mocked(iwanthue).mock.calls.length;
+    generateHighContrastColors(
+      ['h100_trt', 'h200_trt', 'b200_trt', 'b300_trt', 'gb200_trt', 'gb300_trt', 'gb200_vllm'],
+      'light',
+    );
+    expect(vi.mocked(iwanthue).mock.calls.length).toBe(callsBefore + 1);
   });
 });
 
@@ -502,6 +542,32 @@ describe('calculateRoofline', () => {
     expect(front).toHaveLength(2);
     expect(front[0].y).toBe(5);
     expect(front[1].y).toBe(8);
+  });
+
+  it('excludes x <= 0 points (e.g. interactivity = 0) from the frontier', () => {
+    // A degenerate x=0 point with the highest tpPerGpu would otherwise anchor the
+    // upper_right front as its leftmost point and show up as "optimal".
+    const points = [
+      pt(0, 999, 'h100', { tpPerGpuY: 999 }), // interactivity = 0 → degenerate
+      pt(1, 999, 'h100', { tpPerGpuY: 50 }),
+      pt(2, 999, 'h100', { tpPerGpuY: 80 }),
+    ];
+    const front = calculateRoofline(points, 'tpPerGpu.y', 'upper_right');
+    expect(front.every((p) => p.x > 0)).toBe(true);
+    expect(front.some((p) => p.x === 0)).toBe(false);
+    // real front is the two positive-x points
+    expect(front.map((p) => p.y)).toEqual([50, 80]);
+  });
+
+  it('excludes non-finite / negative x from the frontier', () => {
+    const points = [
+      pt(Number.NaN, 999, 'h100', { tpPerGpuY: 999 }),
+      pt(-1, 999, 'h100', { tpPerGpuY: 999 }),
+      pt(3, 999, 'h100', { tpPerGpuY: 40 }),
+    ];
+    const front = calculateRoofline(points, 'tpPerGpu.y', 'upper_right');
+    expect(front).toHaveLength(1);
+    expect(front[0].x).toBe(3);
   });
 
   it.each([
@@ -888,6 +954,20 @@ describe('getHardwareKey', () => {
   it('handles hw with no dashes', () => {
     expect(getHardwareKey(entry({ hw: 'h100', framework: '' }))).toBe('h100');
   });
+
+  it('resolves aliased frameworks to canonical keys (atom-disagg → mooncake-atom)', () => {
+    // Must match the canonical key buildAvailabilityHwKey builds for the GPU filter,
+    // otherwise disagg Mooncake ATOMesh points are filtered out of the chart.
+    expect(getHardwareKey(entry({ hw: 'mi355x', framework: 'atom-disagg', disagg: true }))).toBe(
+      'mi355x_mooncake-atom',
+    );
+  });
+
+  it('keeps the non-aliased atom framework distinct from atom-disagg', () => {
+    expect(getHardwareKey(entry({ hw: 'mi355x', framework: 'atom', disagg: true }))).toBe(
+      'mi355x_atom',
+    );
+  });
 });
 
 // ===========================================================================
@@ -1215,6 +1295,155 @@ describe('createChartDataPoint energy fields', () => {
     const e = entry({ input_tput_per_gpu: 0 });
     const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
     expect(point.jInput).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// createChartDataPoint — measured power / energy fields (from runner telemetry)
+// ===========================================================================
+describe('createChartDataPoint measured power fields', () => {
+  it('emits measuredAvgPower when avg_power_w is present on the entry', () => {
+    const e = entry({ avg_power_w: 685.5 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredAvgPower!.y).toBe(685.5);
+    expect(point.measuredAvgPower!.roof).toBe(false);
+  });
+
+  it('emits measuredJPerOutputToken when joules_per_output_token is present', () => {
+    const e = entry({ joules_per_output_token: 8.4 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredJPerOutputToken).toBeDefined();
+    expect(point.measuredJPerOutputToken!.y).toBe(8.4);
+  });
+
+  it('omits both fields when neither is on the entry', () => {
+    // Legacy runs predating aggregate_power.py.
+    const point = createChartDataPoint(
+      '2025-01-01',
+      entry(),
+      'median_e2el',
+      'tput_per_gpu',
+      'h100',
+    );
+    expect(point.measuredAvgPower).toBeUndefined();
+    expect(point.measuredJPerOutputToken).toBeUndefined();
+  });
+
+  it('emits one and omits the other when only one is present', () => {
+    // Defensive: aggregator can patch only avg_power_w if total_output_tokens=0.
+    const e = entry({ avg_power_w: 500 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredJPerOutputToken).toBeUndefined();
+  });
+
+  it('preserves a zero measured power value (not falsy-coerced away)', () => {
+    // Guards against a refactor switching the gate from typeof===number to truthiness.
+    const e = entry({ avg_power_w: 0 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredAvgPower!.y).toBe(0);
+  });
+
+  it('emits measuredJPerTotalToken when joules_per_total_token is present', () => {
+    const e = entry({ joules_per_total_token: 0.93 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredJPerTotalToken).toBeDefined();
+    expect(point.measuredJPerTotalToken!.y).toBe(0.93);
+    expect(point.measuredJPerTotalToken!.roof).toBe(false);
+  });
+
+  it('emits J/output and J/total independently — different denominators', () => {
+    // 8k1k workload: J/output ≈ 9 × J/total (input is ~8x output, so output/total ≈ 1/9).
+    const e = entry({ joules_per_output_token: 2.04, joules_per_total_token: 0.23 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredJPerOutputToken!.y).toBe(2.04);
+    expect(point.measuredJPerTotalToken!.y).toBe(0.23);
+  });
+
+  it('omits measuredJPerTotalToken on rows that predate the field', () => {
+    // Rows ingested before joules_per_total_token was added still have avg_power_w
+    // and joules_per_output_token. The new field must be absent (not 0) so the
+    // chart correctly drops them from the J/total view rather than plotting fake data.
+    const e = entry({ avg_power_w: 458, joules_per_output_token: 2.04 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower).toBeDefined();
+    expect(point.measuredJPerOutputToken).toBeDefined();
+    expect(point.measuredJPerTotalToken).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// createChartDataPoint — per-stage measured power / energy (disagg prefill/decode)
+// ===========================================================================
+describe('createChartDataPoint per-stage measured power fields', () => {
+  it('emits measuredPrefillAvgPower when prefill_avg_power_w is present', () => {
+    const e = entry({ prefill_avg_power_w: 920.3 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredPrefillAvgPower).toBeDefined();
+    expect(point.measuredPrefillAvgPower!.y).toBe(920.3);
+    expect(point.measuredPrefillAvgPower!.roof).toBe(false);
+  });
+
+  it('emits measuredDecodeAvgPower when decode_avg_power_w is present', () => {
+    const e = entry({ decode_avg_power_w: 612.1 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredDecodeAvgPower).toBeDefined();
+    expect(point.measuredDecodeAvgPower!.y).toBe(612.1);
+    expect(point.measuredDecodeAvgPower!.roof).toBe(false);
+  });
+
+  it('emits measuredJPerInputToken when joules_per_input_token is present', () => {
+    const e = entry({ joules_per_input_token: 0.27 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredJPerInputToken).toBeDefined();
+    expect(point.measuredJPerInputToken!.y).toBe(0.27);
+    expect(point.measuredJPerInputToken!.roof).toBe(false);
+  });
+
+  it('omits all per-stage fields on legacy rows predating per-stage attribution', () => {
+    // Single-node / pre-disagg runs emit avg_power_w only, no prefill/decode split.
+    const e = entry({ avg_power_w: 685.5 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredPrefillAvgPower).toBeUndefined();
+    expect(point.measuredDecodeAvgPower).toBeUndefined();
+    expect(point.measuredJPerInputToken).toBeUndefined();
+  });
+
+  it('emits prefill and decode independently — the disagg per-stage split', () => {
+    // GB300 disagg: prefill GPUs run compute-bound (higher W) than decode GPUs.
+    const e = entry({ prefill_avg_power_w: 948, decode_avg_power_w: 631 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredPrefillAvgPower!.y).toBe(948);
+    expect(point.measuredDecodeAvgPower!.y).toBe(631);
+    expect(point.measuredPrefillAvgPower!.y).toBeGreaterThan(point.measuredDecodeAvgPower!.y);
+  });
+
+  it('preserves a zero per-stage power value (not falsy-coerced away)', () => {
+    // Same typeof===number gate as total power — 0 W must survive, not be dropped.
+    const e = entry({ prefill_avg_power_w: 0, decode_avg_power_w: 0 });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredPrefillAvgPower).toBeDefined();
+    expect(point.measuredPrefillAvgPower!.y).toBe(0);
+    expect(point.measuredDecodeAvgPower).toBeDefined();
+    expect(point.measuredDecodeAvgPower!.y).toBe(0);
+  });
+
+  it('carries total and per-stage power together on a full disagg row', () => {
+    const e = entry({
+      avg_power_w: 853,
+      prefill_avg_power_w: 948,
+      decode_avg_power_w: 631,
+      joules_per_input_token: 0.18,
+      joules_per_output_token: 1.64,
+    });
+    const point = createChartDataPoint('2025-01-01', e, 'median_e2el', 'tput_per_gpu', 'h100');
+    expect(point.measuredAvgPower!.y).toBe(853);
+    expect(point.measuredPrefillAvgPower!.y).toBe(948);
+    expect(point.measuredDecodeAvgPower!.y).toBe(631);
+    expect(point.measuredJPerInputToken!.y).toBe(0.18);
+    expect(point.measuredJPerOutputToken!.y).toBe(1.64);
   });
 });
 
@@ -2066,5 +2295,68 @@ describe('paretoFrontLowerRight', () => {
     const input = [paretoPt(1, 1), paretoPt(3, 5), paretoPt(2, 3)];
     paretoFrontLowerRight(input);
     expect(input.map((p) => p.x)).toEqual([3, 2, 1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// metricTitle / metricLabel
+// ---------------------------------------------------------------------------
+describe('metricTitle', () => {
+  const chartDef = {
+    chartType: 'interactivity',
+    heading: 'vs. Interactivity',
+    x: 'median_intvty',
+    x_label: 'Interactivity (tok/s/user)',
+    y: 'tput_per_gpu',
+    y_tpPerGpu_title: 'Token Throughput per GPU',
+    y_tpPerGpu_titleZh: '每 GPU token 吞吐量',
+    y_costh_title: 'Cost per Million Total Tokens (Owning - Hyperscaler)',
+  } as ChartDefinition;
+
+  it('returns English title for locale en', () => {
+    expect(metricTitle(chartDef, 'y_tpPerGpu', 'en')).toBe('Token Throughput per GPU');
+  });
+
+  it('returns Chinese title for locale zh', () => {
+    expect(metricTitle(chartDef, 'y_tpPerGpu', 'zh')).toBe('每 GPU token 吞吐量');
+  });
+
+  it('falls back to English when Zh field is missing', () => {
+    expect(metricTitle(chartDef, 'y_costh', 'zh')).toBe(
+      'Cost per Million Total Tokens (Owning - Hyperscaler)',
+    );
+  });
+
+  it('returns empty string for unknown metric', () => {
+    expect(metricTitle(chartDef, 'y_unknown', 'en')).toBe('');
+  });
+});
+
+describe('metricLabel', () => {
+  const chartDef = {
+    chartType: 'interactivity',
+    heading: 'vs. Interactivity',
+    x: 'median_intvty',
+    x_label: 'Interactivity (tok/s/user)',
+    y: 'tput_per_gpu',
+    y_tpPerGpu_label: 'Token Throughput per GPU (tok/s/gpu)',
+    y_tpPerGpu_labelZh: '每 GPU token 吞吐量（tok/s/gpu）',
+    y_costh_label: 'Cost per Million Total Tokens ($)',
+  } as ChartDefinition;
+
+  it('returns English label for locale en', () => {
+    expect(metricLabel(chartDef, 'y_tpPerGpu', 'en')).toBe('Token Throughput per GPU (tok/s/gpu)');
+  });
+
+  it('returns Chinese label for locale zh', () => {
+    expect(metricLabel(chartDef, 'y_tpPerGpu', 'zh')).toBe('每 GPU token 吞吐量（tok/s/gpu）');
+  });
+
+  it('falls back to English when Zh field is missing', () => {
+    expect(metricLabel(chartDef, 'y_costh', 'zh')).toBe('Cost per Million Total Tokens ($)');
+  });
+
+  it('returns empty string for unknown metric', () => {
+    expect(metricLabel(chartDef, 'y_unknown', 'en')).toBe('');
   });
 });

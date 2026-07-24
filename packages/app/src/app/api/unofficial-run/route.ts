@@ -17,8 +17,16 @@ import {
   getGithubToken,
   getRunDate,
   normalizeGithubRunInfo,
+  type GithubArtifact,
   type GithubWorkflowRun,
 } from '@/lib/github-artifacts';
+
+/**
+ * Batch size for downloading per-config `bmk_*` artifacts. Big agentic sweeps
+ * upload one artifact per config (dozens per run); a bounded batch keeps us
+ * clear of GitHub's secondary rate limits while still parallelizing.
+ */
+const PER_CONFIG_DOWNLOAD_BATCH_SIZE = 8;
 
 /** Normalize raw artifact rows into the BenchmarkRow shape the frontend expects. */
 export function normalizeArtifactRows(
@@ -32,15 +40,16 @@ export function normalizeArtifactRows(
     const params = mapBenchmarkRow(raw as Record<string, any>, tracker);
     if (!params) continue;
     const { config } = params;
-    const specMethod =
-      typeof params.techniques.spec_method === 'string' ? params.techniques.spec_method : 'none';
     results.push({
+      // Synthetic id — overlay rows aren't persisted, so trace_replay lookups
+      // (keyed on benchmark_results.id) will always miss, which is the
+      // intended behaviour: overlays never have stored trace_replay blobs.
+      id: 0,
       hardware: config.hardware,
       framework: config.framework,
       model: config.model,
       precision: config.precision,
-      spec_method: specMethod,
-      techniques: params.techniques,
+      spec_method: config.specMethod,
       disagg: config.disagg,
       is_multinode: config.isMultinode,
       prefill_tp: config.prefillTp,
@@ -53,11 +62,16 @@ export function normalizeArtifactRows(
       decode_num_workers: config.decodeNumWorkers,
       num_prefill_gpu: config.numPrefillGpu,
       num_decode_gpu: config.numDecodeGpu,
+      benchmark_type: params.benchmarkType,
+      offload_mode: params.offloadMode,
       isl: params.isl,
       osl: params.osl,
       conc: params.conc,
       image: params.image,
       metrics: params.metrics,
+      // Surface the same per-worker payload the DB path emits so unofficial
+      // overlays carry the multinode measured-power breakdown too.
+      workers: params.workers,
       date,
       run_url: runUrl,
     });
@@ -65,17 +79,13 @@ export function normalizeArtifactRows(
   return results;
 }
 
-function evalConfigKey(
-  config: EvalParams['config'],
-  techniques: Record<string, string | number>,
-): string {
+function evalConfigKey(config: EvalParams['config']): string {
   return [
     config.hardware,
     config.framework,
     config.model,
     config.precision,
-    typeof techniques.spec_method === 'string' ? techniques.spec_method : 'none',
-    typeof techniques.mtp_layers === 'number' ? String(techniques.mtp_layers) : 'none',
+    config.specMethod,
     config.disagg ? '1' : '0',
     config.prefillTp,
     config.prefillEp,
@@ -114,16 +124,13 @@ export function normalizeEvalArtifactRows(
     const params = mapAggEvalRow(raw as Record<string, any>, tracker);
     if (!params) continue;
 
-    const key = evalConfigKey(params.config, params.techniques);
+    const key = evalConfigKey(params.config);
     let localId = configIds.get(key);
     if (!localId) {
       localId = nextLocalId;
       configIds.set(key, localId);
       nextLocalId += 1;
     }
-
-    const specMethod =
-      typeof params.techniques.spec_method === 'string' ? params.techniques.spec_method : 'none';
 
     rows.push({
       // Synthetic id — unofficial rows are never persisted to eval_results, so
@@ -135,8 +142,7 @@ export function normalizeEvalArtifactRows(
       framework: params.config.framework,
       model: params.config.model,
       precision: params.config.precision,
-      spec_method: specMethod,
-      techniques: params.techniques,
+      spec_method: params.config.specMethod,
       disagg: params.config.disagg,
       is_multinode: params.config.isMultinode,
       prefill_tp: params.config.prefillTp,
@@ -236,11 +242,32 @@ async function processSingleRun(
     .filter((a) => a.name === 'eval_results_all')
     .toSorted((a, b) => b.id - a.id)[0];
 
-  if (!bmkArtifact && !evalArtifact) {
+  // Agentic-only sweeps never run the collect-results merge job (run-sweep.yml
+  // only triggers it for fixed-seq sweeps), so they upload per-config
+  // `bmk_agentic_<config>` artifacts with no merged `results_bmk`. Fall back to
+  // downloading those directly. When `results_bmk` exists it already contains
+  // every `bmk_*` row (the merge job downloads the `bmk_*` pattern), so the
+  // fallback must stay off in that case — running both would double-count.
+  // Same-name re-uploads keep only the newest (highest id), mirroring the
+  // merged-artifact selection above.
+  const perConfigBmkArtifacts: GithubArtifact[] = bmkArtifact
+    ? []
+    : [
+        ...artifacts
+          .filter((a) => a.name.startsWith('bmk_'))
+          .reduce((byName, a) => {
+            const prev = byName.get(a.name);
+            if (!prev || a.id > prev.id) byName.set(a.name, a);
+            return byName;
+          }, new Map<string, GithubArtifact>())
+          .values(),
+      ];
+
+  if (!bmkArtifact && perConfigBmkArtifacts.length === 0 && !evalArtifact) {
     return {
       errorResponse: NextResponse.json(
         {
-          error: `No results_bmk or eval_results_all artifact found for runId ${runId}`,
+          error: `No results_bmk, per-config bmk_*, or eval_results_all artifact found for runId ${runId}`,
         },
         { status: 404 },
       ),
@@ -261,6 +288,19 @@ async function processSingleRun(
     );
     if (errorResponse) return { errorResponse };
     benchmarks = normalizeArtifactRows(rows, date, runUrl || null);
+  } else if (perConfigBmkArtifacts.length > 0) {
+    const rawRows: Record<string, unknown>[] = [];
+    for (let i = 0; i < perConfigBmkArtifacts.length; i += PER_CONFIG_DOWNLOAD_BATCH_SIZE) {
+      const batch = perConfigBmkArtifacts.slice(i, i + PER_CONFIG_DOWNLOAD_BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map((a) => downloadArtifactRows(a.archive_download_url, githubToken)),
+      );
+      for (const result of results) {
+        if (result.errorResponse) return { errorResponse: result.errorResponse };
+        rawRows.push(...result.rows);
+      }
+    }
+    benchmarks = normalizeArtifactRows(rawRows, date, runUrl || null);
   }
 
   if (evalArtifact) {

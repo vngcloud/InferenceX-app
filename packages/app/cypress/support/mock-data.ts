@@ -15,6 +15,7 @@ import type {
 } from '@/components/reliability/types';
 import type { GlobalFilterContextType } from '@/components/GlobalFilterContext';
 import type { UnofficialRunContextType } from '@/components/unofficial-run-provider';
+import { computeToggle } from '@/hooks/useTogglableSet';
 import { Model, Sequence, Precision } from '@/lib/data-mappings';
 import React from 'react';
 
@@ -50,8 +51,8 @@ export function createMockHardwareConfig(): HardwareConfig {
     b200_trt: {
       name: 'b200-trt',
       label: 'B200',
-      suffix: '(TRT)',
-      gpu: "NVIDIA 'Blackwell' B200 TRT",
+      suffix: '(TRTLLM)',
+      gpu: "NVIDIA 'Blackwell' B200 TRTLLM",
     },
     mi300x: {
       name: 'mi300x',
@@ -105,7 +106,7 @@ export function createMockInferenceData(overrides?: Partial<InferenceData>): Inf
     x: 100,
     y: 45.2,
     hwKey: 'b200_trt',
-    hw: "NVIDIA 'Blackwell' B200 TRT",
+    hw: "NVIDIA 'Blackwell' B200 TRTLLM",
     model: Model.DeepSeek_R1,
     framework: 'trt',
     precision: Precision.FP4,
@@ -165,6 +166,12 @@ export function createMockInferenceContext(
     toggleHwType: namedStub('toggleHwType'),
     removeHwType: namedStub('removeHwType'),
     selectAllHwTypes: namedStub('selectAllHwTypes'),
+    resolveComparisonSelection: (proposed) => ({
+      result: proposed,
+      keptGroup: null,
+      droppedGroups: [],
+    }),
+    toggleComparisonSelection: (prev, item, allItems) => computeToggle(prev, item, allItems),
     toggleActiveDate: namedStub('toggleActiveDate'),
     removeActiveDate: namedStub('removeActiveDate'),
     selectAllActiveDates: namedStub('selectAllActiveDates'),
@@ -189,18 +196,28 @@ export function createMockInferenceContext(
     workflowInfo: null,
     selectedYAxisMetric: 'y_tpPerGpu',
     setSelectedYAxisMetric: namedStub('setSelectedYAxisMetric'),
+    selectedPercentile: 'p90',
+    setSelectedPercentile: namedStub('setSelectedPercentile'),
     selectedXAxisMetric: null,
     setSelectedXAxisMetric: namedStub('setSelectedXAxisMetric'),
     selectedE2eXAxisMetric: null,
     setSelectedE2eXAxisMetric: namedStub('setSelectedE2eXAxisMetric'),
+    selectedXAxisMode: 'interactivity' as const,
+    setSelectedXAxisMode: namedStub('setSelectedXAxisMode'),
     scaleType: 'auto',
     setScaleType: namedStub('setScaleType'),
+    quickFilters: { vendors: [], frameworks: [], disagg: [], spec: [] },
+    availableQuickFilters: { vendors: [], frameworks: [], disagg: [], spec: [] },
+    setQuickFilterVendors: namedStub('setQuickFilterVendors'),
+    setQuickFilterFrameworks: namedStub('setQuickFilterFrameworks'),
+    setQuickFilterDisagg: namedStub('setQuickFilterDisagg'),
+    setQuickFilterSpec: namedStub('setQuickFilterSpec'),
     isLegendExpanded: true,
     setIsLegendExpanded: namedStub('setIsLegendExpanded'),
     hideNonOptimal: false,
     setHideNonOptimal: namedStub('setHideNonOptimal'),
-    hidePointLabels: false,
-    setHidePointLabels: namedStub('setHidePointLabels'),
+    showPointLabels: false,
+    setShowPointLabels: namedStub('setShowPointLabels'),
     highContrast: false,
     setHighContrast: namedStub('setHighContrast'),
     logScale: false,
@@ -267,7 +284,7 @@ export function createMockEvaluationChartData(
     configId: 1,
     hwKey: 'b200_trt' as any,
     hardware: 'b200',
-    configLabel: 'B200 (TRT)',
+    configLabel: 'B200 (TRTLLM)',
     score: 87.5,
     scoreError: 1.2,
     minScore: 85,
@@ -413,6 +430,9 @@ export function createMockGlobalFilterContext(
     selectedPrecisions: [Precision.FP4],
     setSelectedPrecisions: namedStub('setSelectedPrecisions_global'),
     effectiveSequence: Sequence.EightK_OneK,
+    // Mocks represent a settled state: availability is known and the sequence is
+    // resolved. Tests exercising the pre-availability window override this.
+    sequenceResolved: true,
     effectivePrecisions: [Precision.FP4],
     selectedRunDate: '2025-03-01',
     setSelectedRunDate: namedStub('setSelectedRunDate_global'),

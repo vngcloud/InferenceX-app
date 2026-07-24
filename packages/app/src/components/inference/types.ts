@@ -4,6 +4,50 @@ import type { HardwareEntry } from '@/lib/constants';
 import type { Model, Sequence } from '@/lib/data-mappings';
 
 /**
+ * Role of a single worker process in a multinode / disaggregated deployment.
+ * - `prefill` / `decode`: the two halves of a disaggregated serving setup
+ * - `agg`: an aggregated (non-disagg) worker that handles both phases
+ * - `frontend`: a router / load-balancer process (typically zero GPUs)
+ *
+ * Carried on `WorkerPower.role` as `string` (not the literal union) because
+ * the runner emits the role at the JSONB boundary — we can't statically
+ * guarantee the value at the type system level. Consumers that switch on the
+ * role should narrow via `if (role === 'prefill') ...` or a `WorkerRole`
+ * cast at the point of use.
+ */
+export type WorkerRole = 'prefill' | 'decode' | 'agg' | 'frontend';
+
+/**
+ * Per-worker measured power entry emitted by the runner's aggregate_power.py
+ * for multinode and disaggregated runs. The chart layer can use these to
+ * surface a stacked breakdown of where energy is spent across worker types.
+ *
+ * `hosts` lists the node hostnames whose perfmon CSVs were rolled up into
+ * this worker entry (a single-node worker has one host; a multinode decode
+ * worker spanning 4 nodes has four). Optional because pre-multinode versions
+ * of aggregate_power.py didn't emit it.
+ *
+ * `avg_temp_c`, `peak_temp_c`, `avg_util_pct`, `avg_mem_used_mb` mirror the
+ * cluster-wide telemetry scalars and are only present when the perfmon CSVs
+ * include the corresponding sample columns. Each is optional so callers can
+ * distinguish "field absent from this run" from "field present and equal to 0".
+ */
+export interface WorkerPower {
+  // `string` rather than `WorkerRole` so the type lines up with what we get
+  // from the JSONB column without an unsafe cast at every boundary. Chart
+  // code can still narrow on the literal values it understands.
+  role: string;
+  worker_idx: number;
+  hosts?: string[];
+  num_gpus: number;
+  avg_power_w: number;
+  avg_temp_c?: number;
+  peak_temp_c?: number;
+  avg_util_pct?: number;
+  avg_mem_used_mb?: number;
+}
+
+/**
  * Represents an aggregated data entry, typically from a raw data source.
  * This interface contains various performance metrics.
  * @interface AggDataEntry
@@ -36,6 +80,8 @@ import type { Model, Sequence } from '@/lib/data-mappings';
  * @property {number} p99_e2el - 99th percentile of End-to-End Latency.
  */
 export interface AggDataEntry {
+  /** Stable per-point id from benchmark_results — for trace_replay lookups. */
+  id?: number;
   hw: string;
   mtp?: string;
   hwKey: string;
@@ -50,23 +96,73 @@ export interface AggDataEntry {
   mean_ttft: number;
   median_ttft: number;
   std_ttft: number;
+  p75_ttft: number;
+  p90_ttft: number;
+  p95_ttft: number;
   p99_ttft: number;
+  'p99.9_ttft': number;
   mean_tpot: number;
   mean_intvty: number;
   median_tpot: number;
   median_intvty: number;
   std_tpot: number;
   std_intvty: number;
+  p75_tpot: number;
+  p75_intvty: number;
+  p90_tpot: number;
+  p90_intvty: number;
+  p95_tpot: number;
+  p95_intvty: number;
   p99_tpot: number;
   p99_intvty: number;
+  'p99.9_tpot': number;
+  'p99.9_intvty': number;
   mean_itl: number;
   median_itl: number;
   std_itl: number;
+  p75_itl: number;
+  p90_itl: number;
+  p95_itl: number;
   p99_itl: number;
+  'p99.9_itl': number;
   mean_e2el: number;
   median_e2el: number;
   std_e2el: number;
+  p75_e2el: number;
+  p90_e2el: number;
+  p95_e2el: number;
   p99_e2el: number;
+  'p99.9_e2el': number;
+  // Measured GPU telemetry (emitted by runner's aggregate_power.py).
+  // Optional because historical runs predate the fields.
+  avg_power_w?: number;
+  joules_per_output_token?: number;
+  joules_per_total_token?: number;
+  // Multinode / disagg-only measured power. The aggregate_power.py runner
+  // emits per-role energy splits when the deployment has separate prefill
+  // and decode workers (single-node disagg or multinode disagg). Single-node
+  // aggregated configs leave these undefined.
+  // - prefill_avg_power_w / decode_avg_power_w: mean per-GPU draw (W) within each role
+  // - joules_per_input_token: prefill_energy / total_input_tokens (prefill GPUs only)
+  // The disagg decode-only J/output is carried by joules_per_output_token above
+  // (the runner overrides it to decode_energy / total_output_tokens on disagg) —
+  // there is no separate _decode field.
+  prefill_avg_power_w?: number;
+  decode_avg_power_w?: number;
+  joules_per_input_token?: number;
+  // Cluster-wide GPU telemetry beyond power (temperature, utilization, memory).
+  // Emitted by aggregate_power.py when the perfmon CSVs include the matching
+  // sample columns. Optional because older runs (and runs without the relevant
+  // perfmon samples) leave them unset — the chart layer must distinguish "no
+  // measurement" from "0".
+  avg_temp_c?: number;
+  peak_temp_c?: number;
+  avg_util_pct?: number;
+  avg_mem_used_mb?: number;
+  // Per-worker measured power breakdown. Each entry is one worker process
+  // (a prefill, decode, agg, or frontend role). Optional because pre-multinode
+  // and pre-aggregate_power.py runs don't emit it.
+  workers?: WorkerPower[];
   disagg: boolean;
   num_prefill_gpu: number;
   num_decode_gpu: number;
@@ -88,6 +184,41 @@ export interface AggDataEntry {
   actualDate?: string;
   /** URL to the GitHub Actions workflow run that produced this data point. */
   run_url?: string;
+  /** Benchmark scenario: `single_turn` (fixed-seq isl/osl) or `agentic_traces`. */
+  benchmark_type?: string;
+  /** ISL in tokens — null for agentic_traces. */
+  isl?: number | null;
+  /** OSL in tokens — null for agentic_traces. */
+  osl?: number | null;
+  // ── Runtime cache metadata (populated from metrics JSONB when emitted) ──
+  /** "on" | "off" — whether KV cache offload to CPU was enabled. */
+  offload_mode?: string;
+  /** Offload tier/type, for example `dram` or `none`. */
+  kv_offloading?: string;
+  /** Offload implementation, for example `mooncake`, `lmcache`, or `hicache`. */
+  kv_offload_backend?: string;
+  /** Optional version independently declared for the offload backend. */
+  kv_offload_backend_version?: string;
+  /** P2P engine used to move KV state between workers on multinode runs. */
+  kv_p2p_transfer?: string;
+  /** Request router implementation, for example `vllm-router` or `sglang-router`. */
+  router_name?: string;
+  /** Version independently declared for the request router. */
+  router_version?: string;
+  /** Actual server-observed GPU prefix-cache hit rate (0..1). */
+  server_gpu_cache_hit_rate?: number;
+  /** Actual server-observed CPU prefix-cache hit rate (0..1). */
+  server_cpu_cache_hit_rate?: number;
+  /** Infinite-cache theoretical hit rate (0..1) computed from trace. */
+  theoretical_cache_hit_rate?: number;
+  /** Total requests attempted during the window. */
+  num_requests_total?: number;
+  /** Requests that completed successfully. */
+  num_requests_successful?: number;
+  /** Total prompt tokens served. */
+  total_prompt_tokens?: number;
+  /** Total generated (output) tokens. */
+  total_generation_tokens?: number;
 }
 
 /**
@@ -113,6 +244,17 @@ export interface InferenceData extends Partial<Omit<AggDataEntry, AggDataConflic
   x: number;
   y: number;
   hidden?: boolean;
+  /**
+   * Whether this point sits on the (e2e_latency, y-metric) Pareto frontier.
+   * Set by useChartData when `selectedXAxisMode !== 'e2e'`. The TTFT /
+   * interactivity / session-time / prefill-tps charts use this flag to
+   * restrict their roofline computation to e2e-Pareto winners — vendors
+   * can't benchmark-hack TTFT by tanking decode (or vice versa) and still
+   * appear on the frontier line — while keeping every point visible as
+   * scatter so the user can see where dominated configs actually sit.
+   * Undefined when the chart is in e2e mode (no remapping needed).
+   */
+  isOnE2eFrontier?: boolean;
 
   // Overridden fields with narrower types
   hwKey: string;
@@ -152,6 +294,16 @@ export interface InferenceData extends Partial<Omit<AggDataEntry, AggDataConflic
   jTotal?: { y: number; roof: boolean };
   jOutput?: { y: number; roof: boolean };
   jInput?: { y: number; roof: boolean };
+
+  // Measured power / energy from runner GPU telemetry. Optional because
+  // pre-aggregate_power.py runs (and runs with monitoring disabled) won't
+  // emit these fields.
+  measuredAvgPower?: { y: number; roof: boolean };
+  measuredPrefillAvgPower?: { y: number; roof: boolean };
+  measuredDecodeAvgPower?: { y: number; roof: boolean };
+  measuredJPerOutputToken?: { y: number; roof: boolean };
+  measuredJPerTotalToken?: { y: number; roof: boolean };
+  measuredJPerInputToken?: { y: number; roof: boolean };
 }
 
 /**
@@ -177,7 +329,13 @@ export type YAxisMetricKey =
   | 'powerUser'
   | 'jTotal'
   | 'jOutput'
-  | 'jInput';
+  | 'jInput'
+  | 'measuredAvgPower'
+  | 'measuredPrefillAvgPower'
+  | 'measuredDecodeAvgPower'
+  | 'measuredJPerOutputToken'
+  | 'measuredJPerTotalToken'
+  | 'measuredJPerInputToken';
 
 /**
  * Defines the configuration and labels for a specific chart.
@@ -193,6 +351,7 @@ export type YAxisMetricKey =
 export type InferenceChartType = 'e2e' | 'interactivity';
 
 export interface ChartDefinition {
+  [key: string]: string | number | undefined;
   chartType: InferenceChartType;
   heading: string;
   x: keyof AggDataEntry;
@@ -277,6 +436,35 @@ export interface ChartDefinition {
   y_jInput_label?: string;
   y_jInput_title?: string;
   y_jInput_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  // Measured power / energy from runner GPU telemetry
+  y_measuredAvgPower?: string;
+  y_measuredAvgPower_label?: string;
+  y_measuredAvgPower_title?: string;
+  // Not explicitly set in the config — ScatterGraph falls back to lower_right
+  // (matches "lower power at the same interactivity is more efficient").
+  // The field stays in the type for parity with the other y_* metrics and
+  // so a future config can override the default.
+  y_measuredAvgPower_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredPrefillAvgPower?: string;
+  y_measuredPrefillAvgPower_label?: string;
+  y_measuredPrefillAvgPower_title?: string;
+  y_measuredPrefillAvgPower_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredDecodeAvgPower?: string;
+  y_measuredDecodeAvgPower_label?: string;
+  y_measuredDecodeAvgPower_title?: string;
+  y_measuredDecodeAvgPower_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredJPerOutputToken?: string;
+  y_measuredJPerOutputToken_label?: string;
+  y_measuredJPerOutputToken_title?: string;
+  y_measuredJPerOutputToken_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredJPerInputToken?: string;
+  y_measuredJPerInputToken_label?: string;
+  y_measuredJPerInputToken_title?: string;
+  y_measuredJPerInputToken_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
+  y_measuredJPerTotalToken?: string;
+  y_measuredJPerTotalToken_label?: string;
+  y_measuredJPerTotalToken_title?: string;
+  y_measuredJPerTotalToken_roofline?: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right';
   y_cost_limit?: number;
   y_latency_limit?: number;
 }
@@ -362,6 +550,32 @@ export interface ScatterGraphProps {
    * playback).
    */
   niceAxes?: boolean;
+  /**
+   * Pin each line label to a stable anchor along its roofline so it tracks the
+   * line smoothly instead of re-running the per-frame greedy placement (which
+   * makes labels teleport between candidate positions as the lines animate).
+   * Defaults to false. The replay panel passes true so labels keep a positional
+   * "affinity" across frames. Trades the static chart's per-frame de-overlap for
+   * positional stability — appropriate while the chart is animating.
+   */
+  pinLineLabels?: boolean;
+  /**
+   * Fixed x/y data extents `[min, max]` to base the axes on, instead of fitting
+   * to the currently rendered points. The normal domain padding (and log /
+   * zero-baseline handling) is still applied on top. Replay passes the whole
+   * run's extent so the axes stay constant across the animation and you can see
+   * the frontier expand toward them over time.
+   */
+  xExtentOverride?: [number, number];
+  yExtentOverride?: [number, number];
+  /**
+   * Stable run numbering (entry string `date~rRunId` → 1-based number) shared with
+   * the comparison changelog so legend labels match it exactly. Numbers index ALL
+   * of a date's runs (not just the ones on the chart), so a removed run leaves a
+   * gap that lines up with the changelog's still-listed "Add to chart" run. When
+   * omitted, GPUGraph falls back to gap-free numbering of the on-chart series.
+   */
+  runNumbering?: Map<string, number>;
 }
 /**
  * @file types.ts
@@ -449,6 +663,31 @@ export interface RunInfo {
   changelog?: ChangelogMetadata;
 }
 
+/** Aggregation mode for the quick filters: aggregated vs disaggregated serving. */
+export type DisaggMode = 'agg' | 'disagg';
+/** Speculative-decoding mode for the quick filters: MTP vs standard token prediction. */
+export type SpecMode = 'mtp' | 'stp';
+
+/**
+ * Coarse vendor / framework / aggregation / spec-decoding filters applied to the
+ * chart point set. Empty array within a category = no constraint. Framework
+ * values are engine-family keys ('vllm' | 'sglang' | 'trt' | 'atom'). See
+ * `utils/quickFilters.ts`.
+ */
+export interface QuickFilters {
+  vendors: string[];
+  frameworks: string[];
+  disagg: DisaggMode[];
+  spec: SpecMode[];
+}
+
+/**
+ * The quick-filter values that actually have data for the current model /
+ * sequence / precision. Drives which pills are shown (frameworks) or disabled
+ * (vendor / agg / spec). Same shape as {@link QuickFilters}.
+ */
+export type AvailableQuickFilters = QuickFilters;
+
 /**
  * Defines the shape of the context object provided by `InferenceChartContext`.
  * @interface InferenceChartContextType
@@ -477,6 +716,17 @@ export interface InferenceChartContextType {
   toggleHwType: (hw: string) => void;
   removeHwType: (hw: string) => void;
   selectAllHwTypes: () => void;
+  /** Resolve automatic official + `overlay:` hardware selections under the active scope rule. */
+  resolveComparisonSelection: (
+    proposed: Set<string>,
+    prev?: Set<string>,
+  ) => { result: Set<string>; keptGroup: string | null; droppedGroups: string[] };
+  /** Apply one official/overlay toggle; returns null when a cross-engine add is blocked. */
+  toggleComparisonSelection: (
+    prev: Set<string>,
+    item: string,
+    allItems: Set<string>,
+  ) => Set<string> | null;
   hardwareConfig: HardwareConfig;
   graphs: RenderableGraph[];
   selectedModel: Model;
@@ -490,18 +740,49 @@ export interface InferenceChartContextType {
   workflowInfo: any;
   selectedYAxisMetric: string;
   setSelectedYAxisMetric: (metric: string) => void;
+  /** Latency percentile for the x-axis under agentic scenarios (median/p90/p99/p99.9). */
+  selectedPercentile: string;
+  setSelectedPercentile: (p: string) => void;
   selectedXAxisMetric: string | null;
   setSelectedXAxisMetric: (metric: string | null) => void;
   selectedE2eXAxisMetric: string | null;
   setSelectedE2eXAxisMetric: (metric: string | null) => void;
+  /**
+   * Which chart variant the user wants to see — the inference card shows one chart
+   * at a time, picked by the big buttons above the chart.
+   * - 'ttft'          → e2e chartType with x-axis forced to p90_ttft
+   * - 'e2e'           → e2e chartType with the chart-config default x-axis (median_e2el / p90_e2el)
+   * - 'normalized-e2e'→ agentic-only; x = per-request E2E normalized to 400 output tokens
+   * - 'interactivity' → interactivity chartType (x = median_intvty / p90_intvty)
+   * - 'session-time'  → agentic-only; x = mean-normalized session time (live-computed from trace blobs)
+   * - 'prefill-tps'   → agentic-only; x = mean of P90 prefill TPS/user per session
+   */
+  selectedXAxisMode:
+    | 'ttft'
+    | 'e2e'
+    | 'normalized-e2e'
+    | 'interactivity'
+    | 'session-time'
+    | 'prefill-tps';
+  setSelectedXAxisMode: (
+    mode: 'ttft' | 'e2e' | 'normalized-e2e' | 'interactivity' | 'session-time' | 'prefill-tps',
+  ) => void;
   scaleType: 'auto' | 'linear' | 'log';
   setScaleType: (type: 'auto' | 'linear' | 'log') => void;
+  /** Coarse vendor / framework / agg-disagg / mtp-stp filters applied to the chart point set. */
+  quickFilters: QuickFilters;
+  /** Quick-filter values that have data for the current model (drives pill enable/disable). */
+  availableQuickFilters: AvailableQuickFilters;
+  setQuickFilterVendors: (vendors: string[]) => void;
+  setQuickFilterFrameworks: (frameworks: string[]) => void;
+  setQuickFilterDisagg: (modes: DisaggMode[]) => void;
+  setQuickFilterSpec: (modes: SpecMode[]) => void;
   setIsLegendExpanded: (metric: boolean) => void;
   isLegendExpanded: boolean;
   hideNonOptimal: boolean;
   setHideNonOptimal: (hide: boolean) => void;
-  hidePointLabels: boolean;
-  setHidePointLabels: (hide: boolean) => void;
+  showPointLabels: boolean;
+  setShowPointLabels: (show: boolean) => void;
   highContrast: boolean;
   setHighContrast: (highContrast: boolean) => void;
   logScale: boolean;
@@ -520,7 +801,8 @@ export interface InferenceChartContextType {
   setSelectedGPUs: (gpus: string[]) => void;
   availableGPUs: { value: string; label: string }[];
   selectedDates: string[];
-  setSelectedDates: (dates: string[]) => void;
+  /** Accepts a value or a state-updater fn (for safe rapid successive adds). */
+  setSelectedDates: (dates: string[] | ((prev: string[]) => string[])) => void;
   selectedDateRange: { startDate: string; endDate: string };
   setSelectedDateRange: (dateRange: { startDate: string; endDate: string }) => void;
   userCosts: Record<string, number | undefined> | null;
@@ -576,7 +858,7 @@ export interface TrackedConfig {
   precision: string;
   tp: number;
   conc: number;
-  /** Display label e.g. "B200 (TRT) — TP4 conc=8 FP4" */
+  /** Display label e.g. "B200 (TRTLLM) — TP4 conc=8 FP4" */
   label: string;
   /** Assigned color from d3.schemeTableau10 */
   color: string;

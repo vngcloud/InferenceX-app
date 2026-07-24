@@ -57,7 +57,7 @@ function StatusBadge({ ok }: { ok: boolean }) {
 function humanizeKey(key: string): string {
   return key
     .replaceAll('_', ' ')
-    .replaceAll(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .replaceAll(/(?<lower>[a-z0-9])(?<upper>[A-Z])/gu, '$<lower> $<upper>')
     .replace(/^./u, (c) => c.toUpperCase());
 }
 

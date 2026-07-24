@@ -57,8 +57,8 @@ if (isDownloadMode) {
     process.exit(1);
   }
 
-  const match = input.match(/\/runs\/(\d+)/u);
-  const parsedId = match ? match[1] : /^\d+$/u.test(input) ? input : null;
+  const match = input.match(/\/runs\/(?<runId>\d+)/u);
+  const parsedId = match ? match.groups?.runId : /^\d+$/u.test(input) ? input : null;
   if (!parsedId) {
     console.error(`Could not parse run ID from: ${input}`);
     process.exit(1);

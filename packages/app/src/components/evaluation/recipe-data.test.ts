@@ -11,7 +11,6 @@ function bmk(overrides: Partial<BenchmarkRow>): BenchmarkRow {
     model: 'gemma4',
     precision: 'fp8',
     spec_method: 'none',
-    techniques: {},
     disagg: false,
     is_multinode: false,
     prefill_tp: 2,
@@ -32,7 +31,7 @@ function bmk(overrides: Partial<BenchmarkRow>): BenchmarkRow {
     date: '2026-05-25',
     run_url: 'https://github.com/vngcloud/InferenceX/actions/runs/1',
     ...overrides,
-  };
+  } as BenchmarkRow;
 }
 
 describe('describeTechniques', () => {
@@ -52,12 +51,19 @@ describe('describeTechniques', () => {
 });
 
 describe('buildRecipeRows', () => {
+  // NOTE: the `techniques` JSONB bag (spec_method + num_speculative_tokens +
+  // max_num_batched_tokens + kv_cache_dtype + prefix_cache) was reverted along
+  // with migrations 006/007 (see chore/sync-dev-with-master). BenchmarkRow now
+  // only carries `spec_method`, so these tests exercise spec_method-only
+  // variants; they can no longer express distinct num_speculative_tokens /
+  // batch-size / kv-cache / prefix-cache variants at the BenchmarkRow level
+  // (see the KNOWN LIMITATION comment in recipe-data.ts).
   it('computes speedup vs baseline within a group', () => {
     const rows = buildRecipeRows(
       [
-        bmk({ techniques: {}, metrics: { tput_per_gpu: 100, median_tpot: 0.01 } }),
+        bmk({ spec_method: 'none', metrics: { tput_per_gpu: 100, median_tpot: 0.01 } }),
         bmk({
-          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
+          spec_method: 'mtp',
           metrics: { tput_per_gpu: 150, median_tpot: 0.0067 },
         }),
       ],
@@ -72,17 +78,11 @@ describe('buildRecipeRows', () => {
   });
 
   it('returns null speedup when no baseline exists in the group', () => {
-    // Two MTP variants, no spec_method=none baseline.
+    // Two spec-decoding variants, no spec_method=none baseline.
     const rows = buildRecipeRows(
       [
-        bmk({
-          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
-          metrics: { tput_per_gpu: 120 },
-        }),
-        bmk({
-          techniques: { spec_method: 'mtp', num_speculative_tokens: 6 },
-          metrics: { tput_per_gpu: 140 },
-        }),
+        bmk({ spec_method: 'mtp', metrics: { tput_per_gpu: 120 } }),
+        bmk({ spec_method: 'eagle', metrics: { tput_per_gpu: 140 } }),
       ],
       [],
     );
@@ -93,14 +93,14 @@ describe('buildRecipeRows', () => {
     }
   });
 
-  it('groups by (model, hw, framework, precision, isl, osl, conc) and not by techniques', () => {
+  it('groups by (model, hw, framework, precision, isl, osl, conc) and not by spec_method', () => {
     const rows = buildRecipeRows(
       [
-        bmk({ techniques: {} }),
-        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 } }),
-        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 6 } }),
+        bmk({ spec_method: 'none' }),
+        bmk({ spec_method: 'mtp' }),
+        bmk({ spec_method: 'eagle' }),
         // Different conc → different group, no shared baseline.
-        bmk({ techniques: { spec_method: 'mtp', num_speculative_tokens: 4 }, conc: 16 }),
+        bmk({ spec_method: 'mtp', conc: 16 }),
       ],
       [],
     );
@@ -118,7 +118,6 @@ describe('buildRecipeRows', () => {
       model: 'gemma4',
       precision: 'fp8',
       spec_method: 'none',
-      techniques: {},
       disagg: false,
       is_multinode: false,
       prefill_tp: 2,
@@ -138,7 +137,7 @@ describe('buildRecipeRows', () => {
       timestamp: '2026-05-25T00:00:00Z',
       run_url: null,
     };
-    const rows = buildRecipeRows([bmk({ techniques: {} })], [ev]);
+    const rows = buildRecipeRows([bmk({ spec_method: 'none' })], [ev]);
     expect(rows[0]?.accuracy).toBeCloseTo(0.842, 5);
   });
 
@@ -150,14 +149,14 @@ describe('buildRecipeRows', () => {
           num_decode_gpu: 1,
           prefill_tp: 1,
           decode_tp: 1,
-          techniques: { max_num_batched_tokens: 4096 },
+          spec_method: 'none',
         }),
         bmk({
           num_prefill_gpu: 2,
           num_decode_gpu: 2,
           prefill_tp: 2,
           decode_tp: 2,
-          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
+          spec_method: 'mtp',
         }),
       ],
       [],
@@ -183,7 +182,7 @@ describe('buildRecipeRows', () => {
     const rows = buildRecipeRows(
       [
         bmk({
-          techniques: { spec_method: 'mtp', num_speculative_tokens: 4 },
+          spec_method: 'mtp',
           metrics: { tput_per_gpu: 150, median_acceptance_rate: 0.78 },
         }),
       ],

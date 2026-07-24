@@ -4,17 +4,21 @@ import { track } from '@/lib/analytics';
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
+  ChevronDown,
+  ChevronRight,
   Circle,
   Diamond,
+  Info,
   Square,
   Triangle,
   X,
 } from 'lucide-react';
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { SHAPE_ORDER, type ShapeKey, getShapeKeyForPrecision } from '@/lib/chart-rendering';
 import { type Precision, getPrecisionLabel } from '@/lib/data-mappings';
 import { filterAndSortLegendItems } from '@/lib/legend-utils';
+import { useLocale } from '@/lib/use-locale';
 import { cn } from '@/lib/utils';
 
 const SHAPE_ICON: Record<ShapeKey, React.ComponentType<{ size?: number; className?: string }>> = {
@@ -31,11 +35,38 @@ import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipContent } from './
 
 export type { CommonLegendItemProps } from './chart-legend-item';
 
+const STRINGS = {
+  en: {
+    advanced: 'Advanced',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    searchPlaceholder: 'Search...',
+    clearSearch: 'Clear search',
+    collapseLegend: 'Collapse legend',
+    expandLegend: 'Expand legend',
+    atomFootnote:
+      'The ATOM engine is promising, however it has yet to serve production tokens. It is still in its infant stage.',
+  },
+  zh: {
+    advanced: '高级',
+    collapse: '收起',
+    expand: '展开',
+    searchPlaceholder: '搜索…',
+    clearSearch: '清除搜索',
+    collapseLegend: '收起图例',
+    expandLegend: '展开图例',
+    atomFootnote: 'ATOM 引擎前景可期，但尚未用于生产环境 token 服务，仍处于早期阶段。',
+  },
+} as const;
+
 export interface LegendSwitchConfig {
   id: string;
   label: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
+  /** Optional explainer rendered as an info-icon tooltip next to the label. */
+  infoTooltip?: React.ReactNode;
+  advanced?: boolean;
 }
 
 export interface LegendActionConfig {
@@ -69,6 +100,7 @@ export interface ChartLegendProps {
   onItemHover?: (id: string) => void;
   onItemHoverEnd?: () => void;
   onItemRemove?: (name: string) => void;
+  onAdvancedExpandedChange?: (expanded: boolean) => void;
 }
 
 export default function ChartLegend({
@@ -88,12 +120,17 @@ export default function ChartLegend({
   onItemHover,
   onItemHoverEnd,
   onItemRemove,
+  onAdvancedExpandedChange,
 }: ChartLegendProps) {
+  const locale = useLocale();
+  const t = STRINGS[locale];
   const isSidebar = variant === 'sidebar';
   const [hasLongText, setHasLongText] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isAdvancedExpanded, setIsAdvancedExpanded] = useState(false);
+  const advancedControlsId = useId();
 
   const effectiveExpanded = isLegendExpanded;
   const activeCount = useMemo(
@@ -232,17 +269,18 @@ export default function ChartLegend({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onBlur={trackSearchOnBlur}
-            placeholder="Search..."
+            placeholder={t.searchPlaceholder}
             className="w-full px-2 py-1 pr-6 rounded-md border border-border bg-background text-foreground text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-sky-500/50 focus:border-sky-500/50"
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => {
                 track('inference_legend_search_cleared');
                 setSearchQuery('');
               }}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Clear search"
+              aria-label={t.clearSearch}
             >
               <X size={12} />
             </button>
@@ -251,15 +289,13 @@ export default function ChartLegend({
       </div>
     ) : null;
 
-  const switchElements =
-    switches && switches.length > 0 ? (
-      <div
-        className={cn(
-          grouped ? 'w-full space-y-0' : 'w-full md:w-auto flex flex-wrap gap-2',
-          'no-export',
-        )}
-      >
-        {switches.map((sw) => (
+  const standardSwitches = switches?.filter((sw) => !sw.advanced) ?? [];
+  const advancedSwitches = switches?.filter((sw) => sw.advanced) ?? [];
+
+  const renderSwitches = (items: LegendSwitchConfig[]) =>
+    items.length > 0 ? (
+      <div className={cn(grouped ? 'w-full space-y-0' : 'w-full md:w-auto flex flex-wrap gap-2')}>
+        {items.map((sw) => (
           <div key={sw.id} className="mt-2 flex items-center gap-2">
             <Switch
               id={sw.id}
@@ -273,8 +309,66 @@ export default function ChartLegend({
             >
               {sw.label}
             </Label>
+            {sw.infoTooltip && (
+              <TooltipProvider delayDuration={100}>
+                <TooltipRoot>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      data-testid={`${sw.id}-info`}
+                      aria-label={`More info about ${sw.label}`}
+                      className="text-muted-foreground hover:text-foreground cursor-help -m-1.5 p-1.5 inline-flex items-center"
+                    >
+                      <Info size={14} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="top"
+                    sideOffset={6}
+                    className="max-w-[260px] text-xs leading-snug"
+                  >
+                    {sw.infoTooltip}
+                  </TooltipContent>
+                </TooltipRoot>
+              </TooltipProvider>
+            )}
           </div>
         ))}
+      </div>
+    ) : null;
+
+  const switchElements =
+    switches && switches.length > 0 ? (
+      <div className="w-full no-export">
+        {renderSwitches(standardSwitches)}
+        {advancedSwitches.length > 0 && (
+          <div className="mt-2">
+            <button
+              type="button"
+              data-testid="legend-advanced-toggle"
+              aria-expanded={isAdvancedExpanded}
+              aria-controls={advancedControlsId}
+              onClick={() => {
+                const expanded = !isAdvancedExpanded;
+                setIsAdvancedExpanded(expanded);
+                onAdvancedExpandedChange?.(expanded);
+              }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {isAdvancedExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              {t.advanced}
+            </button>
+            {isAdvancedExpanded && (
+              <div
+                id={advancedControlsId}
+                data-testid="legend-advanced-controls"
+                className="ml-1 pl-3 border-l border-border"
+              >
+                {renderSwitches(advancedSwitches)}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -283,6 +377,7 @@ export default function ChartLegend({
       <div className="w-full no-export flex flex-wrap gap-x-3 gap-y-1">
         {actions.map((action) => (
           <button
+            type="button"
             key={action.id}
             data-testid={action.id}
             onClick={action.onClick}
@@ -318,12 +413,13 @@ export default function ChartLegend({
   const expandButton = hasLongText ? (
     <div className="hidden lg:block mt-2 no-export">
       <button
+        type="button"
         onClick={handleLegendExpand}
         className="text-xs text-accent-foreground hover:text-foreground flex items-center gap-1"
-        aria-label={isLegendExpanded ? 'Collapse legend' : 'Expand legend'}
+        aria-label={isLegendExpanded ? t.collapseLegend : t.expandLegend}
       >
         {isLegendExpanded ? <ArrowRightToLine size={16} /> : <ArrowLeftToLine size={16} />}
-        {isLegendExpanded ? 'Collapse' : 'Expand'}
+        {isLegendExpanded ? t.collapse : t.expand}
       </button>
     </div>
   ) : null;
@@ -358,6 +454,7 @@ export default function ChartLegend({
         onHover={onItemHover}
         onHoverEnd={onItemHoverEnd}
         onRemove={effectiveRemove}
+        onShowPoints={item.onShowPoints}
         asFragment
         isLegendExpanded={effectiveExpanded}
         sidebarMode={isSidebar}
@@ -369,7 +466,9 @@ export default function ChartLegend({
         {enableTooltips ? (
           <TooltipRoot>
             <TooltipTrigger asChild>
-              <div className="w-fit">{legendItem}</div>
+              {/* Full width when the row carries a points-table icon so the
+                  ml-auto icon pins to a consistent right-edge column. */}
+              <div className={item.onShowPoints ? 'w-full' : 'w-fit'}>{legendItem}</div>
             </TooltipTrigger>
             {item.isHighlighted && item.tooltip && (
               <TooltipContent side="bottom" collisionPadding={10}>
@@ -401,8 +500,7 @@ export default function ChartLegend({
       {expandButton}
       {hasAtomFootnote && (
         <p className="mt-2 text-[10px] text-muted-foreground/70 leading-tight no-export">
-          <sup>1</sup> The ATOM engine is promising, however it has yet to serve production tokens.
-          It is still in its infant stage.
+          <sup>1</sup> {t.atomFootnote}
         </p>
       )}
     </div>
@@ -452,6 +550,7 @@ export default function ChartLegend({
                         onHover={onItemHover}
                         onHoverEnd={onItemHoverEnd}
                         onRemove={effectiveRemove}
+                        onShowPoints={item.onShowPoints}
                         sidebarMode={isSidebar}
                         asFragment
                       />

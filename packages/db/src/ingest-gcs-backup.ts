@@ -183,7 +183,7 @@ async function mapWorkflowDir(
     }
   }
   if (!githubRunId) {
-    const match = workflowDir.match(/_(\d{10,})$/u);
+    const match = workflowDir.match(/_(?<runId>\d{10,})$/u);
     if (match) githubRunId = parseInt(match[1], 10);
   }
   if (!githubRunId) {
@@ -247,8 +247,8 @@ async function mapWorkflowDir(
   // artifacts map to the same DB conflict key, the newest is processed last
   // and wins the ON CONFLICT DO UPDATE (latest-attempt-wins).
   const sortedBmkZips = [...bmkZipFiles].toSorted((a, b) => {
-    const idA = a.match(/_(\d{10,})\.zip$/u)?.[1];
-    const idB = b.match(/_(\d{10,})\.zip$/u)?.[1];
+    const idA = a.match(/_(?<artifactId>\d{10,})\.zip$/u)?.[1];
+    const idB = b.match(/_(?<artifactId>\d{10,})\.zip$/u)?.[1];
     const tsA = idA ? (artifactCreatedAt.get(Number(idA)) ?? '') : '';
     const tsB = idB ? (artifactCreatedAt.get(Number(idB)) ?? '') : '';
     return tsA.localeCompare(tsB);
@@ -374,7 +374,7 @@ async function mapWorkflowDir(
     );
     const samplesByTask = new Map<string, string>();
     for (const [name, text] of sampleTexts) {
-      const m = name.match(/^samples_(.+?)_[^_]+\.jsonl$/u);
+      const m = name.match(/^samples_(?<task>.+?)_[^_]+\.jsonl$/u);
       if (m) samplesByTask.set(m[1].toLowerCase(), text);
     }
 
@@ -457,6 +457,9 @@ async function mapWorkflowDir(
       unmappedModel: local.skips.unmappedModel,
       unmappedHw: local.skips.unmappedHw,
       noIslOsl: local.skips.noIslOsl,
+      failedRun: local.skips.failedRun,
+      // GCS backup doesn't ingest aiperf trace files; counter stays 0.
+      traceReplayMissing: local.skips.traceReplayMissing,
     },
     localUnmappedModels: new Set(local.unmappedModels),
     localUnmappedHws: new Set(local.unmappedHws),
@@ -621,13 +624,14 @@ async function main(): Promise<void> {
     // Upsert availability rows only for successfully resolved configs
     const availRows: {
       model: string;
-      isl: number;
-      osl: number;
+      isl: number | null;
+      osl: number | null;
       precision: string;
       hardware: string;
       framework: string;
-      techniques: Record<string, string | number>;
+      specMethod: string;
       disagg: boolean;
+      benchmarkType: string;
     }[] = [];
     for (const r of allInserted) {
       availRows.push({
@@ -637,8 +641,9 @@ async function main(): Promise<void> {
         precision: r.config.precision,
         hardware: r.config.hardware,
         framework: r.config.framework,
-        techniques: r.techniques,
+        specMethod: r.config.specMethod,
         disagg: r.config.disagg,
+        benchmarkType: r.benchmarkType,
       });
     }
     if (availRows.length > 0) {
@@ -689,7 +694,7 @@ async function main(): Promise<void> {
 
     for (const { baseRef, headRef, entries } of result.changelogs) {
       try {
-        const inserted = await ingestChangelogEntries(
+        const written = await ingestChangelogEntries(
           sql,
           workflowRunId,
           result.dateDir,
@@ -697,7 +702,7 @@ async function main(): Promise<void> {
           headRef,
           entries,
         );
-        wr.changelogs += inserted;
+        wr.changelogs += written;
       } catch (error: any) {
         tracker.recordDbError('changelog', error);
       }
@@ -823,7 +828,7 @@ async function main(): Promise<void> {
   );
   console.log(`  Eval results:      ${totalEvals} new`);
   console.log(`  Eval samples:      ${totalEvalSamples} new`);
-  console.log(`  Changelog entries: ${totalChangelogs} new`);
+  console.log(`  Changelog entries: ${totalChangelogs} written`);
   console.log(`\n  DB totals:`);
   console.log(`    configs           ${configCount.n}`);
   console.log(`    benchmark_results ${resultCount.n}`);

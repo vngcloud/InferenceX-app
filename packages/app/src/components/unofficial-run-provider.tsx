@@ -12,7 +12,7 @@ import {
 
 import type { ChartDefinition, HardwareConfig, InferenceData } from '@/components/inference/types';
 import { UnofficialBanner } from '@/components/ui/unofficial-banner';
-import { DB_MODEL_TO_DISPLAY, islOslToSequence } from '@semianalysisai/inferencex-constants';
+import { DB_MODEL_TO_DISPLAY, rowToSequence } from '@semianalysisai/inferencex-constants';
 import { computeToggle } from '@/hooks/useTogglableSet';
 import type { BenchmarkRow, EvalRow } from '@/lib/api';
 import { normalizeEvalHardwareKey } from '@/lib/chart-utils';
@@ -110,7 +110,7 @@ export function buildChartData(benchmarks: BenchmarkRow[]): UnofficialChartData 
   const groups = new Map<string, BenchmarkRow[]>();
   for (const row of benchmarks) {
     const displayModel = DB_MODEL_TO_DISPLAY[row.model] ?? row.model;
-    const sequence = islOslToSequence(row.isl, row.osl);
+    const sequence = rowToSequence(row);
     if (!sequence) continue;
     const key = `${displayModel}_${sequence}`;
     if (!groups.has(key)) groups.set(key, []);
@@ -281,8 +281,8 @@ export function UnofficialRunProvider({ children }: { children: ReactNode }) {
       const belongsToDismissed = (rowUrl?: string | null) => {
         if (!rowUrl) return false;
         if (rowUrl === target.url) return true;
-        const m = rowUrl.match(/\/runs\/(\d+)/u);
-        return m !== null && m[1] === runId;
+        const m = rowUrl.match(/\/runs\/(?<runId>\d+)/u);
+        return m?.groups?.runId === runId;
       };
 
       // Compute the filtered chart data BEFORE any setState so we can pass the

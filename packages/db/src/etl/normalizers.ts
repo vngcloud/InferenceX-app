@@ -22,7 +22,11 @@ export { GPU_KEYS };
  *   stripped base is not in `GPU_KEYS`.
  */
 export function hwToGpuKey(hw: string): string | null {
-  const base = hw.toLowerCase().split('-')[0];
+  // v3 agentic artifacts scope the hw id (`cluster:b300-nv`) — drop everything
+  // up to the last `:` first. Then take the first segment before `-` as the
+  // canonical key; that subsumes all the prior explicit suffix strips
+  // (-nv, -amds, -dgxc-slurm, -p1, -cw, …).
+  const base = hw.toLowerCase().split(':').pop()!.split('-')[0];
   return GPU_KEYS.has(base) ? base : null;
 }
 
@@ -41,18 +45,10 @@ const PRECISION_SUFFIX = /-(?:fp4|fp8|mxfp4|nvfp4)(?:-.*)?$/iu;
 const PREFIX_ALIASES: Record<string, string> = {
   gptoss: 'gptoss120b',
   dsv4pro: 'dsv4',
-  // Legacy Gemma-4 MTP variants encoded layer count in the prefix
-  // (`gemma4n4`/`gemma4n6`). New artifacts emit `gemma4` + a separate
-  // `num_speculative_tokens` field; we keep the prefix aliases here as a
-  // fallback for older runs (see parseTechniques).
-  gemma4n4: 'gemma4',
-  gemma4n6: 'gemma4',
-};
-
-/** Prefix → num_speculative_tokens, when the legacy artifact smuggled N into the model prefix. */
-const PREFIX_TO_NUM_SPEC_TOKENS: Record<string, number> = {
-  gemma4n4: 4,
-  gemma4n6: 6,
+  // AMD AgentX sweeps emit the bare prefix `kimik2.7` instead of the canonical
+  // `kimik2.7-code` DB key; alias it so those rows resolve (and precision-suffixed
+  // forms like `kimik2.7-fp4` fold in via PRECISION_SUFFIX stripping too).
+  'kimik2.7': 'kimik2.7-code',
 };
 
 function resolvePrefixToKey(prefix: string): string | null {
@@ -100,13 +96,20 @@ export const MODEL_TO_KEY: Record<string, string> = {
   'Qwen/Qwen3.5-397B-A17B-FP8': 'qwen3.5',
   'Qwen/Qwen3.5-27B': 'qwen3.5-27b',
   'Qwen/Qwen3.5-27B-FP8': 'qwen3.5-27b',
-  // Kimi-K2.5
+  // Kimi-K2.5 / K2.6 / K2.7-Code (same architecture, distinct DB buckets)
   'moonshotai/Kimi-K2.5': 'kimik2.5',
+  'moonshotai/Kimi-K2.6': 'kimik2.6',
+  'moonshotai/Kimi-K2.7-Code': 'kimik2.7-code',
+  'amd/Kimi-K2.7-Code-MXFP4': 'kimik2.7-code',
   // MiniMax-M2.5
   'MiniMaxAI/MiniMax-M2.5': 'minimaxm2.5',
+  // MiniMax-M3 (428B, distinct architecture from the M2 series)
+  'MiniMaxAI/MiniMax-M3': 'minimaxm3',
   // GLM-5
   'zai-org/GLM-5-FP8': 'glm5',
   'amd/GLM-5.1-MXFP4': 'glm5.1',
+  'zai-org/GLM-5.2-FP8': 'glm5.2',
+  'nvidia/GLM-5.2-NVFP4': 'glm5.2',
   // DeepSeek-V4-Pro
   'deepseek-ai/DeepSeek-V4-Pro': 'dsv4',
 };
@@ -148,7 +151,7 @@ export function resolveModelKey(row: Record<string, any>): string | null {
  */
 export function normalizeFramework(
   fw: string,
-  disaggField: any,
+  disaggField: unknown,
 ): { framework: string; disagg: boolean } {
   const lower = fw.toLowerCase();
   const alias = FRAMEWORK_ALIASES[lower];
@@ -181,78 +184,9 @@ export function normalizePrecision(raw: string): string {
  * @param spec - Raw `spec_decoding` value from the artifact.
  * @returns Lowercase method name, or `'none'` if absent/empty.
  */
-export function normalizeSpecMethod(spec: any): string {
+export function normalizeSpecMethod(spec: unknown): string {
   if (!spec || spec === '') return 'none';
   return String(spec).toLowerCase();
-}
-
-/** Known technique keys we promote into the techniques jsonb explicitly. */
-const TECHNIQUE_KEYS = [
-  'spec_method',
-  'num_speculative_tokens',
-  'max_num_batched_tokens',
-  'kv_cache_dtype',
-  'prefix_cache',
-] as const;
-
-/**
- * Build the per-measurement `techniques` jsonb from a raw artifact row.
- *
- * The new-shape artifact emits the technique fields at the **top level** of
- * each row (not nested in a `techniques` object), e.g.:
- *   { "spec_decoding": "mtp", "num_speculative_tokens": 6, "max_num_batched_tokens": 4096, … }
- *
- * For forward-compat we also accept a nested `techniques: { ... }` object.
- *
- * Legacy artifacts (pre-rename) smuggled the layer count into the model prefix
- * (`gemma4n4`, `gemma4n6`); we keep that fallback so older runs still ingest.
- * Empty/absent values are dropped (no `spec_method: 'none'` keys).
- *
- * @param row - Raw artifact dict.
- * @returns Techniques jsonb. May be empty (`{}`) when no knobs were tuned.
- */
-export function parseTechniques(row: Record<string, any>): Record<string, string | number> {
-  const out: Record<string, string | number> = {};
-
-  const setIfPresent = (key: (typeof TECHNIQUE_KEYS)[number], v: any) => {
-    if (v === undefined || v === null || v === '') return;
-    out[key] = typeof v === 'number' ? v : String(v).toLowerCase();
-  };
-
-  // Forward-compat: nested `techniques` object.
-  if (row.techniques && typeof row.techniques === 'object') {
-    for (const k of TECHNIQUE_KEYS) {
-      setIfPresent(k, (row.techniques as Record<string, any>)[k]);
-    }
-  }
-
-  // New-shape: technique fields at top level.
-  setIfPresent('num_speculative_tokens', row.num_speculative_tokens);
-  setIfPresent('max_num_batched_tokens', row.max_num_batched_tokens);
-  setIfPresent('kv_cache_dtype', row.kv_cache_dtype);
-  setIfPresent('prefix_cache', row.prefix_cache);
-
-  // spec_decoding is the canonical top-level field name; map to spec_method
-  // unless we already pulled one out of the nested techniques object.
-  if (!('spec_method' in out)) {
-    const legacy = row.spec_decoding;
-    if (legacy && legacy !== '' && String(legacy).toLowerCase() !== 'none') {
-      out.spec_method = String(legacy).toLowerCase();
-    }
-  }
-
-  // Legacy fallback: layer count smuggled into the model prefix (gemma4n4/n6).
-  if (!('num_speculative_tokens' in out)) {
-    const rawPrefix = String(row.infmax_model_prefix ?? row.model_prefix ?? '').toLowerCase();
-    const n = PREFIX_TO_NUM_SPEC_TOKENS[rawPrefix];
-    if (n !== undefined) {
-      out.num_speculative_tokens = n;
-      // If spec_method wasn't set elsewhere but we have a layer count, infer mtp.
-      if (!('spec_method' in out)) out.spec_method = 'mtp';
-    }
-  }
-
-  return out;
 }
 
 /**
@@ -262,7 +196,7 @@ export function parseTechniques(row: Record<string, any>): Record<string, string
  * @param v - Value to coerce (any type).
  * @returns `true` if the value is one of the recognized truthy forms, `false` otherwise.
  */
-export function parseBool(v: any): boolean {
+export function parseBool(v: unknown): boolean {
   return v === true || v === 'true' || v === 'True';
 }
 
@@ -273,7 +207,7 @@ export function parseBool(v: any): boolean {
  * @param v - Value to parse (number, string, null, or undefined).
  * @returns The parsed number, or `undefined` if the input is null/undefined/NaN.
  */
-export function parseNum(v: any): number | undefined {
+export function parseNum(v: unknown): number | undefined {
   if (v === null || v === undefined) return undefined;
   const n = typeof v === 'string' ? parseFloat(v) : Number(v);
   return isNaN(n) ? undefined : n;
@@ -286,11 +220,13 @@ export function parseNum(v: any): number | undefined {
  * @param v - Value to parse (number, string, null, or undefined).
  * @returns The parsed integer, or `undefined` if the input is null/undefined/NaN.
  */
-export function parseInt2(v: any): number | undefined {
+export function parseInt2(v: unknown): number | undefined {
   if (v === null || v === undefined) return undefined;
   const n = typeof v === 'string' ? parseInt(v, 10) : Math.round(Number(v));
   return isNaN(n) ? undefined : n;
 }
+
+const ISL_OSL_PATTERN = /[_-](?<isl>\d+)k(?<osl>\d+)k[_\-.]/iu;
 
 /**
  * Extract ISL (input sequence length) and OSL (output sequence length) in tokens
@@ -304,7 +240,7 @@ export function parseInt2(v: any): number | undefined {
  * @returns An object with `isl` and `osl` in tokens, or `null` if no match is found.
  */
 export function parseIslOsl(name: string): { isl: number; osl: number } | null {
-  const m = name.match(/[_-](\d+)k(\d+)k[_\-.]/iu);
+  const m = name.match(ISL_OSL_PATTERN);
   if (!m) return null;
   return { isl: parseInt(m[1], 10) * 1024, osl: parseInt(m[2], 10) * 1024 };
 }

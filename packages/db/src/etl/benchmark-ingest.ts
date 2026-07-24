@@ -4,6 +4,7 @@
 
 import type postgres from 'postgres';
 import type { BenchmarkParams } from './benchmark-mapper';
+import { kvCachePoolTokensFromServerLog } from './server-log-metrics';
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -29,46 +30,59 @@ export async function bulkIngestBenchmarkRows(
 
   // Postgres rejects ON CONFLICT DO UPDATE if the same conflict key appears
   // more than once in a single batch. Deduplicate within the batch, keeping
-  // the last occurrence. The conflict key must include techniques — two MTP
-  // variants at the same (config, isl, osl, conc) are legitimately distinct
-  // measurements and must not collapse to one row (migration 007).
+  // the last occurrence (last metrics for each unique config/benchmark_type/isl/osl/conc/offload_mode).
   const seen = new Map<string, BenchmarkParams & { configId: number }>();
   for (const r of rows) {
-    // parseTechniques() builds the techniques object with deterministic key
-    // order, so a plain JSON.stringify is a stable dedup discriminator.
-    const techniquesKey = JSON.stringify(r.techniques);
-    seen.set(`${r.configId}-${r.isl}-${r.osl}-${r.conc}-${techniquesKey}`, r);
+    seen.set(
+      `${r.configId}-${r.benchmarkType}-${r.isl ?? ''}-${r.osl ?? ''}-${r.conc}-${r.offloadMode}`,
+      r,
+    );
   }
   const deduped = [...seen.values()];
 
   const configIds = deduped.map((r) => r.configId);
+  const benchmarkTypes = deduped.map((r) => r.benchmarkType);
+  const offloadModes = deduped.map((r) => r.offloadMode);
   const isls = deduped.map((r) => r.isl);
   const osls = deduped.map((r) => r.osl);
   const concs = deduped.map((r) => r.conc);
   const images = deduped.map((r) => r.image);
   const metricsJsons = deduped.map((r) => JSON.stringify(r.metrics));
-  const techniquesJsons = deduped.map((r) => JSON.stringify(r.techniques));
+  // workers is optional — encode missing values as JSON null so the JSONB
+  // unnest input has a homogeneous type (jsonb[]) and stores SQL NULL in the
+  // column for rows that didn't emit a per-worker breakdown.
+  const workersJsons = deduped.map((r) =>
+    r.workers === undefined ? null : JSON.stringify(r.workers),
+  );
 
   const result = await sql<{ inserted: boolean; id: number }[]>`
     insert into benchmark_results (
-      workflow_run_id, config_id, benchmark_type, date,
-      isl, osl, conc, image, metrics, techniques
+      workflow_run_id, config_id, benchmark_type, offload_mode, date,
+      isl, osl, conc, image, metrics, workers
     )
     select
       ${workflowRunId},
       unnest(${sql.array(configIds)}::int[]),
-      'single_turn',
+      unnest(${sql.array(benchmarkTypes)}::text[]),
+      unnest(${sql.array(offloadModes)}::text[]),
       ${date}::date,
       unnest(${sql.array(isls)}::int[]),
       unnest(${sql.array(osls)}::int[]),
       unnest(${sql.array(concs)}::int[]),
       unnest(${sql.array(images)}),
       unnest(${sql.array(metricsJsons)}::jsonb[]),
-      unnest(${sql.array(techniquesJsons)}::jsonb[])
-    on conflict (workflow_run_id, config_id, benchmark_type, isl, osl, conc, techniques)
+      unnest(${sql.array(workersJsons)}::jsonb[])
+    on conflict (workflow_run_id, config_id, benchmark_type, isl, osl, conc, offload_mode)
     do update set
-      metrics = excluded.metrics,
-      image = excluded.image
+      -- Replace metrics with the fresh artifact values, but carry over
+      -- kv_cache_pool_tokens: it is derived from the server log at
+      -- insertServerLog time (not present in any artifact JSON), so a later
+      -- upsert from the aggregated results_bmk artifact would silently wipe it.
+      metrics = excluded.metrics || jsonb_strip_nulls(
+        jsonb_build_object('kv_cache_pool_tokens', benchmark_results.metrics->'kv_cache_pool_tokens')
+      ),
+      image = excluded.image,
+      workers = excluded.workers
     returning (xmax = 0) as inserted, id
   `;
 
@@ -99,9 +113,18 @@ export async function insertServerLog(
     insert into server_logs (server_log) values (${serverLog})
     returning id
   `;
+  // Derive the KV-cache pool size (tokens) from the log's authoritative
+  // "GPU KV cache size: N tokens" line(s) and stash it on the result's metrics
+  // JSON, mirroring how trace-replay-ingest derives cache-hit rates. The
+  // scraped vllm:cache_config_info metric can't reconstruct this for MLA models.
+  const kvCachePoolTokens = kvCachePoolTokensFromServerLog(serverLog);
   await sql`
     update benchmark_results
-    set server_log_id = ${logId}
+    set server_log_id = ${logId}${
+      kvCachePoolTokens === null
+        ? sql``
+        : sql`, metrics = jsonb_set(metrics, '{kv_cache_pool_tokens}', to_jsonb(${kvCachePoolTokens}::bigint))`
+    }
     where id = any(${sql.array(unlinked.map((r) => r.id))}::bigint[])
   `;
 }
@@ -152,25 +175,18 @@ export async function bulkIngestRunStats(
  * Rows are deduplicated within the batch before sending. ON CONFLICT DO NOTHING
  * makes re-runs idempotent.
  */
-/**
- * availability.spec_method is a denormalized projection of techniques.spec_method
- * (kept for filter ergonomics on the date picker). Default to 'none' when absent.
- */
-function specMethodFor(t: Record<string, string | number>): string {
-  return typeof t.spec_method === 'string' ? t.spec_method : 'none';
-}
-
 export async function bulkUpsertAvailability(
   sql: Sql,
   rows: {
     model: string;
-    isl: number;
-    osl: number;
+    isl: number | null;
+    osl: number | null;
     precision: string;
     hardware: string;
     framework: string;
-    techniques: Record<string, string | number>;
+    specMethod: string;
     disagg: boolean;
+    benchmarkType: string;
   }[],
   date: string,
 ): Promise<void> {
@@ -179,8 +195,7 @@ export async function bulkUpsertAvailability(
   const seen = new Set<string>();
   const unique: typeof rows = [];
   for (const r of rows) {
-    const sm = specMethodFor(r.techniques);
-    const key = `${r.model}|${r.isl}|${r.osl}|${r.precision}|${r.hardware}|${r.framework}|${sm}|${r.disagg}|${date}`;
+    const key = `${r.model}|${r.isl ?? ''}|${r.osl ?? ''}|${r.precision}|${r.hardware}|${r.framework}|${r.specMethod}|${r.disagg}|${r.benchmarkType}|${date}`;
     if (!seen.has(key)) {
       seen.add(key);
       unique.push(r);
@@ -188,7 +203,7 @@ export async function bulkUpsertAvailability(
   }
 
   await sql`
-    insert into availability (model, isl, osl, precision, hardware, framework, spec_method, disagg, date)
+    insert into availability (model, isl, osl, precision, hardware, framework, spec_method, disagg, benchmark_type, date)
     select
       unnest(${sql.array(unique.map((r) => r.model))}::text[]),
       unnest(${sql.array(unique.map((r) => r.isl))}::int[]),
@@ -196,8 +211,9 @@ export async function bulkUpsertAvailability(
       unnest(${sql.array(unique.map((r) => r.precision))}::text[]),
       unnest(${sql.array(unique.map((r) => r.hardware))}::text[]),
       unnest(${sql.array(unique.map((r) => r.framework))}::text[]),
-      unnest(${sql.array(unique.map((r) => specMethodFor(r.techniques)))}::text[]),
+      unnest(${sql.array(unique.map((r) => r.specMethod))}::text[]),
       unnest(${sql.array(unique.map((r) => r.disagg))}::bool[]),
+      unnest(${sql.array(unique.map((r) => r.benchmarkType))}::text[]),
       ${date}::date
     on conflict do nothing
   `;

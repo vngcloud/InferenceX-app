@@ -33,17 +33,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build image
-        # Tag both :latest (consumed by compose) and :<sha> so we can
-        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
-        # then `docker compose up -d` without re-pulling the source.
-        run: |
-          docker build \
-            -t "$IMAGE_TAG" \
-            -t "inferencex-app:${GITHUB_SHA::7}" \
-            .
-
       - name: Start postgres + wait for healthy
+        # Runs before the image build: some pages' generateStaticParams
+        # (e.g. compare-precision/compare-spec-decode OG images) query
+        # Postgres during `next build`, so the build needs a real,
+        # reachable database — not just the runtime container.
         run: |
           docker compose -f "$COMPOSE_FILE" up -d postgres
           # Compose names containers `<project>-<service>-N`; project is
@@ -58,13 +52,80 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
-      - name: Run DB migrations
-        # `pnpm admin:db:migrate` is idempotent — already-applied migrations
-        # are skipped. Safe to run on every deploy.
-        # --yes: skip the y/N confirm (we're non-interactive in CI).
-        # --no-ssl: local compose postgres doesn't speak TLS; admin scripts
-        # default to `ssl: require` regardless of DATABASE_SSL env.
-        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
+      - name: Run DB migrations (pre-build)
+        # Some pages' generateStaticParams query columns/tables that only
+        # exist after pending migrations run, so the schema has to be
+        # caught up *before* the image build. There's no post-build migrate
+        # step anymore — deploy.yml doesn't own migrations upstream doesn't
+        # have either; the ingest workflows (ingest-results.yml,
+        # ingest-agentic-results.yml), byte-identical to upstream, already
+        # run `pnpm admin:db:migrate --yes` before every ingest. This step
+        # uses a throwaway node container instead of the app image (which
+        # doesn't exist yet pre-build): mounts the already checked-out
+        # source and calls the exact same real migrate script
+        # (packages/db/src/migrate.ts, via the same `db:migrate` pnpm
+        # script `admin:db:migrate` runs) — not a reimplementation.
+        # --network host + 127.0.0.1:5432: see Build image's comment below.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/app" -w /app \
+            -e CI=true \
+            -e DATABASE_READONLY_URL="$db_url" \
+            -e DATABASE_WRITE_URL="$db_url" \
+            -e DATABASE_DRIVER=postgres \
+            -e DATABASE_SSL=false \
+            node:24-bookworm-slim \
+            sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
+
+      - name: Fix workspace ownership
+        # The migration container above runs as root and bind-mounts
+        # $GITHUB_WORKSPACE, so `pnpm install` leaves root-owned files
+        # (.pnpm-store/, node_modules/) in the checked-out tree. The next
+        # run's actions/checkout (running as the unprivileged runner user)
+        # can't remove them and fails outright. Reclaim ownership every time,
+        # regardless of whether the step above succeeded.
+        if: always()
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/app" node:24-bookworm-slim \
+            chown -R "$(id -u):$(id -g)" /app
+
+      - name: Build image
+        # Tag both :latest (consumed by compose) and :<sha> so we can
+        # roll back by `docker tag inferencex-app:<sha> inferencex-app:latest`
+        # then `docker compose up -d` without re-pulling the source.
+        #
+        # --network host + 127.0.0.1:5432: postgres is published to
+        # loopback only (see docker-compose.yml) specifically so the build
+        # can reach it — some pages' generateStaticParams (e.g. the
+        # compare-precision/compare-spec-decode OG images) query Postgres
+        # during `next build`, and a dummy/unreachable DB host fails the
+        # build outright.
+        # --secret passes the DB URL as a mounted file (see Dockerfile),
+        # not as --build-arg, so it never lands in image layers/history.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          export DATABASE_READONLY_URL="$db_url"
+          export DATABASE_WRITE_URL="$db_url"
+          docker build \
+            --network host \
+            --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
+            --secret id=database_write_url,env=DATABASE_WRITE_URL \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app:${GITHUB_SHA::7}" \
+            .
 
       - name: Sync GITHUB_TOKEN into compose .env
         # Writes the INGEST_GITHUB_TOKEN repo secret into

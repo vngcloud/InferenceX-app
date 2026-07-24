@@ -3,9 +3,10 @@
 import { ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 
 import { track } from '@/lib/analytics';
+import { useFeatureGate } from '@/lib/use-feature-gate';
 import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -20,68 +21,23 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { UnofficialRunContext } from '@/components/unofficial-run-provider';
+import { hasZhSibling, isZhPathname, ZH_PREFIX } from '@/lib/i18n';
+import { TAB_LABELS_ZH } from '@/lib/tab-meta-zh';
 import { cn } from '@/lib/utils';
 
-const FEATURE_GATE_KEY = 'inferencex-feature-gate';
-const UNLOCK_SEQUENCE = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown'];
-
-function useFeatureGate(): boolean {
-  const [unlocked, setUnlocked] = useState(false);
-  const sequenceRef = useRef<string[]>([]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && localStorage.getItem(FEATURE_GATE_KEY) === '1') {
-      setUnlocked(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (unlocked) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      sequenceRef.current.push(e.key);
-      if (sequenceRef.current.length > UNLOCK_SEQUENCE.length) {
-        sequenceRef.current = sequenceRef.current.slice(-UNLOCK_SEQUENCE.length);
-      }
-      if (
-        sequenceRef.current.length === UNLOCK_SEQUENCE.length &&
-        sequenceRef.current.every((k, i) => k === UNLOCK_SEQUENCE[i])
-      ) {
-        localStorage.setItem(FEATURE_GATE_KEY, '1');
-        setUnlocked(true);
-        window.dispatchEvent(new Event('inferencex:feature-gate:unlocked'));
-        track('feature_gate_unlocked');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [unlocked]);
-
-  useEffect(() => {
-    const handleLock = () => setUnlocked(false);
-    const handleUnlock = () => setUnlocked(true);
-    window.addEventListener('inferencex:feature-gate:locked', handleLock);
-    window.addEventListener('inferencex:feature-gate:unlocked', handleUnlock);
-    return () => {
-      window.removeEventListener('inferencex:feature-gate:locked', handleLock);
-      window.removeEventListener('inferencex:feature-gate:unlocked', handleUnlock);
-    };
-  }, []);
-
-  return unlocked;
-}
-
 const VISIBLE_TABS = [
+  { href: '/overview', label: 'Overview', testId: 'tab-trigger-overview' },
   { href: '/inference', label: 'Inference Performance', testId: 'tab-trigger-inference' },
   { href: '/evaluation', label: 'Recipe Compare', testId: 'tab-trigger-evaluation' },
   { href: '/historical', label: 'Historical Trends', testId: 'tab-trigger-historical' },
   { href: '/calculator', label: 'TCO Calculator', testId: 'tab-trigger-calculator' },
   { href: '/gpu-specs', label: 'GPU Specs', testId: 'tab-trigger-gpu-specs' },
+  { href: '/submissions', label: 'Submissions', testId: 'tab-trigger-submissions' },
 ] as const;
 
 const GATED_TABS = [
   { href: '/ai-chart', label: 'AI Chart', testId: 'tab-trigger-ai-chart' },
   { href: '/gpu-metrics', label: 'PowerX', testId: 'tab-trigger-gpu-metrics' },
-  { href: '/submissions', label: 'Submissions', testId: 'tab-trigger-submissions' },
   {
     href: '/current-inferencex-image',
     label: 'Images',
@@ -108,8 +64,9 @@ const currentTabClass = (active: boolean) =>
     : 'hover:border-muted-foreground/30';
 
 function activeTab(pathname: string): string {
-  const seg = pathname.split('/').filter(Boolean)[0] || 'inference';
-  return seg;
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments[0] === ZH_PREFIX.slice(1)) segments.shift();
+  return segments[0] || 'inference';
 }
 
 function handleDesktopClick(tab: string) {
@@ -121,8 +78,16 @@ export function TabNav() {
   const pathname = usePathname();
   const router = useRouter();
   const featureGateUnlocked = useFeatureGate();
+  const isZh = isZhPathname(pathname);
   const current = activeTab(pathname);
   const selectedTab = TAB_VALUES.has(current) ? current : '';
+  // On /zh pages, tabs with a Chinese sibling navigate within the Chinese
+  // tree and show Chinese labels; the rest (most gated tabs) keep English
+  // targets.
+  const tabLabel = (tab: { href: string; label: string }) =>
+    isZh ? (TAB_LABELS_ZH[tab.href.slice(1)] ?? tab.label) : tab.label;
+  const localizedPath = (path: string) =>
+    isZh && hasZhSibling(path) ? `${ZH_PREFIX}${path}` : path;
 
   // Preserve the `unofficialrun(s)` URL param across tab navigation so an
   // overlay loaded on /inference doesn't get dropped when switching to
@@ -155,7 +120,7 @@ export function TabNav() {
   const handleMobileChange = (value: string) => {
     window.dispatchEvent(new CustomEvent('inferencex:tab-change'));
     track('tab_changed', { tab: value });
-    router.push(tabHref(`/${value}`));
+    router.push(tabHref(localizedPath(`/${value}`)));
   };
 
   return (
@@ -165,17 +130,17 @@ export function TabNav() {
         <div className="w-full pb-6" />
         <Card>
           <div className="space-y-2">
-            <Label htmlFor="chart-select">Select Chart</Label>
+            <Label htmlFor="chart-select">{isZh ? '选择图表' : 'Select Chart'}</Label>
             <Select value={selectedTab} onValueChange={handleMobileChange}>
               <SelectTrigger id="chart-select" data-testid="mobile-chart-select" className="w-full">
-                <SelectValue placeholder="Select Chart" />
+                <SelectValue placeholder={isZh ? '选择图表' : 'Select Chart'} />
               </SelectTrigger>
               <SelectContent>
                 {VISIBLE_TABS.map((tab) => {
                   const value = tab.href.slice(1);
                   return (
                     <SelectItem key={value} value={value} data-ph-capture-attribute-tab={value}>
-                      {tab.label}
+                      {tabLabel(tab)}
                     </SelectItem>
                   );
                 })}
@@ -183,7 +148,7 @@ export function TabNav() {
                   <>
                     <SelectSeparator />
                     <SelectGroup>
-                      <SelectLabel>Hidden</SelectLabel>
+                      <SelectLabel>{isZh ? '隐藏' : 'Hidden'}</SelectLabel>
                       {GATED_TABS.map((tab) => {
                         const value = tab.href.slice(1);
                         return (
@@ -192,7 +157,7 @@ export function TabNav() {
                             value={value}
                             data-ph-capture-attribute-tab={value}
                           >
-                            {tab.label}
+                            {tabLabel(tab)}
                           </SelectItem>
                         );
                       })}
@@ -215,20 +180,22 @@ export function TabNav() {
             {VISIBLE_TABS.map((tab) => (
               <Link
                 key={tab.href}
-                href={tabHref(tab.href)}
+                href={tabHref(localizedPath(tab.href))}
                 data-testid={tab.testId}
                 data-ph-capture-attribute-tab={tab.href.slice(1)}
                 onClick={() => handleDesktopClick(tab.href.slice(1))}
                 className={cn(tabLinkClass, currentTabClass(current === tab.href.slice(1)))}
               >
-                {tab.label}
+                {tabLabel(tab)}
               </Link>
             ))}
             {featureGateUnlocked && (
               <HiddenTabsPopover
                 current={current}
-                tabHref={tabHref}
+                tabHref={(path) => tabHref(localizedPath(path))}
                 onSelect={handleDesktopClick}
+                tabLabel={tabLabel}
+                isZh={isZh}
               />
             )}
           </nav>
@@ -242,10 +209,14 @@ function HiddenTabsPopover({
   current,
   tabHref,
   onSelect,
+  tabLabel,
+  isZh,
 }: {
   current: string;
   tabHref: (path: string) => string;
   onSelect: (tab: string) => void;
+  tabLabel: (tab: { href: string; label: string }) => string;
+  isZh: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const active = GATED_VALUES.has(current);
@@ -257,7 +228,7 @@ function HiddenTabsPopover({
         data-ph-capture-attribute-tab="hidden"
         className={cn(tabLinkClass, currentTabClass(active), 'gap-1 cursor-pointer')}
       >
-        Hidden
+        {isZh ? '隐藏' : 'Hidden'}
         <ChevronDown
           className={cn('size-4 transition-transform', open && 'rotate-180')}
           aria-hidden
@@ -286,7 +257,7 @@ function HiddenTabsPopover({
                       : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                   )}
                 >
-                  {tab.label}
+                  {tabLabel(tab)}
                 </Link>
               </li>
             );

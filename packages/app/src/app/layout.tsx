@@ -28,10 +28,14 @@ import { fetchStarCount } from '@/lib/github-stars.server';
 import { QueryProvider } from '@/providers/query-provider';
 import { PostHogProvider, PostHogPageView } from '@/providers/posthog-provider';
 import { VisitTracker } from '@/providers/visit-tracker';
+import {
+  LANDING_BANNER_DISMISSED_ATTRIBUTE,
+  LANDING_BANNER_STORAGE_KEY,
+} from '@/lib/nudges/landing-banner';
 
 const dm_sans = DM_Sans({
   subsets: ['latin'],
-  display: 'swap',
+  display: 'optional',
   variable: '--font-dm-sans',
 });
 
@@ -39,6 +43,7 @@ const monocraft = localFont({
   src: './fonts/Monocraft.woff2',
   variable: '--font-minecraft',
   display: 'swap',
+  preload: false,
 });
 
 export const metadata: Metadata = {
@@ -165,6 +170,13 @@ const jsonLd = {
   ],
 };
 
+const landingBannerPrepaintScript = `try{if(localStorage.getItem(${JSON.stringify(
+  LANDING_BANNER_STORAGE_KEY,
+)})){document.documentElement.setAttribute(${JSON.stringify(
+  LANDING_BANNER_DISMISSED_ATTRIBUTE,
+)},'')}}catch{}`;
+const landingBannerPrepaintStyle = `html[${LANDING_BANNER_DISMISSED_ATTRIBUTE}] [data-initial-banner]{display:none}`;
+
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -174,11 +186,24 @@ export default async function RootLayout({
   return (
     <html lang="en" className={monocraft.variable} suppressHydrationWarning>
       <head>
-        <link rel="preload" as="image" href="/brand/left-pattern-full.svg" fetchPriority="high" />
-        <link rel="preconnect" href="https://us-assets.i.posthog.com" />
-        <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
+        <link
+          rel="preload"
+          as="image"
+          href="/brand/left-pattern-full.svg"
+          fetchPriority="high"
+          media="(min-width: 640px)"
+        />
       </head>
       <body className={`${dm_sans.variable} antialiased relative min-h-screen flex flex-col`}>
+        <style
+          id="landing-banner-prepaint-style"
+          dangerouslySetInnerHTML={{ __html: landingBannerPrepaintStyle }}
+        />
+        <script
+          id="landing-banner-prepaint"
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{ __html: landingBannerPrepaintScript }}
+        />
         <CircuitBackground />
         <MinecraftBackgroundLazy />
         <MinecraftDecorations />

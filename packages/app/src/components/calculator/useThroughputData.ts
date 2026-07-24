@@ -15,6 +15,7 @@ import {
   getCostField,
   hermiteInterpolate,
   interpolateForGPU,
+  maxInteractivityAtCost,
   monotoneSlopes,
   paretoFrontUpperLeft,
   sign,
@@ -26,6 +27,7 @@ export {
   getCostField,
   hermiteInterpolate,
   interpolateForGPU,
+  maxInteractivityAtCost,
   monotoneSlopes,
   paretoFrontUpperLeft,
   sign,
@@ -78,7 +80,7 @@ export function useThroughputData(
 
       const entry = rowToAggDataEntry(row);
       const hwKey = getHardwareKey(entry);
-      const hwConfig = getHardwareConfig(hwKey);
+      const hwConfig = getHardwareConfig(hwKey, entry.model);
       if (!hwConfig) continue;
 
       if (!hwConfigMap[hwKey]) hwConfigMap[hwKey] = { ...hwConfig, name: hwKey };

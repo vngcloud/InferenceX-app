@@ -14,10 +14,13 @@ export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
   'qwen3.5-27b': 'Qwen-3.5-27B',
   'kimik2.5': 'Kimi-K2.5',
   'kimik2.6': 'Kimi-K2.5',
+  'kimik2.7-code': 'Kimi-K2.5',
   'minimaxm2.5': 'MiniMax-M2.5',
   'minimaxm2.7': 'MiniMax-M2.5',
+  minimaxm3: 'MiniMax-M3',
   glm5: 'GLM-5',
   'glm5.1': 'GLM-5',
+  'glm5.2': 'GLM-5.2',
   dsv4: 'DeepSeek-V4-Pro',
   gemma4: 'Gemma-4-31B-it',
 };
@@ -57,4 +60,21 @@ export function islOslToSequence(isl: number, osl: number): string | null {
     '16384_1024': '16k/1k',
   };
   return map[`${isl}_${osl}`] ?? null;
+}
+
+/**
+ * Map a benchmark/availability row to its sequence (scenario) string.
+ * - `agentic_traces` rows map to `'agentic-traces'` regardless of isl/osl.
+ * - Other rows (today: `single_turn`) fall back to `islOslToSequence`.
+ * Returns `null` for rows that can't be classified (e.g. `single_turn` with
+ * unmapped isl/osl values).
+ */
+export function rowToSequence(row: {
+  isl: number | null;
+  osl: number | null;
+  benchmark_type: string;
+}): string | null {
+  if (row.benchmark_type === 'agentic_traces') return 'agentic-traces';
+  if (row.isl === null || row.osl === null) return null;
+  return islOslToSequence(row.isl, row.osl);
 }

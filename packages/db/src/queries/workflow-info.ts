@@ -65,6 +65,47 @@ export async function getChangelogByDate(sql: DbClient, date: string): Promise<C
   return rows as unknown as ChangelogRow[];
 }
 
+export interface RunConfigRow {
+  github_run_id: number;
+  run_started_at: string | null;
+  html_url: string | null;
+  head_sha: string | null;
+  model: string;
+  precision: string;
+  hardware: string;
+  framework: string;
+  spec_method: string;
+  disagg: boolean;
+}
+
+/**
+ * Per-(run, config) coverage for a date: which workflow runs produced benchmark
+ * data for which configs. Data-driven (joins benchmark_results) so a run that
+ * shipped data without a changelog entry still surfaces — the comparison UI uses
+ * this to enumerate every run on a date, not just runs with changelog notes.
+ */
+export async function getRunConfigsByDate(sql: DbClient, date: string): Promise<RunConfigRow[]> {
+  const rows = await sql`
+    SELECT DISTINCT
+      wr.github_run_id,
+      to_char(COALESCE(wr.run_started_at, wr.created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as run_started_at,
+      wr.html_url,
+      wr.head_sha,
+      c.model,
+      c.precision,
+      c.hardware,
+      c.framework,
+      c.spec_method,
+      c.disagg
+    FROM benchmark_results br
+    JOIN configs c ON c.id = br.config_id
+    JOIN latest_workflow_runs wr ON wr.id = br.workflow_run_id
+    WHERE br.date = ${date}::date
+      AND br.error IS NULL
+  `;
+  return rows as unknown as RunConfigRow[];
+}
+
 /** Get distinct model/sequence/precision/hardware combos for a date. */
 export async function getDateConfigs(sql: DbClient, date: string): Promise<DateConfigRow[]> {
   const rows = await sql`
@@ -75,7 +116,7 @@ export async function getDateConfigs(sql: DbClient, date: string): Promise<DateC
       c.precision,
       c.hardware,
       c.framework,
-      COALESCE(br.techniques->>'spec_method', 'none') AS spec_method,
+      c.spec_method,
       c.disagg
     FROM benchmark_results br
     JOIN configs c ON c.id = br.config_id
@@ -88,20 +129,22 @@ export async function getDateConfigs(sql: DbClient, date: string): Promise<DateC
 
 export interface AvailabilityRow {
   model: string;
-  isl: number;
-  osl: number;
+  // Null for agentic_traces rows; numeric for single_turn fixed-seq rows.
+  isl: number | null;
+  osl: number | null;
   precision: string;
   hardware: string;
   framework: string;
   spec_method: string;
   disagg: boolean;
+  benchmark_type: string;
   date: string;
 }
 
-/** Get available (model, ISL/OSL, precision, hardware, framework, spec_method, date) combos for the availability API. */
+/** Get available (model, ISL/OSL, precision, hardware, framework, spec_method, benchmark_type, date) combos for the availability API. */
 export async function getAvailabilityData(sql: DbClient): Promise<AvailabilityRow[]> {
   const rows = await sql`
-    SELECT a.model, a.isl, a.osl, a.precision, a.hardware, a.framework, a.spec_method, a.disagg, a.date::text
+    SELECT a.model, a.isl, a.osl, a.precision, a.hardware, a.framework, a.spec_method, a.disagg, a.benchmark_type, a.date::text
     FROM availability a
     WHERE EXISTS (
       SELECT 1
@@ -112,8 +155,9 @@ export async function getAvailabilityData(sql: DbClient): Promise<AvailabilityRo
         AND c.hardware = a.hardware
         AND c.framework = a.framework
         AND c.precision = a.precision
-        AND br.isl = a.isl
-        AND br.osl = a.osl
+        AND br.isl IS NOT DISTINCT FROM a.isl
+        AND br.osl IS NOT DISTINCT FROM a.osl
+        AND br.benchmark_type = a.benchmark_type
         AND br.date = a.date
         AND br.error IS NULL
         AND wr.conclusion IS NOT NULL

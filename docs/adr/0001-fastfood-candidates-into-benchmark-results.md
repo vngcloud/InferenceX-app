@@ -4,7 +4,7 @@ We ingest the full AIPerf search ladder (every candidate, feasible and infeasibl
 
 ## Why
 
-`benchmark_results` is already keyed by `(workflow_run, config, benchmark_type, isl, osl, conc, techniques)`, so each candidate's concurrency makes it a distinct row, and the existing throughput-vs-latency charts plot the resulting curve with **zero new table, API, or UI**. Fastfood is a fixed single-turn synthetic workload, so it is genuinely `single_turn` data — not a foreign shape being forced in. Queries and charts do not filter on `benchmark_type`, so the points appear automatically.
+`benchmark_results` is already keyed by `(workflow_run, config, benchmark_type, isl, osl, conc, offload_mode)`, so each candidate's concurrency makes it a distinct row, and the existing throughput-vs-latency charts plot the resulting curve with **zero new table, API, or UI**. Fastfood is a fixed single-turn synthetic workload, so it is genuinely `single_turn` data — not a foreign shape being forced in. Queries and charts do not filter on `benchmark_type`, so the points appear automatically.
 
 ## Considered and rejected
 

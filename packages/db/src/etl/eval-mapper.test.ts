@@ -70,7 +70,7 @@ describe('mapEvalRow', () => {
     expect(ev.config.framework).toBe('vllm');
     expect(ev.config.model).toBe('dsr1');
     expect(ev.config.precision).toBe('fp8');
-    expect(ev.techniques).toEqual({});
+    expect(ev.config.specMethod).toBe('none');
     expect(ev.config.disagg).toBe(false);
     expect(ev.task).toBe('gsm8k');
     expect(ev.isl).toBe(1024);

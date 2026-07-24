@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { track } from '@/lib/analytics';
 import { ExternalLinkIcon } from '@/components/ui/external-link-icon';
@@ -19,24 +19,15 @@ export interface CarouselQuote {
 export interface QuoteCarouselProps {
   quotes: CarouselQuote[];
   overrides?: {
-    /** Companies pinned to the front in this order; rest are shuffled after */
-    order?: string[];
     /** Override display names in the org strip */
     labels?: Record<string, string>;
   };
   /** Link to a page with all quotes */
   moreHref?: string;
+  /** Label for the moreHref link (default "See more supporters →") */
+  moreLabel?: string;
   /** Auto-rotate interval in ms (default 8000) */
   intervalMs?: number;
-}
-
-function shuffleArray<T>(arr: T[]): T[] {
-  const shuffled = [...arr];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
 }
 
 interface CompanyEntry {
@@ -44,36 +35,41 @@ interface CompanyEntry {
   quote: CarouselQuote;
 }
 
-function buildCompanyQuotes(quotes: CarouselQuote[], order?: string[]): CompanyEntry[] {
+// One entry per org, first quote wins; entries keep the order of the quotes array.
+function buildCompanyQuotes(quotes: CarouselQuote[]): CompanyEntry[] {
   const byCompany = new Map<string, CarouselQuote[]>();
   for (const q of quotes) {
     const list = byCompany.get(q.org);
     if (list) list.push(q);
     else byCompany.set(q.org, [q]);
   }
-  const entries = [...byCompany.entries()].map(([org, pool]) => ({
+  return [...byCompany.entries()].map(([org, pool]) => ({
     org,
-    quote: pool[Math.floor(Math.random() * pool.length)],
+    quote: pool[0],
   }));
-  if (order?.length) {
-    const orderSet = new Set(order);
-    const pinned = order
-      .map((c) => entries.find((e) => e.org === c))
-      .filter(Boolean) as CompanyEntry[];
-    const rest = shuffleArray(entries.filter((e) => !orderSet.has(e.org)));
-    return [...pinned, ...rest];
-  }
-  return shuffleArray(entries);
 }
 
-function QuoteBlock({ quote }: { quote: CarouselQuote }) {
+// Warm a logo into the browser cache so it paints instantly when its quote
+// becomes active. Called on hover/focus of an org button — i.e. only on user
+// intent, so the initial page load still fetches just the visible logo.
+function prefetchLogo(logo?: string) {
+  if (!logo || typeof window === 'undefined') return;
+  const img = new window.Image();
+  img.src = `/logos/${logo}`;
+}
+
+function QuoteBlock({ quote, renderLogo }: { quote: CarouselQuote; renderLogo: boolean }) {
   return (
     <blockquote className="w-full">
       <p className="text-sm lg:text-base leading-relaxed text-muted-foreground italic">
         &ldquo;{highlightBrand(quote.text)}&rdquo;
       </p>
       <footer className="mt-3 flex items-center gap-3">
-        <CompanyLogo org={quote.org} logo={quote.logo} />
+        {renderLogo ? (
+          <CompanyLogo org={quote.org} logo={quote.logo} />
+        ) : (
+          <div aria-hidden="true" className="size-10 shrink-0" />
+        )}
         <div className="h-12 w-0.5 bg-brand" />
         <div className="text-sm">
           {quote.link ? (
@@ -100,21 +96,18 @@ export function QuoteCarousel({
   quotes,
   overrides = {},
   moreHref,
+  moreLabel,
   intervalMs = 8_000,
 }: QuoteCarouselProps) {
-  const { order, labels = {} } = overrides;
+  const { labels = {} } = overrides;
 
-  const [entries, setEntries] = useState<CompanyEntry[]>([]);
+  // Keep the first render deterministic so SSR reserves the carousel's full height before hydration.
+  const entries = useMemo(() => buildCompanyQuotes(quotes), [quotes]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [fading, setFading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hovering = useRef(false);
-
-  // Build shuffled org order on mount (client only)
-  useEffect(() => {
-    setEntries(buildCompanyQuotes(quotes, order));
-  }, [quotes, order]);
 
   const advance = useCallback(() => {
     if (hovering.current) return;
@@ -156,8 +149,6 @@ export function QuoteCarousel({
     [advance, intervalMs, entries, activeIndex],
   );
 
-  if (entries.length === 0) return null;
-
   return (
     <div
       className="flex flex-col gap-4"
@@ -175,6 +166,8 @@ export function QuoteCarousel({
             key={e.org}
             type="button"
             onClick={() => goTo(i)}
+            onMouseEnter={() => prefetchLogo(e.quote.logo)}
+            onFocus={() => prefetchLogo(e.quote.logo)}
             className={`text-xs font-semibold tracking-wide uppercase transition-colors duration-200 ${
               i === activeIndex ? 'text-foreground' : 'text-[#808488] hover:text-muted-foreground'
             }`}
@@ -198,20 +191,21 @@ export function QuoteCarousel({
               }`}
               aria-hidden={!isActive}
             >
-              <QuoteBlock quote={e.quote} />
+              <QuoteBlock quote={e.quote} renderLogo={isActive} />
             </div>
           );
         })}
       </div>
 
       {moreHref && (
-        <div className="flex justify-end">
+        <div className="flex justify-end" data-testid="quote-carousel-more-row">
           <Link
             href={moreHref}
+            prefetch={false}
             className="text-xs font-bold text-brand hover:underline"
             onClick={() => track('quote_carousel_see_more_clicked')}
           >
-            See more supporters &rarr;
+            {moreLabel ?? 'See more supporters →'}
           </Link>
         </div>
       )}

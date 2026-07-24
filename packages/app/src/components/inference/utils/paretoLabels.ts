@@ -46,8 +46,8 @@ export const parseLabelComponents = (label: string): string[] => {
   const parts = label.split('+');
   return parts.map((p) => {
     // Strip the leading "NxNNN" multiplier (e.g., "1x" or "3x")
-    const match = p.match(/^\d+x(.+)$/u);
-    return match ? match[1] : p;
+    const match = p.match(/^\d+x(?<strategy>.+)$/u);
+    return match?.groups?.strategy ?? p;
   });
 };
 
@@ -148,11 +148,12 @@ export const computeGradientStops = (
         const blendFraction = 0.05 + similarity * 0.15;
         const blendSize = Math.min(gap, nextGap) * blendFraction;
 
-        // Current color runs solid until just before boundary
-        stops.push({ offset: toOffset(leftPx), color: curr.color });
-        stops.push({ offset: toOffset(rightPx - blendSize), color: curr.color });
-        // Blend zone
-        stops.push({ offset: toOffset(rightPx + blendSize), color: next.color });
+        // Current color runs solid until just before boundary, then blend zone
+        stops.push(
+          { offset: toOffset(leftPx), color: curr.color },
+          { offset: toOffset(rightPx - blendSize), color: curr.color },
+          { offset: toOffset(rightPx + blendSize), color: next.color },
+        );
       } else if (i === 0) {
         // Same label, just add the territory start
         stops.push({ offset: toOffset(leftPx), color: curr.color });

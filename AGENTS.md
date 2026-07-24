@@ -2,6 +2,14 @@
 
 For detailed subsystem docs, see [docs/index.md](./docs/index.md).
 
+> **PR and GitHub-issue titles & descriptions must be bilingual — include a Simplified Chinese version in addition to English.** Title format: `<English title> / <中文标题>` (keep bracket prefixes at the front untranslated). In the PR/issue body, follow the English content with a `## 中文说明` section mirroring the summary; don't translate code blocks, logs, or stack traces — summarize around them. **Commit messages must include a Chinese translation too**: keep the subject line in English (conventional-commit style) and include the Chinese translation of the subject and key points in the commit body (e.g. a trailing `中文：<translation>` paragraph); squash-merge commits inherit the bilingual PR title, which satisfies the subject requirement automatically.
+
+> **Translation quality bar:** write natural technical Chinese, not word-for-word machine translation (style reference: [`vllm-project/vllm-ascend` `README.zh.md`](https://github.com/vllm-project/vllm-ascend/blob/main/README.zh.md)). Preserve product names, hardware SKUs, framework/library names (Next.js, React Query, D3.js, Tailwind ...), flags, and code identifiers in English. Use parenthetical English clarification for acronyms on first use. Preferred terms: benchmark 基准测试, dashboard 仪表板, chart 图表, config 配置, throughput 吞吐量, latency 延迟, single-node/multi-node 单节点/多节点, evaluation 评估, artifact 产物.
+
+> **The website itself is bilingual too — every indexable page must ship a Simplified Chinese sibling under `/zh`.** See [Chinese Website Pages](#chinese-website-pages-zh--mandatory-for-all-indexable-surfaces) below; a new page, tab, or blog post without its `/zh` version is 🔴 BLOCKING on PR review.
+
+> **Cursor Bugbot re-reviews on EVERY push** — each new commit to a PR can surface new inline comments, including on code an earlier review passed. Before merging, loop until convergence: wait for checks (the Bugbot review is one of the PR checks) → fetch unresolved review comments → fix or answer each with a reply → push → repeat until a push produces no new findings. Branch rules require all review threads resolved before merge, so resolve addressed threads as you go.
+
 ## Project Overview
 
 InferenceX App — Next.js 16 dashboard for ML inference benchmark data. DB-backed with Neon PostgreSQL, React Query for data fetching, D3.js for charts.
@@ -64,8 +72,9 @@ API routes (`packages/app/src/app/api/v1/`):
 - `evaluations` — raw `EvalRow[]`
 - `server-log` — retrieve benchmark runtime logs
 - `invalidate` — invalidate API cache (admin)
+- `tco-feed?model=dsv4&workloads=1024x1024,8192x1024&tiers=30,50,75,100&format=csv` — per-hardware Pareto-frontier output-throughput reads at fixed interactivity tiers, for external spreadsheet TCO models (Excel Power Query); `view=scores` (optional `weights`, `workload_weights`, `alpha`) folds them into one tier-weighted, workload-blended, output-equivalent score per hardware
 
-**API routes return raw DB data** — no presentation logic. Frontend handles all transformations.
+**API routes return raw DB data** — no presentation logic. Frontend handles all transformations. Sole exception: `tco-feed`, which runs the calculator's frontier interpolation server-side because its consumers (spreadsheets) cannot execute the TS transforms; its assumptions (tier weights, workload mix, α) enter only as explicit query params with documented defaults, so a published sheet's URL fully records its methodology.
 
 Static content routes (no DB):
 
@@ -117,6 +126,68 @@ When adding a chart feature (toggle, label, overlay, filter, export, share-link 
 
 If the feature genuinely cannot apply to overlays (e.g., it depends on data only ingested for official runs), say so explicitly in code comments and the PR description. Default to "must support overlays."
 
+## Chinese Website Pages (/zh) — Mandatory for All Indexable Surfaces
+
+The site ships a hand-authored Simplified Chinese sibling for every indexable page under the `/zh` route prefix (`/` ↔ `/zh`, `/about` ↔ `/zh/about`, `/blog/<slug>` ↔ `/zh/blog/<slug>`, …) so the site is crawled and indexed in Chinese as well as English. There is no i18n framework — each `/zh` page is a real page that reuses the shared helpers in `packages/app/src/lib/i18n.ts` (`zhAlternates`, `enAlternates`, `ZH_OG_LOCALE`, `ZH_MIRRORED_ROUTES`) and `src/lib/tab-meta-zh.ts`. The translation quality bar above applies to all site content.
+
+**Every new indexable page, dashboard tab, or blog post MUST ship its Chinese version in the same PR:**
+
+1. **New page** → create `packages/app/src/app/zh/<route>/page.tsx` with fully translated content and metadata. Metadata: `alternates: zhAlternates('<en-path>')` plus `openGraph.locale: ZH_OG_LOCALE`. Switch the English page's `alternates` to `enAlternates('<en-path>')` so both sides carry bidirectional hreflang. Register the route in `ZH_MIRRORED_ROUTES` (`src/lib/i18n.ts`) so the header nav and EN↔中文 toggle link to it, and add it to the sitemap via `localizedPair()` in `src/app/sitemap.ts`.
+2. **New dashboard tab** → add the tab to `ZH_TAB_KEYS`, `TAB_META_ZH`, `TAB_INTRO_ZH`, and `TAB_LABELS_ZH` in `src/lib/tab-meta-zh.ts`, then create `src/app/zh/(dashboard)/<tab>/page.tsx` mirroring the English page with `tabMetadataZh('<tab>')` and a `<ZhTabIntro tab="<tab>" />` block above the chart; the chart's own UI strings must follow rule 5. `tab-meta-zh.test.ts` enforces dictionary completeness.
+3. **New blog post** → the translation `packages/app/content/blog/zh/<same-filename>.mdx` is REQUIRED in the same PR. Translate frontmatter `title`/`subtitle` and the body; keep `date`, `publishDate`, `modifiedDate`, `tags`, and the filename/slug identical (English and Chinese posts pair by filename; visibility gating always follows the English post's `publishDate`). Rewrite internal `/blog/<slug>` links to `/zh/blog/<slug>`; never alter numbers, code blocks, or `<Figure>`/`<JsonLd>` structure. The `/zh/blog` listing, hreflang, and sitemap pick the file up automatically.
+4. **Editing an existing English page or post** → update its Chinese sibling in the same PR. Content drift between languages is a 🔴 BLOCKING review issue.
+5. **ALL user-visible UI strings MUST have a Chinese equivalent** — no carve-outs for "chart internals" or "option labels". This includes: headers/footers, card titles/descriptions, control and filter labels, buttons, toggles (Log Scale, Optimal Only, …), nudges, dropdown OPTION display names (Y-axis metric names, token types, scale modes), searchable-select placeholders ("Search…"), table column headers and action buttons ("Prompts"), modal/drawer chrome, legend footnotes, and empty/loading/error messages. Mechanism: client components call `useLocale()` (`src/lib/use-locale.ts`) and read from a component-local `STRINGS = { en, zh }` dict; server components take an optional `locale` prop passed from the /zh page; registry-defined display names (e.g. `Y_AXIS_METRICS`, legend toggle configs) carry a `labelZh` field resolved through a locale-aware label helper at render time. The `en` values must keep the exact original strings so English pages stay byte-identical.
+6. **What stays English** (only these): brand/product names, hardware SKUs, model/framework/precision names, units (tok/s/user, GB/s, $/M tok), code identifiers and flags — per the translation quality bar — plus DB-stored _content_ (benchmark rows, dataset conversation text, run logs), which is data, not UI.
+7. **Compare slug narrative sync**: the per-slug compare pages are mirrored at `/zh/compare/[slug]` and `/zh/compare-per-dollar/[slug]`; their Chinese prose templates live in `src/lib/compare-ssr-zh.ts`, a 1:1 port of the English templates in `compare-ssr.ts`. The variant compare pages (`/zh/compare-precision/[slug]` and `/zh/compare-spec-decode/[slug]`) have their Chinese templates in `src/lib/compare-variant-ssr-zh.ts`, porting `compare-variant-ssr.ts`. Any PR that changes the English narrative templates MUST update the zh port in the same commit.
+8. **Every route gets a /zh sibling — including hidden/feature-gated ones** (`/datasets`, `/ai-chart`, `/current-inferencex-image`, `/feedback`, agentic detail pages). Noindex routes keep their noindex on both sides. The only exceptions: `feed.xml`/`llms.txt` (single-language machine feeds) and per-post OG images (Chinese posts reuse the English post's OG image — the OG renderer's font has no CJK glyphs).
+
+## Chart Interpolation — TS and Python Helpers MUST Stay in Sync
+
+The blog-writing workflow (`.claude/skills/write-inferencex-blog/`) ships a Python port of the chart's interpolation algorithm at `.claude/skills/write-inferencex-blog/iso_interactivity.py`. It exists so iso-interactivity tables in blog posts produce **exactly the same numbers** readers see when they hover the rendered chart. Linear-interpolation shell scripts will produce visibly different values — Cursor Bugbot has flagged this on prior posts.
+
+The Python helper is a 1:1 port of these three TypeScript functions:
+
+- `paretoFrontUpperLeft` — `packages/app/src/components/calculator/interpolation.ts`
+- `monotoneSlopes` (Steffen 1990, matches `d3.curveMonotoneX`) — same file
+- `hermiteInterpolate` — same file
+
+Plus the wrapper `interpolateMetricAtInteractivity` in `packages/app/src/components/inference/hooks/useInterpolatedTrendData.ts` which composes them with the "no extrapolation → return null" rule.
+
+**Rule: any PR that changes any of those four TypeScript functions MUST also update `.claude/skills/write-inferencex-blog/iso_interactivity.py` in the same commit.** Drift between the TS and Python implementations means the blog tables will silently diverge from the live chart on the very next post — readers will see one number in the table and a different one in the chart they click through to. This includes:
+
+- Changing the Pareto frontier definition (upper-left → lower-left, or adding tie-breaking rules)
+- Switching from Steffen's monotone slopes to a different spline construction (Fritsch-Carlson, natural cubic, etc.)
+- Loosening or tightening the extrapolation rule (currently: return `null` outside `[min x, max x]`)
+- Adjusting the Y-clamp behavior that prevents spline overshoot
+
+The Python file has a header comment explaining the pipeline and a `_cli()` entrypoint for stdin/stdout JSON usage. When you update it, keep the structure 1:1 with the TS so future readers can diff the two files line by line. Run the helper against a known dataset and confirm the outputs match what the chart renders before merging.
+
+## Model Parameter Counts (verified)
+
+Authoritative total / active parameter counts for every model in the dashboard. Use these when updating `MODEL_CONFIG` labels in `packages/app/src/lib/data-mappings.ts` or any blog/docs prose. Verify against the HF model card before adding a new model — point releases (e.g. K2 → K2.5, GLM-4.5 → GLM-5) often keep or change sizes in non-obvious ways.
+
+| Model                  | Total | Active      | HF ID                               | Source                             |
+| ---------------------- | ----- | ----------- | ----------------------------------- | ---------------------------------- |
+| DeepSeek-R1-0528       | 671B  | 37B         | `deepseek-ai/DeepSeek-R1-0528`      | HF model card                      |
+| DeepSeek-V4-Pro        | 1.6T  | 49B         | `deepseek-ai/DeepSeek-V4-Pro`       | HF model card                      |
+| Kimi-K2.5              | 1T    | 32B         | `moonshotai/Kimi-K2.5`              | HF model card                      |
+| Kimi-K2.6              | 1T    | 32B         | `moonshotai/Kimi-K2.6`              | HF model card                      |
+| Kimi-K2.7-Code         | 1T    | 32B         | `moonshotai/Kimi-K2.7-Code`         | HF model card                      |
+| Qwen3.5-397B-A17B      | 397B  | 17B         | `Qwen/Qwen3.5-397B-A17B`            | HF model card                      |
+| GLM-5                  | 744B  | 40B         | `zai-org/GLM-5`                     | HF model card                      |
+| GLM-5.1                | 744B  | 40B         | `zai-org/GLM-5.1-FP8`               | HF model card (same base as GLM-5) |
+| MiniMax-M2.5           | 230B  | 10B         | `MiniMaxAI/MiniMax-M2.5`            | HF model card                      |
+| MiniMax-M2.7           | 230B  | 10B         | `MiniMaxAI/MiniMax-M2.7`            | NVIDIA M2.7 blog                   |
+| gpt-oss-120b           | 120B  | 5.1B        | `openai/gpt-oss-120b`               | HF model card                      |
+| Llama-3.3-70B-Instruct | 70B   | 70B (dense) | `meta-llama/Llama-3.3-70B-Instruct` | HF model card                      |
+
+**Common mislabel traps** (have all bitten this repo at least once — do not repeat):
+
+- **GLM-5 ≠ 355B.** 355B is GLM-4.5. GLM-5 jumped to 744B / 40B active (256-expert MoE with DSA).
+- **MiniMax-M2.5/M2.7 ≠ 456B.** 456B is the older MiniMax-Text-01 / M1 (32 large experts). The M2 series is a different architecture: 230B / 10B active, 256 small experts.
+- **DeepSeek-R1 is 671B, not 685B.** HF metadata shows 685B because the bundled MTP head adds ~14B; the core MoE is 671B / 37B active.
+- **Kimi K2.5, K2.6, and K2.7-Code are post-training refinements**, not new pre-trained sizes. Same 1T / 32B / 384-expert backbone as the original K2. K2.7-Code is a coding-focused refinement of the same backbone.
+
 ## Common Development Tasks
 
 ### Modify chart appearance/behavior
@@ -146,7 +217,8 @@ If the feature genuinely cannot apply to overlays (e.g., it depends on data only
 
 1. Create `packages/app/content/blog/<slug>.mdx` with frontmatter: `title`, `subtitle`, `date` (required), `tags`, `modifiedDate` (optional)
 2. Write content using Markdown + custom MDX components (`Figure`, `Blur`)
-3. No code changes needed — the post automatically appears in the blog list, sitemap, RSS feed, llms.txt, and gets a generated OG image
+3. Create the Simplified Chinese translation at `packages/app/content/blog/zh/<slug>.mdx` (**required** — see [Chinese Website Pages](#chinese-website-pages-zh--mandatory-for-all-indexable-surfaces))
+4. No code changes needed — the post automatically appears in the blog list, sitemap, RSS feed, llms.txt, and gets a generated OG image; the zh file appears on `/zh/blog` with hreflang pairing
 
 See [Blog](./docs/blog.md) for content format, available MDX components, and design details.
 
@@ -171,16 +243,17 @@ See [Blog](./docs/blog.md) for content format, available MDX components, and des
 2. Create a per-section context provider (see `InferenceContext.tsx`, `EvaluationContext.tsx` for patterns)
 3. Use `ChartLegend` with `variant="sidebar"`, sorted by `HW_REGISTRY` sort order, default expanded
 4. Analytics: all interactive elements use `track()` with `{tabname}_` prefix
+5. Create the Chinese sibling: extend `src/lib/tab-meta-zh.ts` dictionaries and add `src/app/zh/(dashboard)/<tab>/page.tsx` (see [Chinese Website Pages](#chinese-website-pages-zh--mandatory-for-all-indexable-surfaces))
 
 ### Bumping dependencies
 
 Workflow for a periodic dep bump. Branch: `chore/bump-deps-YYYY-MM-DD`. Commit each step separately so failures are easy to bisect.
 
-1. **Bump versions**: `pnpm taze -I -r latest` (interactive, all workspaces). Approve what you want, skip what you don't.
+1. **Bump versions**: `pnpm taze -I -r latest` (interactive, all workspaces). Approve what you want, skip what you don't. **Never let taze write the `pnpm-workspace.yaml` `overrides` block.** taze will propose bumping those entries, but the overrides are security pins driven **solely by `pnpm security`** (step 3) — bumping them here would float them off the lowest-patched-version rule. In interactive mode, deselect them; for a non-interactive `taze -w`, restore them afterward with `git checkout <base-branch> -- pnpm-workspace.yaml` (taze only touches the `overrides` in that file, so this leaves `packages`/`catalog`/`allowBuilds` intact).
 2. **Resolve install errors**:
    - `ERR_PNPM_IGNORED_BUILDS` after a pnpm major bump means new `allowBuilds` entries in `pnpm-workspace.yaml` were left as placeholder strings — set them to `true` (or `false` if you don't want the build script to run).
    - pnpm 11 moved `pnpm.overrides` from `package.json` to `pnpm-workspace.yaml`. Overrides left in `package.json` are silently ignored. Migrate them.
-3. **Audit security**: `pnpm security` (runs `pnpm audit && audit-ci`). For each remaining vulnerability, add a targeted override in `pnpm-workspace.yaml`:
+3. **Audit security**: `pnpm security` (runs `pnpm audit && audit-ci`). This is the **only** step that edits the `pnpm-workspace.yaml` `overrides` block (step 1's bump must leave it untouched). For each remaining vulnerability, add a targeted override in `pnpm-workspace.yaml`:
 
    ```yaml
    overrides:
@@ -215,8 +288,12 @@ Detailed design rationale (the "why" and "how", not the "what") lives in [docs/]
 
 ### `@claude` (`.github/workflows/claude.yml`)
 
-All Claude AI workflows are dispatched from a single trigger word `@claude`. The next word selects the mode:
+Three jobs: a lightweight Haiku **`route`** classifier runs on any `@claude` mention in an issue/comment and emits a `profile`; its output gates **`implement`** or **`review`**. (The `review` job also triggers directly on PR open/sync, with no comment to route.)
 
-- `@claude` (or `@claude <anything>`) — implementation with Playwright MCP. Triggered by mentioning in issues/comments. Full code implementation + browser testing. Creates `claude/issue-{N}-*` branches. Must verify charts render real data (no "No data available").
-- `@claude chrome` — implementation with Chrome DevTools MCP instead of Playwright. Preferred when you need deeper debugging (network requests, console messages, JS evaluation).
-- `@claude review` — code review only. Also auto-runs on PR open/sync. Flags: bugs, security, breaking changes, missing tests (🔴 BLOCKING), low-quality tests (🔴 BLOCKING). Ignores: style, naming, docs.
+- `@claude <anything>` — `route` picks a **profile** (`ui` / `code` / `docs` / `question` / `review`) and, for implement profiles, a browser (`playwright` / `chrome` / `none`).
+  - **implement** job (`ui` / `code` / `docs` / `question`): provisions only what's needed — dev server, Playwright browser, and Cypress binary install **on demand** only for browser/UI work, so docs/DB/backend/question tasks stay fast. `ui` gets full browser verification (render real data, check the `?unofficialrun=` overlay, add `track()` + tests, pass `pnpm test:e2e`); the rest get scoped checks. Creates `claude/issue-{N}-*` branches and can push.
+  - **review** job (`review` profile, or any PR open/sync): a **read-only**, **verifying** review. It checks out the PR head, starts a local dev server backed by the real read-only DB, and uses the **Playwright MCP** on `http://localhost:3000` to confirm the changed UI actually works (renders real data, interactions behave, no console errors). It does **not** re-run the test suite — `typecheck`/`lint`/`test:unit` and the fixtures-based e2e are already covered by the dedicated `tests-*`/`lint` workflows; the review reads their status and folds failures into the review as 🔴 BLOCKING — plus the static diff review (bugs, security, missing tests). Never edits or pushes. A review-phrased ask in **any** wording (e.g. "@claude take a look at this PR") routes here, not just the exact `@claude review`. Prompt: `.github/claude/review-prompt.md`.
+- **Explicit overrides** (skip the classifier): `@claude review` → review; `@claude chrome` → Chrome DevTools MCP; `@claude frontend` → full Playwright + dev server; `@claude general` (or `lite`) → lean no-browser. If the router guesses wrong, re-run with the override.
+- `implement` and `review` share a `claude-<PR/issue number>` concurrency group, so reviews and implementation on the same PR serialize instead of clobbering each other.
+
+The model is set once via the workflow-level `CLAUDE_MODEL` env (`claude-opus-4-8`); the router uses `CLAUDE_ROUTER_MODEL` (`claude-haiku-4-5`).

@@ -32,15 +32,14 @@ export async function ingestEvalRow(
   const [row] = await sql<{ inserted: boolean; id: number }[]>`
     insert into eval_results (
       workflow_run_id, config_id, task, date,
-      isl, osl, conc, lm_eval_version, metrics, techniques
+      isl, osl, conc, lm_eval_version, metrics
     ) values (
       ${workflowRunId}, ${configId}, ${p.task}, ${date},
       ${p.isl}, ${p.osl}, ${p.conc}, ${p.lmEvalVersion},
-      ${sql.json(p.metrics)}, ${sql.json(p.techniques)}
+      ${sql.json(p.metrics)}
     )
-    on conflict (workflow_run_id, config_id, task, isl, osl, conc, techniques)
-    do update set
-      metrics = excluded.metrics
+    on conflict (workflow_run_id, config_id, task, isl, osl, conc)
+    do update set metrics = excluded.metrics
     returning id, (xmax = 0) as inserted
   `;
   return { outcome: row.inserted ? 'new' : 'dup', id: row.id };

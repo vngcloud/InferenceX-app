@@ -1,20 +1,92 @@
 'use client';
 
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronLeft, ChevronRight, Search, Share2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { EvaluationChartData } from '@/components/evaluation/types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useEvalSamples } from '@/hooks/api/use-eval-samples';
 import { track } from '@/lib/analytics';
 import type { EvalSamplesFilter, EvalSamplesLiveContext } from '@/lib/api';
+import { buildShareUrl } from '@/lib/url-state';
+import { useLocale } from '@/lib/use-locale';
 
 const PAGE_SIZE = 50;
+
+const STRINGS = {
+  en: {
+    score: 'score',
+    filterAll: 'All',
+    filterPassed: 'Passed',
+    filterFailed: 'Failed',
+    searchPlaceholder: 'Search prompt / response...',
+    searchAriaLabel: 'Search samples on this page',
+    liveUnavailable:
+      "Per-sample data isn't available for this unofficial run — the workflow URL is missing or malformed.",
+    unofficialNotice:
+      'Unofficial run — samples are streamed live from the workflow artifact. Loads may take a few seconds.',
+    loading: 'Loading samples…',
+    loadError: (err: string) => `Failed to load samples: ${err}`,
+    noData:
+      'No per-sample data available for this run yet. (Older runs may not have been re-ingested with samples enabled.)',
+    noMatch: (query: string) => `No samples on this page match “${query}”.`,
+    noPrompt: '(no prompt)',
+    prompt: 'Prompt',
+    fullModelOutput: 'Full model output',
+    target: 'Target',
+    extractedAnswer: 'Extracted answer',
+    modelResponse: 'Model response',
+    metrics: 'Metrics',
+    empty: '(empty)',
+    fewShotExamples: (count: number) => `Few-shot examples (${count})`,
+    exampleQuestion: (n: number) => `Example ${n} · Question`,
+    exampleAnswer: (n: number) => `Example ${n} · Answer`,
+    pagination: (start: number, end: number, total: number) =>
+      total === 0 ? '0 of 0' : `${start}–${end} of ${total}`,
+    prevPage: 'Previous page',
+    nextPage: 'Next page',
+    shareSample: 'Share',
+    copied: 'Copied',
+  },
+  zh: {
+    score: '得分',
+    filterAll: '全部',
+    filterPassed: '通过',
+    filterFailed: '未通过',
+    searchPlaceholder: '搜索提示词/响应…',
+    searchAriaLabel: '在当前页面中搜索样本',
+    liveUnavailable: '此非官方运行的逐样本数据不可用——工作流 URL 缺失或格式错误。',
+    unofficialNotice: '非官方运行——样本从工作流产物实时加载，可能需要几秒钟。',
+    loading: '正在加载样本…',
+    loadError: (err: string) => `加载样本失败：${err}`,
+    noData: '此次运行暂无逐样本数据。（较早的运行可能未在启用样本功能后重新入库。）',
+    noMatch: (query: string) => `当前页面无匹配“${query}”的样本。`,
+    noPrompt: '（无提示词）',
+    prompt: '提示词',
+    fullModelOutput: '完整模型输出',
+    target: '目标答案',
+    extractedAnswer: '提取的答案',
+    modelResponse: '模型响应',
+    metrics: '指标',
+    empty: '（空）',
+    fewShotExamples: (count: number) => `Few-shot 示例（${count}）`,
+    exampleQuestion: (n: number) => `示例 ${n} · 问题`,
+    exampleAnswer: (n: number) => `示例 ${n} · 答案`,
+    pagination: (start: number, end: number, total: number) =>
+      total === 0 ? '共 0 条' : `第 ${start}–${end} 条，共 ${total} 条`,
+    prevPage: '上一页',
+    nextPage: '下一页',
+    shareSample: '分享',
+    copied: '已复制',
+  },
+} as const;
 
 interface EvalSamplesDrawerProps {
   /** The selected row from the EvaluationTable, or null when closed. */
   row: EvaluationChartData | null;
   onClose: () => void;
+  /** Sample selected by a shared URL. */
+  initialDocId?: number | null;
 }
 
 /**
@@ -26,12 +98,21 @@ interface EvalSamplesDrawerProps {
  * Inspired by the vLLM eval dashboard PoC
  * (credit: @khluu, @simon-mo, @robertgshaw2-redhat).
  */
-export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerProps) {
+export default function EvalSamplesDrawer({
+  row,
+  onClose,
+  initialDocId = null,
+}: EvalSamplesDrawerProps) {
   const open = row !== null;
+  const locale = useLocale();
+  const t = STRINGS[locale];
   const [filter, setFilter] = useState<EvalSamplesFilter>('all');
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [requestedDocId, setRequestedDocId] = useState<number | null>(initialDocId);
+  const [copiedTarget, setCopiedTarget] = useState<number | 'drawer' | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   // Reset transient state whenever a new row is opened.
   useEffect(() => {
@@ -40,7 +121,9 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
     setPage(0);
     setSearch('');
     setExpanded(new Set());
-  }, [row?.evalResultId, open]);
+    setRequestedDocId(initialDocId);
+    setCopiedTarget(null);
+  }, [row?.evalResultId, open, initialDocId]);
 
   // Build a live-fetch context for unofficial runs from the row's identifying
   // fields. The hook ignores this when `evalResultId > 0` (DB-backed path).
@@ -67,6 +150,7 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
     filter,
     offset: page * PAGE_SIZE,
     limit: PAGE_SIZE,
+    docId: requestedDocId,
   });
 
   // Client-side substring filter on the page slice — server-side full-text
@@ -89,6 +173,19 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
 
+  useEffect(() => {
+    if (requestedDocId === null || !data || data.offset === undefined) return;
+    if (!data.samples.some((sample) => sample.docId === requestedDocId)) return;
+    setPage(Math.floor(data.offset / PAGE_SIZE));
+    setExpanded(new Set([requestedDocId]));
+    requestAnimationFrame(() => {
+      bodyRef.current
+        ?.querySelector<HTMLElement>(`[data-eval-sample-id="${requestedDocId}"]`)
+        ?.scrollIntoView({ block: 'center' });
+    });
+    setRequestedDocId(null);
+  }, [data, requestedDocId]);
+
   const handleFilterChange = (next: EvalSamplesFilter) => {
     setFilter(next);
     setPage(0);
@@ -108,6 +205,33 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
   const handlePageChange = (delta: 1 | -1) => {
     setPage((p) => Math.max(0, Math.min(totalPages - 1, p + delta)));
     track('evaluation_samples_paged', { direction: delta > 0 ? 'next' : 'prev' });
+  };
+
+  const handleShare = async (docId?: number) => {
+    if (!row || row.evalResultId <= 0) return;
+    const url = new URL(buildShareUrl());
+    url.searchParams.set('eval', String(row.evalResultId));
+    if (docId === undefined) url.searchParams.delete('sample');
+    else url.searchParams.set('sample', String(docId));
+
+    try {
+      await navigator.clipboard.writeText(url.toString());
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = url.toString();
+      document.body.append(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      textArea.remove();
+    }
+
+    const target = docId ?? 'drawer';
+    setCopiedTarget(target);
+    setTimeout(() => setCopiedTarget((current) => (current === target ? null : current)), 2000);
+    track(docId === undefined ? 'evaluation_drawer_link_copied' : 'evaluation_sample_link_copied', {
+      eval_result_id: row.evalResultId,
+      ...(docId === undefined ? {} : { doc_id: docId }),
+    });
   };
 
   const isUnofficial = row !== null && row.evalResultId <= 0;
@@ -154,31 +278,50 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
               <div className="mt-1 text-xs text-muted-foreground">
                 <span className="uppercase">{row.benchmark}</span>
                 {' · '}
-                <span>score {(row.score * 100).toFixed(1)}%</span>
+                <span>
+                  {t.score} {(row.score * 100).toFixed(1)}%
+                </span>
                 {' · '}
                 <span>{row.date}</span>
               </div>
             )}
           </div>
+          {row && row.evalResultId > 0 && (
+            <button
+              type="button"
+              onClick={() => handleShare()}
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={t.shareSample}
+              title={t.shareSample}
+              data-testid="eval-drawer-share-button"
+            >
+              {copiedTarget === 'drawer' ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Share2 className="size-3.5" />
+              )}
+              {copiedTarget === 'drawer' ? t.copied : t.shareSample}
+            </button>
+          )}
         </div>
 
         {/* Filter chips + search */}
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
           <FilterChip
-            label="All"
+            label={t.filterAll}
             count={passedTotal + failedTotal}
             active={filter === 'all'}
             onClick={() => handleFilterChange('all')}
           />
           <FilterChip
-            label="Passed"
+            label={t.filterPassed}
             count={passedTotal}
             active={filter === 'passed'}
             onClick={() => handleFilterChange('passed')}
             tone="passed"
           />
           <FilterChip
-            label="Failed"
+            label={t.filterFailed}
             count={failedTotal}
             active={filter === 'failed'}
             onClick={() => handleFilterChange('failed')}
@@ -190,54 +333,48 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search prompt / response..."
+              placeholder={t.searchPlaceholder}
               className="h-7 w-full rounded-md border border-border bg-transparent pl-8 pr-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              aria-label="Search samples on this page"
+              aria-label={t.searchAriaLabel}
             />
           </div>
         </div>
 
         {/* Body */}
-        <div className="overflow-auto px-4 py-3">
+        <div ref={bodyRef} className="overflow-auto px-4 py-3">
           {liveUnavailable && (
             <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-              Per-sample data isn&apos;t available for this unofficial run — the workflow URL is
-              missing or malformed.
+              {t.liveUnavailable}
             </p>
           )}
           {!liveUnavailable && isUnofficial && (
             <p className="mb-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-1.5 text-[11px] text-primary">
-              Unofficial run — samples are streamed live from the workflow artifact. Loads may take
-              a few seconds.
+              {t.unofficialNotice}
             </p>
           )}
           {!liveUnavailable && isLoading && (
-            <p className="py-8 text-center text-sm text-muted-foreground">Loading samples…</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">{t.loading}</p>
           )}
           {!liveUnavailable && isError && (
             <p className="py-8 text-center text-sm text-destructive">
-              Failed to load samples: {String(error)}
+              {t.loadError(String(error))}
             </p>
           )}
           {!liveUnavailable && !isLoading && !isError && total === 0 && (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No per-sample data available for this run yet. (Older runs may not have been
-              re-ingested with samples enabled.)
-            </p>
+            <p className="py-8 text-center text-sm text-muted-foreground">{t.noData}</p>
           )}
           {!liveUnavailable &&
             !isLoading &&
             !isError &&
             filteredSamples.length === 0 &&
             total > 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                No samples on this page match &ldquo;{search}&rdquo;.
-              </p>
+              <p className="py-8 text-center text-sm text-muted-foreground">{t.noMatch(search)}</p>
             )}
           <ul className="space-y-2">
             {filteredSamples.map((s) => (
               <li
                 key={s.docId}
+                data-eval-sample-id={s.docId}
                 className="rounded-md border border-border/70 bg-card/30 transition-colors hover:bg-card/50"
               >
                 <button
@@ -250,33 +387,53 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
                   <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
                     #{s.docId}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-xs">
-                    {s.prompt ?? '(no prompt)'}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs">{s.prompt ?? t.noPrompt}</span>
                 </button>
                 {expanded.has(s.docId) && (
                   <div className="space-y-2 border-t border-border/50 px-3 py-3 text-xs">
-                    <FewShotBlock demonstrations={s.demonstrations} />
-                    <Block label="Prompt" value={s.prompt} />
+                    <FewShotBlock demonstrations={s.demonstrations} locale={locale} />
+                    <Block label={t.prompt} value={s.prompt} emptyText={t.empty} />
                     {s.rawResponse !== null && s.rawResponse !== s.response ? (
                       <>
-                        <Block label="Full model output" value={s.rawResponse} />
-                        <Block label="Target" value={s.target} />
-                        <Block label="Extracted answer" value={s.response} />
+                        <Block
+                          label={t.fullModelOutput}
+                          value={s.rawResponse}
+                          emptyText={t.empty}
+                        />
+                        <Block label={t.target} value={s.target} emptyText={t.empty} />
+                        <Block label={t.extractedAnswer} value={s.response} emptyText={t.empty} />
                       </>
                     ) : (
                       <>
-                        <Block label="Target" value={s.target} />
-                        <Block label="Model response" value={s.response} />
+                        <Block label={t.target} value={s.target} emptyText={t.empty} />
+                        <Block label={t.modelResponse} value={s.response} emptyText={t.empty} />
                       </>
                     )}
                     {Object.keys(s.metrics).length > 0 && (
                       <Block
-                        label="Metrics"
+                        label={t.metrics}
                         value={Object.entries(s.metrics)
                           .map(([k, v]) => `${k} = ${v}`)
                           .join('\n')}
+                        emptyText={t.empty}
                       />
+                    )}
+                    {row && row.evalResultId > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleShare(s.docId)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        aria-label={t.shareSample}
+                        title={t.shareSample}
+                        data-testid={`eval-sample-share-${s.docId}`}
+                      >
+                        {copiedTarget === s.docId ? (
+                          <Check className="size-3.5" />
+                        ) : (
+                          <Share2 className="size-3.5" />
+                        )}
+                        {copiedTarget === s.docId ? t.copied : t.shareSample}
+                      </button>
                     )}
                   </div>
                 )}
@@ -288,10 +445,11 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
         {/* Footer pagination */}
         <div className="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <span>
-            {total === 0
-              ? '0'
-              : `${safePage * PAGE_SIZE + 1}–${Math.min((safePage + 1) * PAGE_SIZE, total)}`}{' '}
-            of {total}
+            {t.pagination(
+              safePage * PAGE_SIZE + 1,
+              Math.min((safePage + 1) * PAGE_SIZE, total),
+              total,
+            )}
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -299,7 +457,7 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
               onClick={() => handlePageChange(-1)}
               disabled={safePage === 0}
               className="rounded p-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label="Previous page"
+              aria-label={t.prevPage}
             >
               <ChevronLeft className="size-4" />
             </button>
@@ -311,7 +469,7 @@ export default function EvalSamplesDrawer({ row, onClose }: EvalSamplesDrawerPro
               onClick={() => handlePageChange(1)}
               disabled={safePage >= totalPages - 1}
               className="rounded p-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label="Next page"
+              aria-label={t.nextPage}
             >
               <ChevronRight className="size-4" />
             </button>
@@ -338,8 +496,8 @@ interface FilterChipProps {
  */
 function extractRunIdFromUrl(url: string | undefined): string | null {
   if (!url) return null;
-  const m = url.match(/\/actions\/runs\/(\d+)/u);
-  return m ? m[1] : null;
+  const m = url.match(/\/actions\/runs\/(?<runId>\d+)/u);
+  return m?.groups?.runId ?? null;
 }
 
 function FilterChip({ label, count, active, onClick, tone }: FilterChipProps) {
@@ -401,12 +559,15 @@ function PassFailBadge({ passed }: { passed: boolean | null }) {
  */
 function FewShotBlock({
   demonstrations,
+  locale,
 }: {
   demonstrations: { question: string; answer: string }[] | null;
+  locale: 'en' | 'zh';
 }) {
   const [open, setOpen] = useState(true);
   if (!demonstrations || demonstrations.length === 0) return null;
   const demos = demonstrations;
+  const t = STRINGS[locale];
   return (
     <div className="rounded-md border border-primary/40 bg-primary/5 p-2">
       <button
@@ -419,7 +580,7 @@ function FewShotBlock({
           className={`size-3.5 transition-transform ${open ? 'rotate-90' : ''}`}
           aria-hidden="true"
         />
-        Few-shot examples ({demos.length})
+        {t.fewShotExamples(demos.length)}
       </button>
       {open && (
         <div className="mt-2 space-y-2">
@@ -430,13 +591,13 @@ function FewShotBlock({
               className="rounded border border-border/40 bg-muted/30 p-2"
             >
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Example {i + 1} · Question
+                {t.exampleQuestion(i + 1)}
               </div>
               <pre className="mb-2 whitespace-pre-wrap font-mono text-[11px] leading-snug wrap-break-word">
                 {d.question}
               </pre>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Example {i + 1} · Answer
+                {t.exampleAnswer(i + 1)}
               </div>
               <pre className="whitespace-pre-wrap font-mono text-[11px] leading-snug wrap-break-word">
                 {d.answer}
@@ -449,14 +610,22 @@ function FewShotBlock({
   );
 }
 
-function Block({ label, value }: { label: string; value: string | null }) {
+function Block({
+  label,
+  value,
+  emptyText,
+}: {
+  label: string;
+  value: string | null;
+  emptyText: string;
+}) {
   return (
     <div>
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-border/40 bg-muted/30 p-2 font-mono text-[11px] leading-snug wrap-break-word">
-        {value ?? <span className="italic text-muted-foreground">(empty)</span>}
+        {value ?? <span className="italic text-muted-foreground">{emptyText}</span>}
       </pre>
     </div>
   );

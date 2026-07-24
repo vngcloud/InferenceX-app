@@ -1,13 +1,23 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 
+import { OG_IMAGE, SITE_URL } from '@semianalysisai/inferencex-constants';
+
 import {
+  type BlogPostMeta,
+  blogDescription,
+  blogOgImageUrl,
+  buildBlogBreadcrumbJsonLd,
+  buildBlogBreadcrumbJsonLdZh,
+  buildBlogPostingJsonLd,
   extractHeadings,
   getAdjacentPosts,
   getAllPosts,
   getPostBySlug,
   getReadingTime,
+  hasZhTranslation,
   slugify,
+  smartTruncate,
 } from './blog';
 
 const FAKE_MDX = `---
@@ -80,10 +90,43 @@ date: '2025-08-01'
 This post has no publishDate field at all.
 `;
 
+const FAKE_MDX_ZH = `---
+title: '测试文章'
+subtitle: '一个测试副标题'
+date: '2026-01-15'
+tags:
+  - testing
+---
+
+# 测试标题
+
+这是一段中文正文内容。
+`;
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
   return { ...actual, default: { ...actual } };
 });
+
+const isZhPath = (p: string) => p.includes('/zh/');
+
+/**
+ * Mock the content tree with English posts and a zh/ translations subdir.
+ * Directory existence checks return true; file checks consult the maps.
+ */
+function mockLocalizedFiles(en: Record<string, string>, zh: Record<string, string>) {
+  const lookup = (p: string) => {
+    const files = isZhPath(p) ? zh : en;
+    return Object.entries(files).find(([name]) => p.includes(name.replace('.mdx', '')))?.[1];
+  };
+  vi.spyOn(fs, 'existsSync').mockImplementation((filePath) => {
+    const p = String(filePath);
+    if (!p.endsWith('.mdx')) return true;
+    return lookup(p) !== undefined;
+  });
+  vi.spyOn(fs, 'readdirSync').mockReturnValue(Object.keys(en) as any);
+  vi.spyOn(fs, 'readFileSync').mockImplementation((filePath) => lookup(String(filePath)) ?? '');
+}
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -112,6 +155,12 @@ describe('slugify', () => {
   it('passes through already-valid slugs unchanged', () => {
     expect(slugify('hello-world')).toBe('hello-world');
   });
+
+  it('keeps Han characters so Chinese headings get meaningful ids', () => {
+    expect(slugify('性能 分析')).toBe('性能-分析');
+    expect(slugify('GB200 性能对比')).toBe('gb200-性能对比');
+    expect(slugify('（结论）')).toBe('结论');
+  });
 });
 
 describe('getReadingTime', () => {
@@ -123,6 +172,73 @@ describe('getReadingTime', () => {
     const words = Array.from({ length: 500 }, () => 'word').join(' ');
     // 500 words / 265 wpm = 1.89 → ceil = 2
     expect(getReadingTime(words)).toBe(2);
+  });
+
+  it('counts CJK prose by characters, not whitespace-separated words', () => {
+    // 800 Han chars with no spaces: 800 / 400 cpm = 2 minutes. The old
+    // word-split logic would have counted this as a single "word" → 1 minute.
+    const cjk = '推'.repeat(800);
+    expect(getReadingTime(cjk)).toBe(2);
+  });
+
+  it('combines CJK characters and Latin words in mixed content', () => {
+    // 400 Han chars (1 min at 400 cpm) + 265 Latin words (1 min at 265 wpm)
+    const mixed = `${'理'.repeat(400)} ${Array.from({ length: 265 }, () => 'word').join(' ')}`;
+    expect(getReadingTime(mixed)).toBe(2);
+  });
+});
+
+describe('smartTruncate', () => {
+  it('returns the text unchanged (no ellipsis) when at or under the limit', () => {
+    expect(smartTruncate('Short and sweet.', 155)).toBe('Short and sweet.');
+    const exact = 'x'.repeat(20);
+    expect(smartTruncate(exact, 20)).toBe(exact);
+    expect(smartTruncate('  trimmed  ', 155)).toBe('trimmed');
+  });
+
+  it('cuts at a word boundary (never mid-word) and appends an ellipsis', () => {
+    const text = Array.from({ length: 60 }, () => 'word').join(' '); // 60×"word " → 299 chars
+    const out = smartTruncate(text, 155);
+    expect(out.length).toBeLessThanOrEqual(155);
+    expect(out.endsWith('…')).toBe(true);
+    const body = out.slice(0, -1);
+    // Every retained token is a complete "word" — no "wor"/"rd" fragments.
+    expect(body.split(' ').every((t) => t === 'word')).toBe(true);
+  });
+
+  it('strips trailing punctuation before the ellipsis', () => {
+    const text = `${'alpha, '.repeat(40)}beta`; // lands the cut right after a comma
+    const out = smartTruncate(text, 50);
+    const body = out.slice(0, -1);
+    expect(out.endsWith('…')).toBe(true);
+    expect(/[\s,]$/u.test(body)).toBe(false);
+    expect(out.length).toBeLessThanOrEqual(50);
+  });
+
+  it('hard-cuts CJK prose (no spaces) and stays within the limit', () => {
+    const cjk = '推'.repeat(200);
+    const out = smartTruncate(cjk, 155);
+    expect(out.length).toBeLessThanOrEqual(155);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});
+
+describe('blogDescription', () => {
+  it('returns the explicit seoDescription verbatim when present', () => {
+    const meta = { seoDescription: 'Hand-written, punchy, ≤155 chars.', subtitle: 'x'.repeat(300) };
+    expect(blogDescription(meta)).toBe('Hand-written, punchy, ≤155 chars.');
+  });
+
+  it('smart-truncates the subtitle to ≤155 chars when no seoDescription is set', () => {
+    const subtitle = Array.from({ length: 60 }, () => 'word').join(' ');
+    const out = blogDescription({ subtitle });
+    expect(out).toBe(smartTruncate(subtitle, 155));
+    expect(out.length).toBeLessThanOrEqual(155);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('passes a short subtitle through without an ellipsis', () => {
+    expect(blogDescription({ subtitle: 'A concise subtitle.' })).toBe('A concise subtitle.');
   });
 });
 
@@ -279,6 +395,92 @@ describe('getAllPosts — publishDate filtering', () => {
   });
 });
 
+describe('getAllPosts — zh locale', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns only posts with a zh translation, using zh frontmatter', () => {
+    mockLocalizedFiles(
+      { 'test-post.mdx': FAKE_MDX, 'older-post.mdx': FAKE_MDX_OLDER },
+      { 'test-post.mdx': FAKE_MDX_ZH },
+    );
+
+    const posts = getAllPosts('zh');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].slug).toBe('test-post');
+    expect(posts[0].title).toBe('测试文章');
+    expect(posts[0].subtitle).toBe('一个测试副标题');
+  });
+
+  it('inherits publishDate gating from the English post in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    // English original is unpublished (no publishDate) — the zh translation
+    // must not leak even though its file exists.
+    mockLocalizedFiles(
+      { 'no-publish.mdx': FAKE_MDX_NO_PUBLISH },
+      { 'no-publish.mdx': FAKE_MDX_ZH },
+    );
+
+    expect(getAllPosts('zh')).toHaveLength(0);
+  });
+
+  it('keeps English getAllPosts unaffected by zh translations', () => {
+    mockLocalizedFiles({ 'test-post.mdx': FAKE_MDX }, { 'test-post.mdx': FAKE_MDX_ZH });
+
+    const posts = getAllPosts();
+    expect(posts).toHaveLength(1);
+    expect(posts[0].title).toBe('Test Post');
+  });
+});
+
+describe('getPostBySlug — zh locale', () => {
+  it('returns the zh translation meta and content', () => {
+    mockLocalizedFiles({ 'test-post.mdx': FAKE_MDX }, { 'test-post.mdx': FAKE_MDX_ZH });
+
+    const result = getPostBySlug('test-post', 'zh');
+    expect(result).not.toBeNull();
+    expect(result!.meta.title).toBe('测试文章');
+    expect(result!.raw).toContain('# 测试标题');
+  });
+
+  it('returns null when no zh translation exists', () => {
+    mockLocalizedFiles({ 'test-post.mdx': FAKE_MDX }, {});
+
+    expect(getPostBySlug('test-post', 'zh')).toBeNull();
+  });
+});
+
+describe('hasZhTranslation', () => {
+  it('reflects existence of the zh translation file', () => {
+    mockLocalizedFiles(
+      { 'test-post.mdx': FAKE_MDX, 'older-post.mdx': FAKE_MDX_OLDER },
+      { 'test-post.mdx': FAKE_MDX_ZH },
+    );
+
+    expect(hasZhTranslation('test-post')).toBe(true);
+    expect(hasZhTranslation('older-post')).toBe(false);
+  });
+});
+
+describe('getAdjacentPosts — zh locale', () => {
+  it('navigates within translated posts only', () => {
+    mockLocalizedFiles(
+      {
+        'test-post.mdx': FAKE_MDX,
+        'middle-post.mdx': FAKE_MDX_MIDDLE,
+        'older-post.mdx': FAKE_MDX_OLDER,
+      },
+      // middle-post has no translation: zh prev/next must skip over it.
+      { 'test-post.mdx': FAKE_MDX_ZH, 'older-post.mdx': FAKE_MDX_ZH },
+    );
+
+    const { prev, next } = getAdjacentPosts('test-post', 'zh');
+    expect(next).toBeNull();
+    expect(prev!.slug).toBe('older-post');
+  });
+});
+
 describe('getPostBySlug', () => {
   it('returns null for non-existent slug', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
@@ -395,5 +597,170 @@ describe('extractHeadings', () => {
     const headings = extractHeadings(mdx);
     expect(headings[0].id).toBe('intro');
     expect(headings[1].id).toBe('intro-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured data (JSON-LD) builders — pure, no fs access.
+// ---------------------------------------------------------------------------
+
+const SAMPLE_META: BlogPostMeta = {
+  title: 'GB200 vs MI355X Inference Benchmark',
+  subtitle: 'Head-to-head throughput and latency.',
+  date: '2026-03-01',
+  slug: 'gb200-vs-mi355x',
+  readingTime: 7,
+  tags: ['gpu', 'benchmark'],
+};
+
+const SAMPLE_META_MODIFIED: BlogPostMeta = {
+  ...SAMPLE_META,
+  modifiedDate: '2026-04-10',
+};
+
+describe('blogOgImageUrl', () => {
+  it('builds an absolute URL to the English post opengraph-image route', () => {
+    expect(blogOgImageUrl('gb200-vs-mi355x')).toBe(
+      `${SITE_URL}/blog/gb200-vs-mi355x/opengraph-image`,
+    );
+  });
+
+  it('builds an absolute URL to the /zh post opengraph-image route', () => {
+    expect(blogOgImageUrl('gb200-vs-mi355x', 'zh')).toBe(
+      `${SITE_URL}/zh/blog/gb200-vs-mi355x/opengraph-image`,
+    );
+  });
+});
+
+describe('buildBlogPostingJsonLd', () => {
+  it('emits a BlogPosting with the recommended Article fields (en)', () => {
+    const jsonLd = buildBlogPostingJsonLd(SAMPLE_META, 'one two three four five', 'en') as Record<
+      string,
+      any
+    >;
+
+    expect(jsonLd['@context']).toBe('https://schema.org');
+    expect(jsonLd['@type']).toBe('BlogPosting');
+    expect(jsonLd.headline).toBe(SAMPLE_META.title);
+
+    // image — absolute OG image URL for the post.
+    expect(jsonLd.image).toBe(`${SITE_URL}/blog/gb200-vs-mi355x/opengraph-image`);
+
+    // inLanguage — English tag on the English page.
+    expect(jsonLd.inLanguage).toBe('en-US');
+
+    // mainEntityOfPage — WebPage pointing at the canonical post URL.
+    expect(jsonLd.mainEntityOfPage).toEqual({
+      '@type': 'WebPage',
+      '@id': `${SITE_URL}/blog/gb200-vs-mi355x`,
+    });
+
+    // publisher.logo — ImageObject with an absolute URL. Dimensions are
+    // intentionally omitted (optional in schema.org) because the asset's real
+    // size conflicts with the root layout's OG declaration; see blog.ts.
+    expect(jsonLd.publisher['@type']).toBe('Organization');
+    expect(jsonLd.publisher.logo).toEqual({
+      '@type': 'ImageObject',
+      url: OG_IMAGE,
+    });
+    expect(jsonLd.publisher.logo.width).toBeUndefined();
+    expect(String(jsonLd.publisher.logo.url)).toMatch(/^https:\/\//u);
+
+    // Existing required fields are preserved.
+    expect(jsonLd.author).toEqual({ '@type': 'Person', name: 'SemiAnalysis' });
+    expect(jsonLd.datePublished).toBe('2026-03-01T00:00:00Z');
+    // Description routes through blogDescription (same helper as the meta/OG
+    // tags) so structured data and SERP snippet never diverge.
+    expect(jsonLd.description).toBe(blogDescription(SAMPLE_META));
+    expect(jsonLd.url).toBe(`${SITE_URL}/blog/gb200-vs-mi355x`);
+    expect(jsonLd.wordCount).toBe(5);
+    expect(jsonLd.timeRequired).toBe('PT7M');
+  });
+
+  it('omits dateModified when no modifiedDate, includes it when present', () => {
+    const withoutMod = buildBlogPostingJsonLd(SAMPLE_META, 'a b c') as Record<string, any>;
+    expect(withoutMod.dateModified).toBeUndefined();
+
+    const withMod = buildBlogPostingJsonLd(SAMPLE_META_MODIFIED, 'a b c') as Record<string, any>;
+    expect(withMod.dateModified).toBe('2026-04-10T00:00:00Z');
+  });
+
+  it('uses the zh language tag and /zh canonical URL for the Chinese page', () => {
+    const jsonLd = buildBlogPostingJsonLd(SAMPLE_META, 'a b c', 'zh') as Record<string, any>;
+    expect(jsonLd.inLanguage).toBe('zh-CN');
+    expect(jsonLd.url).toBe(`${SITE_URL}/zh/blog/gb200-vs-mi355x`);
+    expect(jsonLd.mainEntityOfPage['@id']).toBe(`${SITE_URL}/zh/blog/gb200-vs-mi355x`);
+    expect(jsonLd.image).toBe(`${SITE_URL}/zh/blog/gb200-vs-mi355x/opengraph-image`);
+  });
+});
+
+describe('buildBlogBreadcrumbJsonLd', () => {
+  it('builds a 3-item BreadcrumbList with correct positions and absolute URLs (en)', () => {
+    const crumb = buildBlogBreadcrumbJsonLd('gb200-vs-mi355x', SAMPLE_META.title) as Record<
+      string,
+      any
+    >;
+
+    expect(crumb['@context']).toBe('https://schema.org');
+    expect(crumb['@type']).toBe('BreadcrumbList');
+    expect(crumb.itemListElement).toHaveLength(3);
+
+    const [home, blog, post] = crumb.itemListElement;
+    expect(home).toEqual({ '@type': 'ListItem', position: 1, name: 'Home', item: SITE_URL });
+    expect(blog).toEqual({
+      '@type': 'ListItem',
+      position: 2,
+      name: 'Blog',
+      item: `${SITE_URL}/blog`,
+    });
+    expect(post).toEqual({
+      '@type': 'ListItem',
+      position: 3,
+      name: SAMPLE_META.title,
+      item: `${SITE_URL}/blog/gb200-vs-mi355x`,
+    });
+
+    for (const el of crumb.itemListElement) {
+      expect(el['@type']).toBe('ListItem');
+      expect(String(el.item)).toMatch(/^https:\/\//u);
+    }
+    expect(crumb.itemListElement.map((el: any) => el.position)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('buildBlogBreadcrumbJsonLdZh', () => {
+  it('mirrors the English breadcrumb with translated labels and /zh URLs', () => {
+    const crumb = buildBlogBreadcrumbJsonLdZh('gb200-vs-mi355x', SAMPLE_META.title) as Record<
+      string,
+      any
+    >;
+
+    expect(crumb['@type']).toBe('BreadcrumbList');
+    expect(crumb.itemListElement).toHaveLength(3);
+
+    const [home, blog, post] = crumb.itemListElement;
+    expect(home).toEqual({
+      '@type': 'ListItem',
+      position: 1,
+      name: '首页',
+      item: `${SITE_URL}/zh`,
+    });
+    expect(blog).toEqual({
+      '@type': 'ListItem',
+      position: 2,
+      name: '博客',
+      item: `${SITE_URL}/zh/blog`,
+    });
+    expect(post).toEqual({
+      '@type': 'ListItem',
+      position: 3,
+      name: SAMPLE_META.title,
+      item: `${SITE_URL}/zh/blog/gb200-vs-mi355x`,
+    });
+
+    for (const el of crumb.itemListElement) {
+      expect(String(el.item)).toMatch(/^https:\/\/[^/]+\/zh/u);
+    }
+    expect(crumb.itemListElement.map((el: any) => el.position)).toEqual([1, 2, 3]);
   });
 });

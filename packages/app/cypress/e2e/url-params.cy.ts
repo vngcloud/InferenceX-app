@@ -21,11 +21,11 @@ const visitWithErrorSpy = (path: string) => {
 };
 
 const assertNoHydrationMismatch = () => {
-  cy.get('[data-testid="sequence-selector"]').should('be.visible');
+  cy.get('[data-testid="scenario-selector"]').should('be.visible');
   cy.get('@consoleError').then((spy) => {
     const calls = (spy as unknown as { args: unknown[][] }).args;
     const hydration = calls.filter((args) =>
-      args.some((a) => typeof a === 'string' && /hydrat(ion|ed) (mismatch|failed)/iu.test(a)),
+      args.some((a) => typeof a === 'string' && /hydrat(?:ion|ed) (?:mismatch|failed)/iu.test(a)),
     );
     expect(hydration, JSON.stringify(hydration)).to.have.length(0);
   });
@@ -152,19 +152,21 @@ describe('URL Parameter Persistence', () => {
 
     it('/inference?i_seq=1k/1k seeds the sequence without a hydration error', () => {
       visitWithErrorSpy('/inference?i_seq=1k/1k');
-      cy.get('[data-testid="sequence-selector"]').should('contain.text', '1K / 1K');
+      cy.get('[data-testid="scenario-selector"]').should('contain.text', '1K / 1K');
       assertNoHydrationMismatch();
     });
 
     it('/compare/[slug] with ?i_seq=1k/1k seeds the sequence without a hydration error', () => {
-      visitWithErrorSpy('/compare/h100-vs-h200?i_seq=1k/1k');
-      cy.get('[data-testid="sequence-selector"]').should('contain.text', '1K / 1K');
+      // Visit the canonical model-prefixed slug so the assertion is directly
+      // about the rendered page, not about a bare-slug redirect interleaving.
+      visitWithErrorSpy('/compare/deepseek-r1-h100-vs-h200?i_seq=1k/1k');
+      cy.get('[data-testid="scenario-selector"]').should('contain.text', '1K / 1K');
       assertNoHydrationMismatch();
     });
 
     it('/compare/[slug] with invalid ?i_seq=junk falls back to the seeded default', () => {
-      visitWithErrorSpy('/compare/h100-vs-h200?i_seq=junk');
-      cy.get('[data-testid="sequence-selector"]')
+      visitWithErrorSpy('/compare/deepseek-r1-h100-vs-h200?i_seq=junk');
+      cy.get('[data-testid="scenario-selector"]')
         .invoke('text')
         .should('not.contain', 'junk')
         .and('match', /[18]K . [18]K/u);
@@ -184,7 +186,11 @@ describe('URL Parameter Persistence', () => {
     });
 
     it('/inference?i_prec=fp8 seeds the precision without a hydration error', () => {
-      visitWithErrorSpy('/inference?i_prec=fp8');
+      // Pair `i_prec=fp8` with a model that actually has FP8 in availability.
+      // The default model (DeepSeek-V4-Pro) is FP4-only in the test fixtures,
+      // so `effectivePrecisions` would otherwise intersect the URL selection
+      // with the available set and fall back to FP4.
+      visitWithErrorSpy('/inference?g_model=DeepSeek-R1-0528&i_prec=fp8');
       cy.get('[data-testid="precision-multiselect"]').should('contain.text', 'FP8');
       assertNoHydrationMismatch();
     });
@@ -222,7 +228,7 @@ describe('URL Parameter Persistence', () => {
       // `effectivePrecisions` intersects the selection with available precisions
       // and the UI may render the fallback. dsr1 + fp8 + 1k/1k is supported.
       visitWithErrorSpy('/inference?i_seq=1k/1k&g_model=DeepSeek-R1-0528&i_prec=fp8');
-      cy.get('[data-testid="sequence-selector"]').should('contain.text', '1K / 1K');
+      cy.get('[data-testid="scenario-selector"]').should('contain.text', '1K / 1K');
       cy.get('[data-testid="model-selector"]').should('contain.text', 'DeepSeek');
       cy.get('[data-testid="precision-multiselect"]').should('contain.text', 'FP8');
       assertNoHydrationMismatch();
@@ -230,8 +236,14 @@ describe('URL Parameter Persistence', () => {
   });
 
   describe('High contrast mode', () => {
-    it('page loads without high contrast by default', () => {
+    it('inference loads with high contrast off by default', () => {
       visitWithDismissedModal('/inference');
+      cy.get('[data-testid="scatter-graph"]').should('exist');
+      cy.get('#scatter-high-contrast').first().should('have.attr', 'data-state', 'unchecked');
+    });
+
+    it('i_hc=0 disables high contrast on load', () => {
+      visitWithDismissedModal('/inference?i_hc=0');
       cy.get('[data-testid="scatter-graph"]').should('exist');
       cy.get('#scatter-high-contrast').first().should('have.attr', 'data-state', 'unchecked');
     });
@@ -261,7 +273,9 @@ describe('URL Parameter Persistence', () => {
       cy.get('#eval-high-contrast').first().should('have.attr', 'data-state', 'checked');
     });
 
-    it('historical trends tab has high contrast switch off by default', () => {
+    it('historical trends tab shares the inference high-contrast default (off)', () => {
+      // Historical reads highContrast from the same InferenceContext as the
+      // scatter chart, so it inherits the default-off behavior.
       visitWithDismissedModal('/historical');
       cy.get('[data-testid="historical-trends-display"]').should('exist');
       cy.get('#historical-high-contrast').first().should('have.attr', 'data-state', 'unchecked');
@@ -271,6 +285,22 @@ describe('URL Parameter Persistence', () => {
       visitWithDismissedModal('/historical?i_hc=1');
       cy.get('[data-testid="historical-trends-display"]').should('exist');
       cy.get('#historical-high-contrast').first().should('have.attr', 'data-state', 'checked');
+    });
+  });
+
+  describe('Default toggle states (share-link correctness)', () => {
+    it('a bare /inference link with neither param renders high contrast AND parallelism labels off', () => {
+      visitWithDismissedModal('/inference');
+      cy.get('[data-testid="scatter-graph"]').should('exist');
+      cy.get('#scatter-high-contrast').first().should('have.attr', 'data-state', 'unchecked');
+      cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'unchecked');
+    });
+
+    it('i_hc=1&i_advlabel=1 enables both high contrast and parallelism labels on load', () => {
+      visitWithDismissedModal('/inference?i_hc=1&i_advlabel=1');
+      cy.get('[data-testid="scatter-graph"]').should('exist');
+      cy.get('#scatter-high-contrast').first().should('have.attr', 'data-state', 'checked');
+      cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'checked');
     });
   });
 });

@@ -1,10 +1,12 @@
 import type { BenchmarkRow } from '@/lib/api';
-import { hasMtpEngineExclusion, Model, Sequence } from '@/lib/data-mappings';
+import { getModelExclusion, Model, Sequence } from '@/lib/data-mappings';
 
 export interface FavoritePreset {
   id: string;
   title: string;
+  titleZh?: string;
   description: string;
+  descriptionZh?: string;
   tags: string[];
   category: 'comparison' | 'improvements';
   wide?: boolean;
@@ -26,23 +28,22 @@ export interface FavoritePreset {
  * Match an hwKey against a preset's hwFilter. Exact entries always match
  * exactly (so MTP keys like `h100_dynamo-trt_mtp` can be explicitly opted in).
  * Bare GPU prefixes (no underscore) match any framework variant on that GPU,
- * but for models with `mtpEngineExclusion` (currently dsv4) they also skip
- * `_mtp` keys — otherwise the preset would surface two engine families'
- * forced-acceptance MTP numbers on the same chart, which the legend toggle
- * guard already blocks for explicit user actions.
+ * but for models with an exclusion rule (currently dsv4 MTP) they also skip
+ * keys matching the rule's suffix — otherwise the preset would surface two
+ * comparability groups on the same chart, which the legend toggle guard already
+ * blocks for explicit user actions.
  */
 export function matchesPresetHwFilter(
   hwKey: string,
   filter: string[],
   model: Model | string | null | undefined,
 ): boolean {
-  const skipMtpOnPrefix = hasMtpEngineExclusion(model);
+  const excludedSuffixes = getModelExclusion(model)
+    .map((spec) => spec.suffix)
+    .filter((suffix): suffix is string => suffix !== null);
+  const isExcludedVariant = excludedSuffixes.some((suffix) => hwKey.endsWith(suffix));
   return filter.some(
-    (f) =>
-      hwKey === f ||
-      (!f.includes('_') &&
-        hwKey.startsWith(`${f}_`) &&
-        !(skipMtpOnPrefix && hwKey.endsWith('_mtp'))),
+    (f) => hwKey === f || (!f.includes('_') && hwKey.startsWith(`${f}_`) && !isExcludedVariant),
   );
 }
 
@@ -141,7 +142,28 @@ export function findConfigChangeDates(
 }
 
 export const FAVORITE_PRESETS: FavoritePreset[] = [
-  // 0 — DeepSeek V4 Pro launch (all configs)
+  // 0 — MiniMax M3 launch (all configs) — current day-0 featured model
+  {
+    id: 'minimax-m3-launch',
+    title: 'MiniMax M3 — First Look',
+    titleZh: 'MiniMax M3 — 首发基准测试',
+    description:
+      'First benchmarks of MiniMax M3 across every available GPU. New configurations appear here as they come online.',
+    descriptionZh: '涵盖所有可用 GPU 的 MiniMax M3 首批基准测试结果。新配置上线后将在此同步更新。',
+    tags: ['MiniMax', 'M3', 'New'],
+    category: 'comparison',
+    wide: true,
+    config: {
+      model: Model.MiniMax_M3,
+      sequence: Sequence.EightK_OneK,
+      precisions: ['fp4', 'fp8'],
+      yAxisMetric: 'y_tpPerGpu',
+      hwFilter: ['h100', 'h200', 'b200', 'b300', 'gb200', 'gb300', 'mi300x', 'mi325x', 'mi355x'],
+    },
+  },
+  // Hidden — previous DeepSeek V4 Pro launch preset (all configs), retired when MiniMax M3
+  // became the day-0 model. Retained so prior ?preset=dsv4-launch links (banner, modal,
+  // external shares) keep working.
   {
     id: 'dsv4-launch',
     title: 'DeepSeek V4 Pro — First Look',
@@ -150,6 +172,7 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
     tags: ['DeepSeek', 'V4-Pro', 'New'],
     category: 'comparison',
     wide: true,
+    hidden: true,
     config: {
       model: Model.DeepSeek_V4_Pro,
       sequence: Sequence.EightK_OneK,
@@ -181,7 +204,10 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   {
     id: 'gb200-vs-b200',
     title: 'GB200 NVL72 vs B200 — Multi vs Single Node',
-    description: 'GB200 NVL72 Dynamo TRT vs B200 Dynamo TRT on DeepSeek R1 (8k/1k) at FP4.',
+    titleZh: 'GB200 NVL72 vs B200 — 多节点 vs 单节点',
+    description: 'GB200 NVL72 Dynamo TRTLLM vs B200 Dynamo TRTLLM on DeepSeek R1 (8k/1k) at FP4.',
+    descriptionZh:
+      'GB200 NVL72 Dynamo TRTLLM vs B200 Dynamo TRTLLM，基于 DeepSeek R1 (8k/1k)，FP4 精度。',
     tags: ['DeepSeek', 'GB200', 'B200', 'Dynamo', 'FP4', 'NVL72'],
     category: 'comparison',
     config: {
@@ -196,8 +222,11 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   {
     id: 'b200-vs-h200',
     title: 'B200 vs H200 — Blackwell vs Hopper',
+    titleZh: 'B200 vs H200 — Blackwell vs Hopper',
     description:
-      'Blackwell B200 vs Hopper H200 Dynamo TRT throughput per GPU on DeepSeek R1 (8k/1k) at FP8.',
+      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM throughput per GPU on DeepSeek R1 (8k/1k) at FP8.',
+    descriptionZh:
+      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM 每 GPU 吞吐量对比，基于 DeepSeek R1 (8k/1k)，FP8 精度。',
     tags: ['DeepSeek', 'B200', 'H200', 'Dynamo', 'FP8'],
     category: 'comparison',
     config: {
@@ -212,8 +241,11 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   {
     id: 'amd-generations',
     title: 'AMD MI300X → MI325X → MI355X',
+    titleZh: 'AMD MI300X → MI325X → MI355X',
     description:
       'Three generations of AMD Instinct on SGLang at FP8. Generational throughput scaling on DeepSeek R1 (8k/1k).',
+    descriptionZh:
+      'AMD Instinct 三代产品在 SGLang FP8 下的对比。DeepSeek R1 (8k/1k) 代际吞吐量提升趋势。',
     tags: ['DeepSeek', 'MI300X', 'MI325X', 'MI355X', 'SGLang', 'FP8'],
     category: 'comparison',
     config: {
@@ -228,7 +260,10 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   {
     id: 'h100-vs-gb300-disagg',
     title: 'H100 vs GB300 Disagg — DeepSeek',
+    titleZh: 'H100 vs GB300 分离式推理 — DeepSeek',
     description: 'H100 FP8 disagg vs GB300 FP8 disagg vs GB300 FP4 disagg on DeepSeek R1 (8k/1k).',
+    descriptionZh:
+      'H100 FP8 分离式 vs GB300 FP8 分离式 vs GB300 FP4 分离式，基于 DeepSeek R1 (8k/1k)。',
     tags: ['DeepSeek', 'H100', 'GB300', 'Disagg', 'FP8', 'FP4'],
     category: 'comparison',
     config: {
@@ -242,9 +277,12 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   // 5 — Disagg cross-vendor
   {
     id: 'disagg-b200-vs-mi355x',
-    title: 'Disagg B200 SGLang vs MI355X vs B200 TRT',
+    title: 'Disagg B200 SGLang vs MI355X vs B200 TRTLLM',
+    titleZh: '分离式 B200 SGLang vs MI355X vs B200 TRTLLM',
     description:
-      'Disaggregated B200 Dynamo SGLang vs MI355X MoRI SGLang vs B200 Dynamo TRT on DeepSeek R1 (8k/1k) at FP8.',
+      'Disaggregated B200 Dynamo SGLang vs MI355X MoRI SGLang vs B200 Dynamo TRTLLM on DeepSeek R1 (8k/1k) at FP8.',
+    descriptionZh:
+      '分离式 B200 Dynamo SGLang vs MI355X MoRI SGLang vs B200 Dynamo TRTLLM，基于 DeepSeek R1 (8k/1k)，FP8 精度。',
     tags: ['DeepSeek', 'B200', 'MI355X', 'Dynamo', 'MoRI', 'FP8', 'Disagg'],
     category: 'comparison',
     config: {
@@ -259,8 +297,11 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
   {
     id: 'mi355x-sglang-disagg-timeline',
     title: 'MI355X SGLang Disagg Over Time — DeepSeek (FP8)',
+    titleZh: 'MI355X SGLang 分离式推理历史趋势 — DeepSeek (FP8)',
     description:
       'MI355X SGLang disaggregated inference on DeepSeek R1 (8k/1k) FP8. Tracks throughput improvements over time.',
+    descriptionZh:
+      'MI355X SGLang 分离式推理在 DeepSeek R1 (8k/1k) FP8 下的表现，追踪吞吐量随时间的提升。',
     tags: ['DeepSeek', 'MI355X', 'SGLang', 'FP8', 'Disagg', 'Timeline'],
     category: 'improvements',
     config: {

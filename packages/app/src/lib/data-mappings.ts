@@ -1,3 +1,5 @@
+import type { ExclusionSpec } from './exclusion';
+
 export enum Model {
   Llama3_3_70B = 'Llama-3.3-70B-Instruct-FP8',
   Llama3_1_70B = 'Llama-3.1-70B-Instruct-FP8-KV',
@@ -7,12 +9,14 @@ export enum Model {
   Qwen3_5_27B = 'Qwen-3.5-27B',
   Kimi_K2_5 = 'Kimi-K2.5',
   MiniMax_M2_5 = 'MiniMax-M2.5',
+  MiniMax_M3 = 'MiniMax-M3',
   GLM_5 = 'GLM-5',
+  GLM_5_2 = 'GLM-5.2',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
   Gemma_4_31B = 'Gemma-4-31B-it',
 }
 
-export type CategoryTag = 'default' | 'experimental' | 'deprecated' | 'hidden';
+export type CategoryTag = 'default' | 'experimental' | 'maintenance' | 'deprecated' | 'hidden';
 
 /**
  * Partition a list of values by their category using a classifier function.
@@ -24,6 +28,7 @@ export function groupByCategory<T>(
   const groups: Record<CategoryTag, T[]> = {
     default: [],
     experimental: [],
+    maintenance: [],
     deprecated: [],
     hidden: [],
   };
@@ -43,35 +48,84 @@ interface ModelConfig {
   prefix: string;
   category: CategoryTag;
   /**
-   * If true, MTP configs from different engine families (e.g. vLLM and SGLang)
-   * cannot be active simultaneously, since their acceptance-rate forcing
-   * implementations differ and aren't directly comparable on the same graph.
+   * Data-driven exclusion rules for this model (see `exclusion.ts`). Each spec
+   * partitions matching config keys into comparability groups that can't share
+   * a graph with each other. Absent/empty = no exclusion.
    */
-  mtpEngineExclusion?: boolean;
+  exclusion?: ExclusionSpec[];
 }
 
+/**
+ * dsv4 MTP exclusion: MTP configs (`*_mtp`) from different engine families can't
+ * be active together because their acceptance-rate forcing implementations
+ * differ. ATOM and SGLang share the upstream ROCm MTP path, so they form one
+ * comparability group; vLLM is its own group.
+ */
+const MTP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+  {
+    suffix: '_mtp',
+    stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
+    groupAliases: { atom: 'sglang' },
+  },
+];
+
+/**
+ * AgentX STP exclusion: unsuffixed standard-token configs for the same hardware
+ * SKU can't mix engine families. Different hardware may use different engines
+ * on one graph. Fixed-sequence STP comparisons remain available; this rule is
+ * attached only to the Agentic Traces sequence.
+ */
+const AGENTIC_STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+  {
+    suffix: null,
+    stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
+    groupAliases: { atom: 'sglang' },
+    scope: 'hardware',
+  },
+];
+
+// Total parameter counts appended to each label so users can compare model
+// scale at a glance in the dropdown. For Llama and gpt-oss the count is
+// already part of the canonical name (Llama 3.3 70B, gpt-oss 120B) so no
+// duplication needed.
 const MODEL_CONFIG: Record<Model, ModelConfig> = {
-  [Model.DeepSeek_R1]: { label: 'DeepSeek R1 0528', prefix: 'dsr1', category: 'default' },
   [Model.DeepSeek_V4_Pro]: {
-    label: 'DeepSeek V4 Pro',
+    label: 'DeepSeek V4 Pro 1.6T',
     prefix: 'dsv4',
     category: 'default',
-    mtpEngineExclusion: true,
+    exclusion: MTP_ENGINE_EXCLUSION,
   },
   [Model.Kimi_K2_5]: {
-    label: 'Kimi K2.5',
+    // K2.5, K2.6, and K2.7-Code share an architecture, so the dropdown surfaces
+    // all versions joined with a slash — matches the GLM5/5.1 pattern. The
+    // hyphenated `Model.Kimi_K2_5` enum value stays as-is for internal
+    // routing / DB key mapping.
+    label: 'Kimi K2.5/2.6/2.7-Code 1T',
     prefix: 'kimik2.5',
     category: 'default',
   },
-  [Model.Qwen3_5]: { label: 'Qwen3.5', prefix: 'qwen3.5', category: 'default' },
   [Model.Qwen3_5_27B]: { label: 'Qwen3.5 27B', prefix: 'qwen3.5-27b', category: 'default' },
-  [Model.GLM_5]: { label: 'GLM5/5.1', prefix: 'glm5', category: 'default' },
-  [Model.MiniMax_M2_5]: {
-    label: 'MiniMax M2.5',
-    prefix: 'minimaxm2.5',
+  [Model.MiniMax_M3]: {
+    label: 'MiniMax M3 428B',
+    prefix: 'minimaxm3',
     category: 'default',
   },
-  [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'default' },
+  [Model.DeepSeek_R1]: {
+    label: 'DeepSeek R1 0528 671B',
+    prefix: 'dsr1',
+    category: 'maintenance',
+  },
+  [Model.GLM_5]: { label: 'GLM5/5.1 744B', prefix: 'glm5', category: 'deprecated' },
+  [Model.GLM_5_2]: { label: 'GLM5.2', prefix: 'glm5.2', category: 'default' },
+  [Model.Qwen3_5]: { label: 'Qwen3.5 397B', prefix: 'qwen3.5', category: 'default' },
+  [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'deprecated' },
+  [Model.MiniMax_M2_5]: {
+    // M2.5 and M2.7 share an architecture — same GLM5/5.1 pattern as Kimi.
+    // Superseded by MiniMax M3, so it's deprecated (no longer actively benchmarked).
+    label: 'MiniMax M2.5/2.7 230B',
+    prefix: 'minimaxm2.5',
+    category: 'deprecated',
+  },
   [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
   [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
   [Model.Gemma_4_31B]: { label: 'Gemma-4 31B', prefix: 'gemma4', category: 'default' },
@@ -90,6 +144,7 @@ export const MODEL_OPTIONS = (Object.keys(MODEL_CONFIG) as Model[]).filter(
 );
 
 export const DEFAULT_MODELS: ReadonlySet<Model> = modelsByCategory('default');
+export const MAINTENANCE_MODELS: ReadonlySet<Model> = modelsByCategory('maintenance');
 export const DEPRECATED_MODELS: ReadonlySet<Model> = modelsByCategory('deprecated');
 export const EXPERIMENTAL_MODELS: ReadonlySet<Model> = modelsByCategory('experimental');
 
@@ -98,6 +153,9 @@ export function isModelDefault(model: Model): boolean {
 }
 export function isModelDeprecated(model: Model): boolean {
   return DEPRECATED_MODELS.has(model);
+}
+export function isModelMaintenance(model: Model): boolean {
+  return MAINTENANCE_MODELS.has(model);
 }
 export function isModelExperimental(model: Model): boolean {
   return EXPERIMENTAL_MODELS.has(model);
@@ -112,17 +170,22 @@ export function getModelLabel(model: Model): string {
 }
 
 /**
- * True if the model enforces the rule that MTP configs from different engine
- * families can't be shown on the same graph.
+ * Exclusion specs configured for a model (see `exclusion.ts`). Empty when the
+ * model has no exclusion rules.
  */
-export function hasMtpEngineExclusion(model: Model | string | null | undefined): boolean {
-  if (!model) return false;
-  return MODEL_CONFIG[model as Model]?.mtpEngineExclusion === true;
+export function getModelExclusion(model: Model | string | null | undefined): ExclusionSpec[] {
+  if (!model) return [];
+  return MODEL_CONFIG[model as Model]?.exclusion ?? [];
+}
+
+/** True if the model has any config-exclusion rule. */
+export function hasExclusion(model: Model | string | null | undefined): boolean {
+  return getModelExclusion(model).length > 0;
 }
 
 /**
  * Pick the chart watermark for a given run state. Unofficial-run charts get
- * the red "UNOFFICIAL" banner; everything else gets the logo.
+ * the red unofficial-run warning; everything else gets the logo.
  */
 export function getChartWatermark(isUnofficialRun = false): 'logo' | 'unofficial' {
   return isUnofficialRun ? 'unofficial' : 'logo';
@@ -134,6 +197,12 @@ export const MODEL_PREFIX_MAPPING: Record<string, Model> = Object.fromEntries(
     .map(([m, c]) => [c.prefix, m]),
 );
 
+// Specific point-release prefixes must win over family prefixes such as
+// `glm5`; precompute once rather than sorting for every artifact.
+const MODEL_PREFIXES_LONGEST_FIRST = Object.keys(MODEL_PREFIX_MAPPING).toSorted(
+  (a, b) => b.length - a.length,
+);
+
 // ---------------------------------------------------------------------------
 // Sequences
 // ---------------------------------------------------------------------------
@@ -143,17 +212,92 @@ export enum Sequence {
   OneK_EightK = '1k/8k',
   EightK_OneK = '8k/1k',
   SixteenK_OneK = '16k/1k',
+  AgenticTraces = 'agentic-traces',
 }
 
-const SEQUENCE_CONFIG: Record<Sequence, { label: string; compact: string; category: CategoryTag }> =
-  {
-    [Sequence.OneK_OneK]: { label: '1K / 1K', compact: '1k1k', category: 'default' },
-    [Sequence.OneK_EightK]: { label: '1K / 8K', compact: '1k8k', category: 'deprecated' },
-    [Sequence.EightK_OneK]: { label: '8K / 1K', compact: '8k1k', category: 'default' },
-    [Sequence.SixteenK_OneK]: { label: '16K / 1K', compact: '16k1k', category: 'default' },
-  };
+/**
+ * Top-level scenario kind. Fixed-seq sequences cluster under a single group
+ * in the selector; agentic traces sit alongside as their own kind.
+ */
+export type ScenarioKind = 'fixed-seq' | 'agentic';
+
+export function sequenceKind(seq: Sequence): ScenarioKind {
+  return seq === Sequence.AgenticTraces ? 'agentic' : 'fixed-seq';
+}
+
+interface SequenceConfig {
+  label: string;
+  compact: string;
+  category: CategoryTag;
+  kind: ScenarioKind;
+  exclusion?: ExclusionSpec[];
+}
+
+const SEQUENCE_CONFIG: Record<Sequence, SequenceConfig> = {
+  [Sequence.OneK_OneK]: {
+    label: '1K / 1K',
+    compact: '1k1k',
+    category: 'deprecated',
+    kind: 'fixed-seq',
+  },
+  [Sequence.OneK_EightK]: {
+    label: '1K / 8K',
+    compact: '1k8k',
+    category: 'deprecated',
+    kind: 'fixed-seq',
+  },
+  [Sequence.EightK_OneK]: {
+    label: '8K / 1K',
+    compact: '8k1k',
+    category: 'default',
+    kind: 'fixed-seq',
+  },
+  [Sequence.SixteenK_OneK]: {
+    label: '16K / 1K',
+    compact: '16k1k',
+    category: 'default',
+    kind: 'fixed-seq',
+  },
+  [Sequence.AgenticTraces]: {
+    label: 'Agentic Traces',
+    compact: 'agentic',
+    category: 'default',
+    kind: 'agentic',
+    exclusion: AGENTIC_STP_ENGINE_EXCLUSION,
+  },
+};
+
+/** Exclusion specs configured for a sequence. Empty when no rule applies. */
+export function getSequenceExclusion(
+  sequence: Sequence | string | null | undefined,
+): ExclusionSpec[] {
+  if (!sequence) return [];
+  return SEQUENCE_CONFIG[sequence as Sequence]?.exclusion ?? [];
+}
 
 export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
+
+/**
+ * Percentile of the latency distribution used for the chart x-axis when
+ * viewing agentic traces. Agentic rows carry median/p75/p90/p95/p99/p99.9
+ * variants for ttft, ttlt (=e2el), and itl (and intvty derived from itl);
+ * p75 and p90 are surfaced in the UI.
+ */
+export enum Percentile {
+  P75 = 'p75',
+  P90 = 'p90',
+}
+
+const PERCENTILE_CONFIG: Record<Percentile, { label: string }> = {
+  [Percentile.P75]: { label: 'p75' },
+  [Percentile.P90]: { label: 'p90' },
+};
+
+export const PERCENTILE_OPTIONS = Object.keys(PERCENTILE_CONFIG) as Percentile[];
+
+export function getPercentileLabel(p: Percentile): string {
+  return PERCENTILE_CONFIG[p]?.label ?? p;
+}
 
 export const DEPRECATED_SEQUENCES: ReadonlySet<Sequence> = new Set(
   (Object.entries(SEQUENCE_CONFIG) as [Sequence, (typeof SEQUENCE_CONFIG)[Sequence]][])
@@ -231,7 +375,7 @@ export function getModelAndSequence(
   let model: Model | undefined;
   let sequence: Sequence | undefined;
 
-  for (const key in MODEL_PREFIX_MAPPING) {
+  for (const key of MODEL_PREFIXES_LONGEST_FIRST) {
     if (artifactName.includes(key)) {
       model = MODEL_PREFIX_MAPPING[key];
       break;

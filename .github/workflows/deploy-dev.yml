@@ -36,16 +36,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build image
-        # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
-        # dev build can't leak into the prod container on its next recreate.
-        run: |
-          docker build \
-            -t "$IMAGE_TAG" \
-            -t "inferencex-app-dev:${GITHUB_SHA::7}" \
-            .
-
       - name: Start postgres + wait for healthy
+        # Runs before the image build: some pages' generateStaticParams
+        # (e.g. compare-precision/compare-spec-decode OG images) query
+        # Postgres during `next build`, so the build needs a real,
+        # reachable database — not just the runtime container.
         run: |
           docker compose -f "$COMPOSE_FILE" up -d postgres
           # Project name is `inferencex-dev` (set via `name:` in compose), so
@@ -60,9 +55,65 @@ jobs:
           docker compose -f "$COMPOSE_FILE" logs postgres | tail -50
           exit 1
 
-      - name: Run DB migrations
-        # Idempotent. On a brand-new dev DB this applies the full schema.
-        run: docker compose -f "$COMPOSE_FILE" run --rm -T app pnpm admin:db:migrate --yes --no-ssl
+      - name: Run DB migrations (pre-build)
+        # See deploy.yml's identical step for why this has to run before
+        # the build, and why it uses a throwaway node container instead
+        # of the (not-yet-built) app image.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5433/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/app" -w /app \
+            -e CI=true \
+            -e DATABASE_READONLY_URL="$db_url" \
+            -e DATABASE_WRITE_URL="$db_url" \
+            -e DATABASE_DRIVER=postgres \
+            -e DATABASE_SSL=false \
+            node:24-bookworm-slim \
+            sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
+
+      - name: Fix workspace ownership
+        # Mirrors deploy.yml's identical step: the migration container above
+        # runs as root and bind-mounts $GITHUB_WORKSPACE, leaving root-owned
+        # files (.pnpm-store/, node_modules/) that the next run's
+        # actions/checkout (unprivileged runner user) can't remove.
+        if: always()
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/app" node:24-bookworm-slim \
+            chown -R "$(id -u):$(id -g)" /app
+
+      - name: Build image
+        # Dev-only tags. Never touches `inferencex-app:latest` (prod), so a
+        # dev build can't leak into the prod container on its next recreate.
+        #
+        # --network host + 127.0.0.1:5433: dev's postgres is published to
+        # loopback on its own port (5433, so it doesn't collide with prod's
+        # 5432 — see docker-compose.yml) specifically so the build can
+        # reach it — see deploy.yml's identical comment for why.
+        # --secret passes the DB URL as a mounted file (see Dockerfile),
+        # not as --build-arg, so it never lands in image layers/history.
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "$(dirname "$COMPOSE_FILE")/.env"
+          set +a
+          db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5433/${POSTGRES_DB}"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          export DATABASE_READONLY_URL="$db_url"
+          export DATABASE_WRITE_URL="$db_url"
+          docker build \
+            --network host \
+            --secret id=database_readonly_url,env=DATABASE_READONLY_URL \
+            --secret id=database_write_url,env=DATABASE_WRITE_URL \
+            -t "$IMAGE_TAG" \
+            -t "inferencex-app-dev:${GITHUB_SHA::7}" \
+            .
 
       - name: Sync GITHUB_TOKEN into compose .env
         # Mirrors prod: write the INGEST_GITHUB_TOKEN repo secret into the dev

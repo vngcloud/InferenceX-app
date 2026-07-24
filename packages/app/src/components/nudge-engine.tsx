@@ -4,6 +4,8 @@ import { ArrowRight, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { track } from '@/lib/analytics';
+import { useLocale } from '@/lib/use-locale';
+import type { Locale } from '@/lib/i18n';
 import {
   isDismissed,
   isPermanentlySuppressed,
@@ -14,6 +16,7 @@ import {
 import { dismissesOnAction } from '@/lib/nudges/policy';
 import { NUDGE_REGISTRY } from '@/lib/nudges/registry';
 import type { NudgeDefinition, NudgeTrigger } from '@/lib/nudges/types';
+import { LANDING_BANNER_DISMISSED_ATTRIBUTE } from '@/lib/nudges/landing-banner';
 import { BottomToast } from '@/components/ui/bottom-toast';
 import { Button } from '@/components/ui/button';
 
@@ -53,7 +56,17 @@ interface NudgeEngineProps {
 export function NudgeEngine({ scope }: NudgeEngineProps) {
   const scopeNudges = useMemo(() => NUDGE_REGISTRY.filter((n) => n.scope === scope), [scope]);
 
-  const [activeBannerId, setActiveBannerId] = useState<string | null>(null);
+  const [activeBannerId, setActiveBannerId] = useState<string | null>(() => {
+    const initialBanner = scopeNudges
+      .filter((nudge) => {
+        if (nudge.type !== 'banner' || !nudge.renderOnInitialLoad) return false;
+        if (!isWithinSchedule(nudge.schedule)) return false;
+        const triggers = Array.isArray(nudge.trigger) ? nudge.trigger : [nudge.trigger];
+        return triggers.some((trigger) => trigger.type === 'immediate');
+      })
+      .toSorted((a, b) => b.priority - a.priority)[0];
+    return initialBanner?.id ?? null;
+  });
   const [activeOverlayId, setActiveOverlayId] = useState<string | null>(null);
   const bannerShownRef = useRef(false);
   const overlayShownRef = useRef(false);
@@ -86,6 +99,9 @@ export function NudgeEngine({ scope }: NudgeEngineProps) {
     if (!activeBanner) return;
     trackNudgeEvent(activeBanner, 'dismissed');
     markDismissed(activeBanner.storageKey, activeBanner.dismissal);
+    if (activeBanner.renderOnInitialLoad) {
+      document.documentElement.setAttribute(LANDING_BANNER_DISMISSED_ATTRIBUTE, '');
+    }
     sessionDismissedRef.current.add(activeBanner.id);
     setActiveBannerId(null);
     bannerShownRef.current = false;
@@ -109,6 +125,9 @@ export function NudgeEngine({ scope }: NudgeEngineProps) {
     // `bannerShownRef`/`activeBannerId` set — the slot is still occupied.
     if (!dismissesOnAction(activeBanner)) return;
     markDismissed(activeBanner.storageKey, activeBanner.dismissal);
+    if (activeBanner.renderOnInitialLoad) {
+      document.documentElement.setAttribute(LANDING_BANNER_DISMISSED_ATTRIBUTE, '');
+    }
     sessionDismissedRef.current.add(activeBanner.id);
     setActiveBannerId(null);
     bannerShownRef.current = false;
@@ -137,6 +156,12 @@ export function NudgeEngine({ scope }: NudgeEngineProps) {
   // -------------------------------------------------------------------------
 
   useEffect(() => {
+    if (activeBanner && !isEligible(activeBanner)) {
+      setActiveBannerId(null);
+      bannerShownRef.current = false;
+      return;
+    }
+
     const cleanups: (() => void)[] = [];
     const sorted = [...scopeNudges].toSorted((a, b) => b.priority - a.priority);
 
@@ -309,6 +334,24 @@ function setupTrigger(
 }
 
 // ---------------------------------------------------------------------------
+// Locale helpers
+// ---------------------------------------------------------------------------
+
+function localized(locale: Locale, en: string, zh?: string): string {
+  return locale === 'zh' && zh ? zh : en;
+}
+
+const RENDERER_STRINGS = {
+  en: {
+    explore: 'Explore',
+    maybeLater: 'Maybe Later',
+    close: 'Close',
+    dismissBanner: 'Dismiss launch banner',
+  },
+  zh: { explore: '探索', maybeLater: '稍后再看', close: '关闭', dismissBanner: '关闭发布横幅' },
+} as const;
+
+// ---------------------------------------------------------------------------
 // Renderers
 // ---------------------------------------------------------------------------
 
@@ -321,18 +364,19 @@ function ToastRenderer({
   onDismiss: () => void;
   onAction: () => void;
 }) {
+  const locale = useLocale();
   const { content } = def;
   const Icon = content.icon;
   return (
     <BottomToast
       testId={content.testId}
       icon={<Icon className={content.iconClassName} />}
-      title={content.title}
-      description={content.description}
+      title={localized(locale, content.title, content.titleZh)}
+      description={localized(locale, content.description, content.descriptionZh)}
       action={
         content.action
           ? {
-              label: content.action.label,
+              label: localized(locale, content.action.label, content.action.labelZh),
               icon: content.action.icon,
               onClick: onAction,
             }
@@ -352,24 +396,31 @@ function ModalRenderer({
   onDismiss: () => void;
   onAction: () => void;
 }) {
+  const locale = useLocale();
+  const rs = RENDERER_STRINGS[locale];
   const { content } = def;
   const Icon = content.icon;
   const idPrefix = def.id;
+  const centered = content.centered;
 
-  return (
-    <aside
+  const dialog = (
+    <div
       data-testid={content.testId}
       role="dialog"
-      aria-modal="false"
+      aria-modal={centered ? 'true' : 'false'}
       aria-labelledby={`${idPrefix}-title`}
       aria-describedby={`${idPrefix}-description`}
-      className={`fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-md rounded-lg border bg-background p-6 shadow-lg ${content.containerClassName ?? ''}`}
+      className={
+        centered
+          ? `relative z-50 w-[calc(100vw-2rem)] max-w-md rounded-lg border bg-background p-6 shadow-lg ${content.containerClassName ?? ''}`
+          : `fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-md rounded-lg border bg-background p-6 shadow-lg ${content.containerClassName ?? ''}`
+      }
     >
       <button
         type="button"
         onClick={onDismiss}
         className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-        aria-label="Close"
+        aria-label={rs.close}
       >
         <X className="size-4" />
       </button>
@@ -380,15 +431,15 @@ function ModalRenderer({
           <div className="space-y-1.5 pr-6">
             <h2 id={`${idPrefix}-title`} className="flex items-center gap-2 text-lg font-semibold">
               <Icon className={`size-5 ${content.iconClassName ?? ''}`} />
-              {content.title}
+              {localized(locale, content.title, content.titleZh)}
               {content.badge && (
                 <span className="ml-1 inline-flex items-center rounded-full bg-brand px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm">
-                  {content.badge}
+                  {localized(locale, content.badge, content.badgeZh)}
                 </span>
               )}
             </h2>
             <p id={`${idPrefix}-description`} className="text-sm text-muted-foreground">
-              {content.description}
+              {localized(locale, content.description, content.descriptionZh)}
             </p>
           </div>
           <div className="flex flex-row justify-end gap-2">
@@ -397,7 +448,11 @@ function ModalRenderer({
               onClick={onDismiss}
               data-testid={content.testId ? `${content.testId}-dismiss` : undefined}
             >
-              {content.dismissLabel ?? 'Maybe Later'}
+              {localized(
+                locale,
+                content.dismissLabel ?? 'Maybe Later',
+                content.dismissLabelZh ?? rs.maybeLater,
+              )}
             </Button>
             {content.primaryAction && (
               <Button
@@ -406,14 +461,30 @@ function ModalRenderer({
                 className={content.actionClassName}
               >
                 {content.primaryAction.icon}
-                {content.primaryAction.label}
+                {localized(locale, content.primaryAction.label, content.primaryAction.labelZh)}
               </Button>
             )}
           </div>
         </div>
       )}
-    </aside>
+    </div>
   );
+
+  if (centered) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <button
+          type="button"
+          aria-label={rs.close}
+          onClick={onDismiss}
+          className="absolute inset-0 cursor-default bg-black/50"
+        />
+        {dialog}
+      </div>
+    );
+  }
+
+  return dialog;
 }
 
 function BannerRenderer({
@@ -425,6 +496,8 @@ function BannerRenderer({
   onDismiss: () => void;
   onAction: () => void;
 }) {
+  const locale = useLocale();
+  const rs = RENDERER_STRINGS[locale];
   const { content } = def;
   const Icon = content.icon;
 
@@ -441,7 +514,10 @@ function BannerRenderer({
   };
 
   return (
-    <section className="container mx-auto px-4 lg:px-8 mb-6 lg:mb-4">
+    <section
+      className="container mx-auto px-4 lg:px-8 mb-6 lg:mb-4"
+      data-initial-banner={def.renderOnInitialLoad ? '' : undefined}
+    >
       <a
         href={content.href ?? '#'}
         onClick={handleClick}
@@ -455,19 +531,21 @@ function BannerRenderer({
         <div className="relative flex flex-1 flex-col sm:flex-row sm:items-center sm:gap-3 min-w-0">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold leading-tight truncate">
-              <span className="align-middle">{content.title}</span>
+              <span className="align-middle">
+                {localized(locale, content.title, content.titleZh)}
+              </span>
               {content.badge && (
                 <span className="ml-2 inline-flex items-center gap-1.5 align-middle rounded-full bg-brand px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm">
-                  {content.badge}
+                  {localized(locale, content.badge, content.badgeZh)}
                 </span>
               )}
             </p>
             <p className="text-xs text-muted-foreground leading-snug truncate">
-              {content.description}
+              {localized(locale, content.description, content.descriptionZh)}
             </p>
           </div>
           <span className="hidden sm:inline-flex items-center gap-1 text-xs font-medium text-brand shrink-0 group-hover:translate-x-0.5 transition-transform duration-200">
-            Explore
+            {rs.explore}
             <ArrowRight className="size-3.5" />
           </span>
         </div>
@@ -475,7 +553,7 @@ function BannerRenderer({
           type="button"
           onClick={handleDismiss}
           className="relative ml-1 rounded-md p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring"
-          aria-label="Dismiss launch banner"
+          aria-label={rs.dismissBanner}
           data-testid={content.testId ? `${content.testId}-dismiss` : undefined}
         >
           <X className="size-4" />

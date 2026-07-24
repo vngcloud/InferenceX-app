@@ -125,7 +125,7 @@ describe('getHardwareConfig', () => {
   it('handles GB200 NVL72 label vs gpu name divergence', () => {
     const config = getHardwareConfig('gb200_dynamo-trt');
     expect(config.label).toBe('GB200 NVL72');
-    expect(config.gpu).toBe("NVIDIA 'Blackwell' GB200 Dynamo TRT");
+    expect(config.gpu).toBe("NVIDIA 'Blackwell' GB200 Dynamo TRTLLM");
   });
 
   it('returns unknown config when base GPU is not recognised', () => {
@@ -154,6 +154,27 @@ describe('getHardwareConfig', () => {
     warnSpy.mockRestore();
   });
 
+  it('renders M3 mtp configs with the "M3 EAGLE" suffix when model is passed', () => {
+    const config = getHardwareConfig('h100_vllm_mtp', 'MiniMax-M3');
+    expect(config.suffix).toBe('(vLLM, M3 EAGLE)');
+    expect(config.gpu).toContain('M3 EAGLE');
+  });
+
+  it('keeps the generic MTP suffix for non-M3 models', () => {
+    expect(getHardwareConfig('h100_sglang_mtp', 'DeepSeek-R1-0528').suffix).toBe('(SGLang, MTP)');
+  });
+
+  it('keeps the generic MTP suffix when no model is passed (backward compatible)', () => {
+    expect(getHardwareConfig('h100_vllm_mtp').suffix).toBe('(vLLM, MTP)');
+  });
+
+  it('does not let the model-scoped cache leak into the model-less lookup', () => {
+    // Prime the cache with the M3 (EAGLE) variant first, then ensure the
+    // model-less call still returns the generic label.
+    getHardwareConfig('b200_vllm_mtp', 'MiniMax-M3');
+    expect(getHardwareConfig('b200_vllm_mtp').suffix).toBe('(vLLM, MTP)');
+  });
+
   it('HW_REGISTRY has non-zero power for all entries', () => {
     for (const entry of Object.values(HW_REGISTRY)) {
       expect(entry.power).toBeGreaterThan(0);
@@ -175,7 +196,7 @@ describe('getHardwareConfig', () => {
 describe('getGpuSpecs', () => {
   it('returns specs for a base GPU key', () => {
     const specs = getGpuSpecs('h100');
-    expect(specs.power).toBe(1.73);
+    expect(specs.power).toBe(1.37);
     expect(specs.costh).toBe(1.3);
     expect(specs.costn).toBe(1.69);
     expect(specs.costr).toBe(1.3);
@@ -183,12 +204,12 @@ describe('getGpuSpecs', () => {
 
   it('extracts base from compound key (e.g. h100_vllm)', () => {
     const specs = getGpuSpecs('h100_vllm');
-    expect(specs.power).toBe(1.73);
+    expect(specs.power).toBe(1.37);
   });
 
   it('extracts base from dash-separated key (e.g. h200-dynamo-trt)', () => {
     const specs = getGpuSpecs('h200-dynamo-trt');
-    expect(specs.power).toBe(1.73);
+    expect(specs.power).toBe(1.37);
     expect(specs.costh).toBe(1.41);
   });
 

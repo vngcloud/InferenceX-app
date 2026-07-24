@@ -62,13 +62,14 @@ describe('NUDGE_REGISTRY integrity', () => {
   it('contains the expected set of migrated nudges', () => {
     const ids = NUDGE_REGISTRY.map((n) => n.id).toSorted();
     expect(ids).toEqual([
-      'dsv4-launch-banner',
-      'dsv4-launch-modal',
       'eval-samples',
       'export',
       'feedback-modal',
+      'filter-hint',
       'github-star-modal',
       'gradient-label',
+      'minimax-m3-launch-banner',
+      'minimax-m3-launch-modal',
       'reproducibility',
       'star-nudge',
     ]);
@@ -77,6 +78,20 @@ describe('NUDGE_REGISTRY integrity', () => {
   it('preserves testId for every entry', () => {
     for (const nudge of NUDGE_REGISTRY) {
       expect(nudge.content.testId).toBeTruthy();
+    }
+  });
+
+  it('only server-renders deterministic immediate banners', () => {
+    const initialNudges = NUDGE_REGISTRY.filter((nudge) => nudge.renderOnInitialLoad);
+
+    expect(initialNudges).toHaveLength(1);
+    for (const nudge of initialNudges) {
+      const triggers = Array.isArray(nudge.trigger) ? nudge.trigger : [nudge.trigger];
+      expect(nudge.type).toBe('banner');
+      expect(triggers.some((trigger) => trigger.type === 'immediate')).toBe(true);
+      expect(nudge.conditions).toBeUndefined();
+      expect(nudge.permanentSuppressKey).toBeUndefined();
+      expect(nudge.schedule).toBeUndefined();
     }
   });
 });

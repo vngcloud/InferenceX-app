@@ -14,13 +14,14 @@ function clearAllNudgeStorage(win: Cypress.AUTWindow) {
   const keys = [
     'inferencex-starred',
     'inferencex-star-modal-dismissed',
-    'inferencex-dsv4-modal-dismissed',
-    'inferencex-dsv4-banner-dismissed-v2',
+    'inferencex-minimax-m3-modal-dismissed',
+    'inferencex-minimax-m3-banner-dismissed',
     'inferencex-reproducibility-nudge-shown',
     'inferencex-star-nudge-shown',
     'inferencex-export-nudge-shown',
     'inferencex-gradient-nudge-shown',
     'inferencex-eval-samples-nudge-dismissed',
+    'inferencex-filter-hint-nudge-dismissed',
   ];
   for (const key of keys) {
     win.localStorage.removeItem(key);
@@ -42,53 +43,55 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('Landing nudges — modals', () => {
-  it('shows dsv4 modal and banner simultaneously on fresh first load', () => {
+  it('shows launch modal and banner simultaneously on fresh first load', () => {
     cy.visit('/', {
       onBeforeLoad: clearAllNudgeStorage,
     });
     // Banner (inline) and modal (overlay) occupy independent slots
     cy.get('[data-testid="launch-banner"]').should('be.visible');
-    cy.get('[data-testid="dsv4-launch-modal"]').should('be.visible');
+    cy.get('[data-testid="launch-modal"]')
+      .should('be.visible')
+      .and('match', 'div[role="dialog"][aria-modal="false"]');
     // Only one overlay at a time — star modal should not appear
     cy.get('[data-testid="github-star-modal"]').should('not.exist');
   });
 
-  it('dismissing dsv4 modal persists — not shown on reload', () => {
+  it('dismissing launch modal persists — not shown on reload', () => {
     cy.visit('/', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    cy.get('[data-testid="dsv4-launch-modal"]').should('be.visible');
-    cy.get('[data-testid="dsv4-launch-modal-dismiss"]').click();
-    cy.get('[data-testid="dsv4-launch-modal"]').should('not.exist');
+    cy.get('[data-testid="launch-modal"]').should('be.visible');
+    cy.get('[data-testid="launch-modal-dismiss"]').click();
+    cy.get('[data-testid="launch-modal"]').should('not.exist');
 
     cy.reload();
-    cy.get('[data-testid="dsv4-launch-modal"]').should('not.exist');
+    cy.get('[data-testid="launch-modal"]').should('not.exist');
   });
 
-  it('dsv4 modal Explore action persists dismissal in localStorage', () => {
+  it('launch modal Explore action persists dismissal in localStorage', () => {
     cy.visit('/', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    cy.get('[data-testid="dsv4-launch-modal"]').should('be.visible');
+    cy.get('[data-testid="launch-modal"]').should('be.visible');
 
     // The action writes localStorage synchronously before navigation. Check
     // the storage value before the navigation completes; combined with the
     // "Maybe Later" persists-across-reload test, this covers the explore
     // path without needing to stub window.location.
-    cy.get('[data-testid="dsv4-launch-modal-action"]').click();
+    cy.get('[data-testid="launch-modal-action"]').click();
     cy.window().then((win) => {
-      expect(win.localStorage.getItem('inferencex-dsv4-modal-dismissed')).to.eq('1');
+      expect(win.localStorage.getItem('inferencex-minimax-m3-modal-dismissed')).to.eq('1');
     });
   });
 
-  it('shows star modal when dsv4 modal was previously dismissed', () => {
+  it('shows star modal when launch modal was previously dismissed', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-dsv4-modal-dismissed', '1');
+        win.localStorage.setItem('inferencex-minimax-m3-modal-dismissed', '1');
       },
     });
-    cy.get('[data-testid="dsv4-launch-modal"]').should('not.exist');
+    cy.get('[data-testid="launch-modal"]').should('not.exist');
     cy.get('[data-testid="github-star-modal"]').should('be.visible');
   });
 
@@ -96,7 +99,7 @@ describe('Landing nudges — modals', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-dsv4-modal-dismissed', '1');
+        win.localStorage.setItem('inferencex-minimax-m3-modal-dismissed', '1');
       },
     });
     cy.get('[data-testid="github-star-modal"]').should('be.visible');
@@ -114,7 +117,7 @@ describe('Landing nudges — modals', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-dsv4-modal-dismissed', '1');
+        win.localStorage.setItem('inferencex-minimax-m3-modal-dismissed', '1');
       },
     });
     cy.get('[data-testid="github-star-modal"]').should('be.visible');
@@ -137,7 +140,7 @@ describe('Landing nudges — banner', () => {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
         // Dismiss modals so the banner (highest priority at 60) is the active nudge.
-        // Actually the banner has priority 60 > dsv4 modal 50, so it should show first.
+        // Actually the banner has priority 60 > launch modal 50, so it should show first.
         // But the engine only shows one nudge at a time; the banner wins because of priority.
       },
     });
@@ -175,7 +178,7 @@ describe('Landing nudges — banner', () => {
     cy.get('[data-testid="launch-banner"]').should('be.visible');
     cy.window().then((win) => {
       // Only the X button should persist a dismissal — show alone must not.
-      expect(win.localStorage.getItem('inferencex-dsv4-banner-dismissed-v2')).to.eq(null);
+      expect(win.localStorage.getItem('inferencex-minimax-m3-banner-dismissed')).to.eq(null);
     });
   });
 
@@ -190,7 +193,7 @@ describe('Landing nudges — banner', () => {
     // Body click must not write the dismissal key — the banner should still
     // render on a fresh visit to landing.
     cy.window().then((win) => {
-      expect(win.localStorage.getItem('inferencex-dsv4-banner-dismissed-v2')).to.eq(null);
+      expect(win.localStorage.getItem('inferencex-minimax-m3-banner-dismissed')).to.eq(null);
     });
 
     cy.visit('/');
@@ -229,6 +232,50 @@ describe('Dashboard nudges — reproducibility toast', () => {
         null,
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard — filter-hint toast (inference tab only, permanent dismissal)
+// ---------------------------------------------------------------------------
+
+// Only one overlay toast shows at a time and reproducibility (1.5s timer) wins
+// the slot on a fresh session. Suppress the competing dashboard toasts so the
+// filter-hint toast (2.5s timer) deterministically claims the overlay slot.
+function suppressCompetingDashboardToasts(win: Cypress.AUTWindow) {
+  clearAllNudgeStorage(win);
+  win.sessionStorage.setItem('inferencex-reproducibility-nudge-shown', '1');
+  win.sessionStorage.setItem('inferencex-star-nudge-shown', '1');
+}
+
+describe('Dashboard nudges — filter-hint toast', () => {
+  it('shows the filter-hint nudge on the inference tab after a short delay', () => {
+    cy.visit('/inference', { onBeforeLoad: suppressCompetingDashboardToasts });
+    cy.get('[data-testid="filter-hint-nudge"]').should('not.exist');
+    cy.get('[data-testid="filter-hint-nudge"]', { timeout: 5000 }).should('be.visible');
+  });
+
+  it('does not show the filter-hint nudge outside the inference tab', () => {
+    cy.visit('/evaluation', { onBeforeLoad: suppressCompetingDashboardToasts });
+    cy.wait(3500);
+    cy.get('[data-testid="filter-hint-nudge"]').should('not.exist');
+  });
+
+  it('dismissal persists to localStorage and the nudge stays gone after reload', () => {
+    cy.visit('/inference', { onBeforeLoad: suppressCompetingDashboardToasts });
+    cy.get('[data-testid="filter-hint-nudge"]', { timeout: 5000 }).should('be.visible');
+
+    cy.get('[data-testid="filter-hint-nudge"] button[aria-label]').first().click();
+    // The toast's exit animation delays the persisted write by ~300ms.
+    cy.wait(400);
+    cy.window().then((win) => {
+      expect(win.localStorage.getItem('inferencex-filter-hint-nudge-dismissed')).to.eq('1');
+    });
+
+    // Keep the persisted dismissal but re-suppress competitors on reload.
+    cy.reload();
+    cy.wait(3500);
+    cy.get('[data-testid="filter-hint-nudge"]').should('not.exist');
   });
 });
 
@@ -297,7 +344,7 @@ describe('Nudge scope isolation', () => {
     cy.visit('/inference', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    cy.get('[data-testid="dsv4-launch-modal"]').should('not.exist');
+    cy.get('[data-testid="launch-modal"]').should('not.exist');
     cy.get('[data-testid="github-star-modal"]').should('not.exist');
     cy.get('[data-testid="launch-banner"]').should('not.exist');
   });
@@ -307,8 +354,8 @@ describe('Nudge scope isolation', () => {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
         // Dismiss all landing nudges so nothing blocks visibility checks
-        win.localStorage.setItem('inferencex-dsv4-modal-dismissed', '1');
-        win.localStorage.setItem('inferencex-dsv4-banner-dismissed-v2', '1');
+        win.localStorage.setItem('inferencex-minimax-m3-modal-dismissed', '1');
+        win.localStorage.setItem('inferencex-minimax-m3-banner-dismissed', '1');
         win.localStorage.setItem('inferencex-starred', '1');
       },
     });

@@ -7,9 +7,7 @@ export interface EvalRow {
   framework: string;
   model: string;
   precision: string;
-  /** Derived from techniques.spec_method via SQL COALESCE; 'none' when absent. */
   spec_method: string;
-  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -40,8 +38,7 @@ export async function getAllEvalResults(sql: DbClient): Promise<EvalRow[]> {
       c.framework,
       c.model,
       c.precision,
-      COALESCE(er.techniques->>'spec_method', 'none') AS spec_method,
-      er.techniques,
+      c.spec_method,
       c.disagg,
       c.is_multinode,
       c.prefill_tp,

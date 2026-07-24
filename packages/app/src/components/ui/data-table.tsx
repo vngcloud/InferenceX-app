@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { track } from '@/lib/analytics';
+import { useLocale } from '@/lib/use-locale';
 import {
   Select,
   SelectContent,
@@ -19,6 +20,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+
+const STRINGS = {
+  en: {
+    noData: 'No data available for the current filters.',
+    searchPlaceholder: 'Search...',
+    searchLabel: 'Search table',
+    clearSearch: 'Clear search',
+    noResults: (q: string) => `No results match "${q}"`,
+    perPage: 'per page',
+    rowsPerPage: 'Rows per page',
+    prevPage: 'Previous page',
+    nextPage: 'Next page',
+    of: 'of',
+    filteredFrom: (total: number) => `(filtered from ${total})`,
+  },
+  zh: {
+    noData: '当前筛选条件下无可用数据。',
+    searchPlaceholder: '搜索…',
+    searchLabel: '搜索表格',
+    clearSearch: '清除搜索',
+    noResults: (q: string) => `无匹配"${q}"的结果`,
+    perPage: '每页',
+    rowsPerPage: '每页行数',
+    prevPage: '上一页',
+    nextPage: '下一页',
+    of: '/',
+    filteredFrom: (total: number) => `（从 ${total} 条中筛选）`,
+  },
+} as const;
 
 export interface DataTableColumn<T> {
   /** Column header text. */
@@ -53,7 +83,7 @@ interface DataTableProps<T> {
   watermark?: boolean;
 }
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500] as const;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500] as const;
 
 const ALIGN_CLASSES = {
   left: 'text-left',
@@ -74,8 +104,10 @@ export function DataTable<T>({
   analyticsPrefix = 'table',
   watermark = true,
 }: DataTableProps<T>) {
+  const locale = useLocale();
+  const t = STRINGS[locale];
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [sort, setSort] = useState<SortState>({ columnIndex: -1, dir: null });
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -134,11 +166,7 @@ export function DataTable<T>({
   const pageData = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
   if (data.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground py-8 text-center">
-        No data available for the current filters.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground py-8 text-center">{t.noData}</p>;
   }
 
   return (
@@ -154,19 +182,20 @@ export function DataTable<T>({
             setSearch(e.target.value);
             setPage(0);
           }}
-          placeholder="Search..."
+          placeholder={t.searchPlaceholder}
           className="w-full h-7 pl-8 pr-7 text-xs bg-transparent border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-ring"
-          aria-label="Search table"
+          aria-label={t.searchLabel}
         />
         {search && (
           <button
+            type="button"
             onClick={() => {
               setSearch('');
               setPage(0);
               searchRef.current?.focus();
             }}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            aria-label="Clear search"
+            aria-label={t.clearSearch}
           >
             <X className="size-3" />
           </button>
@@ -231,7 +260,7 @@ export function DataTable<T>({
                   colSpan={columns.length}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
-                  No results match &quot;{search}&quot;
+                  {t.noResults(search)}
                 </td>
               </tr>
             ) : (
@@ -259,8 +288,8 @@ export function DataTable<T>({
             {sorted.length === 0
               ? '0'
               : `${safePage * pageSize + 1}–${Math.min((safePage + 1) * pageSize, sorted.length)}`}{' '}
-            of {sorted.length}
-            {search && ` (filtered from ${data.length})`}
+            {t.of} {sorted.length}
+            {search && ` ${t.filteredFrom(data.length)}`}
           </span>
           <Select
             value={String(pageSize)}
@@ -271,7 +300,7 @@ export function DataTable<T>({
               track(`${analyticsPrefix}_page_size_changed`, { size });
             }}
           >
-            <SelectTrigger className="h-6 w-auto gap-1 px-2 text-xs" aria-label="Rows per page">
+            <SelectTrigger className="h-6 w-auto gap-1 px-2 text-xs" aria-label={t.rowsPerPage}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -282,17 +311,18 @@ export function DataTable<T>({
               ))}
             </SelectContent>
           </Select>
-          <span>per page</span>
+          <span>{t.perPage}</span>
         </div>
         <div className="flex items-center gap-1">
           <button
+            type="button"
             onClick={() => {
               setPage((p) => Math.max(0, p - 1));
               track(`${analyticsPrefix}_page_changed`, { direction: 'prev' });
             }}
             disabled={safePage === 0}
             className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            aria-label="Previous page"
+            aria-label={t.prevPage}
           >
             <ChevronLeft className="size-4" />
           </button>
@@ -300,13 +330,14 @@ export function DataTable<T>({
             {safePage + 1} / {totalPages}
           </span>
           <button
+            type="button"
             onClick={() => {
               setPage((p) => Math.min(totalPages - 1, p + 1));
               track(`${analyticsPrefix}_page_changed`, { direction: 'next' });
             }}
             disabled={safePage >= totalPages - 1}
             className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            aria-label="Next page"
+            aria-label={t.nextPage}
           >
             <ChevronRight className="size-4" />
           </button>

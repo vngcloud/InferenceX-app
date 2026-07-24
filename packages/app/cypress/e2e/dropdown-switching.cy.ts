@@ -17,10 +17,10 @@ describe('Dropdown one-click switching', () => {
     cy.get('[data-testid="model-selector"]').should('have.attr', 'aria-expanded', 'true');
     cy.get('[role="option"]').should('have.length.greaterThan', 0);
 
-    cy.get('[data-testid="sequence-selector"]').click();
+    cy.get('[data-testid="scenario-selector"]').click();
 
     cy.get('[data-testid="model-selector"]').should('have.attr', 'aria-expanded', 'false');
-    cy.get('[data-testid="sequence-selector"]').should('have.attr', 'aria-expanded', 'true');
+    cy.get('[data-testid="scenario-selector"]').should('have.attr', 'aria-expanded', 'true');
     cy.get('[role="option"]').should('have.length.greaterThan', 0);
   });
 
@@ -42,6 +42,16 @@ describe('Dropdown one-click switching', () => {
 
     cy.get('[data-testid="model-selector"]').should('have.attr', 'aria-expanded', 'false');
     cy.get('[data-slot="select-content"]').should('not.exist');
+  });
+
+  it('separates maintenance-mode models from deprecated models', () => {
+    cy.get('[data-testid="model-selector"]').click();
+
+    cy.contains('Maintenance Mode').scrollIntoView().should('be.visible');
+    cy.contains('[role="option"]', 'DeepSeek R1 0528 671B').scrollIntoView().should('be.visible');
+    cy.contains('Deprecated').scrollIntoView().should('be.visible');
+    cy.contains('[role="option"]', 'gpt-oss 120B').scrollIntoView().should('be.visible');
+    cy.contains('[role="option"]', 'Llama 3.3 70B Instruct').scrollIntoView().should('be.visible');
   });
 
   it('Escape closes the Y-axis SearchableSelect dropdown', () => {

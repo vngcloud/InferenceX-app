@@ -3,16 +3,18 @@
  * Each function is a thin fetch wrapper returning typed data.
  */
 
+import type { WorkerPower } from '@/components/inference/types';
+
 import type { SubmissionsResponse } from './submissions-types';
 
 export interface BenchmarkRow {
+  /** Stable per-point id from benchmark_results; used for agentic detail lookups. */
+  id: number;
   hardware: string;
   framework: string;
   model: string;
   precision: string;
-  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
-  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -25,11 +27,24 @@ export interface BenchmarkRow {
   decode_num_workers: number;
   num_prefill_gpu: number;
   num_decode_gpu: number;
-  isl: number;
-  osl: number;
+  benchmark_type: string;
+  // Null for agentic_traces rows; numeric for single_turn fixed-seq rows.
+  isl: number | null;
+  osl: number | null;
   conc: number;
+  /** KV-cache offload mode. Defaults to 'off' for fixed-sequence rows. */
+  offload_mode: string;
   image: string | null;
   metrics: Record<string, number>;
+  /**
+   * Per-worker measured power for multinode / disagg runs. The runner emits
+   * this as a JSONB sibling of the scalar metrics; the API layer surfaces it
+   * as a separate field here so the scalar `metrics` index signature can stay
+   * `Record<string, number>` and existing `m.x ?? 0` call sites keep narrowing
+   * cleanly. Undefined for single-node runs and any run predating
+   * aggregate_power.py.
+   */
+  workers?: WorkerPower[];
   date: string;
   run_url: string | null;
 }
@@ -65,10 +80,29 @@ export interface DateConfigRow {
   disagg: boolean;
 }
 
+/**
+ * Per-(run, config) coverage for a date — which workflow runs produced benchmark
+ * data for which configs. Data-driven, so a run that shipped data without a
+ * changelog entry still appears (used to enumerate every run on a date).
+ */
+export interface RunConfigRow {
+  github_run_id: number;
+  run_started_at: string | null;
+  html_url: string | null;
+  head_sha: string | null;
+  model: string;
+  precision: string;
+  hardware: string;
+  framework: string;
+  spec_method: string;
+  disagg: boolean;
+}
+
 export interface WorkflowInfoResponse {
   runs: WorkflowRunRow[];
   changelogs: ChangelogRow[];
   configs: DateConfigRow[];
+  runConfigs: RunConfigRow[];
 }
 
 export interface ReliabilityRow {
@@ -85,9 +119,7 @@ export interface EvalRow {
   framework: string;
   model: string;
   precision: string;
-  /** Derived from techniques.spec_method by the API; 'none' when absent. */
   spec_method: string;
-  techniques: Record<string, string | number>;
   disagg: boolean;
   is_multinode: boolean;
   prefill_tp: number;
@@ -119,10 +151,15 @@ export function fetchBenchmarks(
   date?: string,
   exact?: boolean,
   signal?: AbortSignal,
+  runId?: string,
+  /** When true with a runId, fetch exactly that run's results (GPU comparison). */
+  exactRun?: boolean,
 ) {
   const params = new URLSearchParams({ model });
   if (date) params.set('date', date);
   if (exact) params.set('exact', 'true');
+  if (runId) params.set('runId', runId);
+  if (exactRun) params.set('exactRun', 'true');
   return fetchJson<BenchmarkRow[]>(`/api/v1/benchmarks?${params}`, signal);
 }
 
@@ -145,13 +182,14 @@ export function fetchWorkflowInfo(date: string, signal?: AbortSignal) {
 
 export interface AvailabilityRow {
   model: string;
-  isl: number;
-  osl: number;
+  isl: number | null;
+  osl: number | null;
   precision: string;
   hardware: string;
   framework: string;
   spec_method: string;
   disagg: boolean;
+  benchmark_type: string;
   date: string;
 }
 
@@ -197,6 +235,8 @@ export interface EvalSamplesResponse {
   passedTotal: number;
   failedTotal: number;
   source: 'db' | 'github_artifact';
+  /** Actual page offset; present when the server resolves a shared doc id. */
+  offset?: number;
 }
 
 export type EvalSamplesFilter = 'all' | 'passed' | 'failed';
@@ -206,6 +246,7 @@ export function fetchEvalSamples(
   filter: EvalSamplesFilter,
   offset: number,
   limit: number,
+  docId?: number | null,
   signal?: AbortSignal,
 ) {
   const params = new URLSearchParams({
@@ -214,6 +255,7 @@ export function fetchEvalSamples(
     offset: String(offset),
     limit: String(limit),
   });
+  if (docId !== null && docId !== undefined) params.set('doc_id', String(docId));
   return fetchJson<EvalSamplesResponse>(`/api/v1/eval-samples?${params}`, signal);
 }
 
@@ -282,6 +324,7 @@ export interface LatestImageRow {
   framework: string;
   precision: string;
   spec_method: string;
+  disagg: boolean;
   isl: number;
   osl: number;
   image: string;

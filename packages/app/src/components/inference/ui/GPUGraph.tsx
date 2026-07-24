@@ -10,8 +10,10 @@ import ChartLegend from '@/components/ui/chart-legend';
 import { getHardwareConfig, getModelSortIndex } from '@/lib/constants';
 import { getChartWatermark } from '@/lib/data-mappings';
 import { generateGpuDateColors } from '@/lib/dynamic-colors';
+import { useLocale } from '@/lib/use-locale';
 import { formatNumber, getDisplayLabel, updateRepoUrl } from '@/lib/utils';
 import { useThemeColors } from '@/hooks/useThemeColors';
+import { useTraceAvailability } from '@/hooks/api/use-trace-availability';
 import { D3Chart } from '@/lib/d3-chart/D3Chart';
 import type {
   CustomLayerConfig,
@@ -26,8 +28,10 @@ import {
   formatLargeNumber,
   getShapeKeyForPrecision,
   logTickFormat,
+  POINT_SIZE,
 } from '@/lib/chart-rendering';
 import {
+  isFrontierEligible,
   paretoFrontLowerLeft,
   paretoFrontLowerRight,
   paretoFrontUpperLeft,
@@ -39,9 +43,21 @@ import type {
   ScatterGraphProps,
 } from '@/components/inference/types';
 import {
+  buildRunNumbering,
+  comparisonEntryLabel,
+  comparisonEntrySortValue,
+  resolveComparisonEntries,
+} from '@/components/inference/utils/comparisonEntry';
+import {
   generateGPUGraphTooltipContent,
   getPointLabel,
 } from '@/components/inference/utils/tooltipUtils';
+import {
+  type KnownIssueAnnotation,
+  measureLegendRightInset,
+  renderKnownIssueAnnotations,
+} from '@/components/inference/utils/knownIssueAnnotations';
+import { matchKnownConfigIssues, pointMatchesIssue } from '@/lib/known-issues';
 
 const CHART_MARGIN = { top: 24, right: 10, bottom: 60, left: 60 };
 
@@ -49,16 +65,45 @@ const CHART_MARGIN = { top: 24, right: 10, bottom: 60, left: 60 };
 // both dimensions of the GPU comparison view are legible on the chart,
 // not only the legend. Falls back to the raw hwKey if the config
 // lookup misses (legacy data).
-function labelTextFor(pts: InferenceData[]): string {
+function labelTextFor(pts: InferenceData[], numbering: Map<string, number>): string {
   const hwKey = String(pts[0].hwKey);
-  const date = String(pts[0].date);
-  const cfg = getHardwareConfig(hwKey);
+  const cfg = getHardwareConfig(hwKey, pts[0].model);
   const hwLabel = cfg ? getDisplayLabel(cfg) : hwKey;
-  return `${hwLabel} • ${date}`;
+  return `${hwLabel} • ${comparisonEntryLabel(String(pts[0].date), numbering)}`;
 }
 
+const GPU_STRINGS = {
+  en: {
+    logScale: 'Log Scale',
+    highContrast: 'High Contrast',
+    optimalOnly: 'Optimal Only',
+    labels: 'Labels',
+    parallelismLabels: 'Parallelism Labels',
+    lineLabels: 'Line Labels',
+    resetFilter: 'Reset filter',
+  },
+  zh: {
+    logScale: '对数缩放',
+    highContrast: '高对比度',
+    optimalOnly: '仅最优',
+    labels: '标签',
+    parallelismLabels: '并行配置标签',
+    lineLabels: '曲线标签',
+    resetFilter: '重置筛选',
+  },
+} as const;
+
 const GPUGraph = React.memo(
-  ({ chartId, data, xLabel, yLabel, chartDefinition, caption }: ScatterGraphProps) => {
+  ({
+    chartId,
+    modelLabel,
+    data,
+    xLabel,
+    yLabel,
+    chartDefinition,
+    caption,
+    runNumbering: providedRunNumbering,
+  }: ScatterGraphProps) => {
     const {
       hardwareConfig,
       selectedPrecisions,
@@ -66,13 +111,14 @@ const GPUGraph = React.memo(
       selectedGPUs,
       selectedDateRange,
       selectedDates,
+      setSelectedDates,
       toggleActiveDate,
       removeActiveDate,
       activeDates,
       hideNonOptimal,
       setHideNonOptimal,
-      hidePointLabels,
-      setHidePointLabels,
+      showPointLabels,
+      setShowPointLabels,
       logScale,
       setLogScale,
       isLegendExpanded,
@@ -85,23 +131,52 @@ const GPUGraph = React.memo(
       showLineLabels,
       setShowLineLabels,
     } = useInference();
+    const locale = useLocale();
+    const legendT = GPU_STRINGS[locale];
     const { resolvedTheme } = useTheme();
     const chartRef = useRef<D3ChartHandle>(null);
 
-    // Shared date+GPU pairs
+    // Shared date+GPU pairs. `dates` holds comparison-series entries (plain dates
+    // and/or specific-run entries); a same-day range endpoint is dropped when that
+    // date also has run entries (resolveComparisonEntries), then sorted earliest →
+    // latest so a day's runs read #1 → #N.
     const gpuDatePairs = useMemo(() => {
-      const dates: string[] = [];
-      if (selectedDateRange.startDate && selectedDateRange.endDate && selectedGPUs.length > 0) {
-        dates.push(selectedDateRange.startDate, selectedDateRange.endDate);
-      }
-      dates.push(...selectedDates);
-      const deduplicated = [...new Set(dates)];
-      deduplicated.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+      const deduplicated = resolveComparisonEntries(selectedDates, selectedDateRange);
+      deduplicated.sort((a, b) => {
+        const [ta, ia] = comparisonEntrySortValue(a);
+        const [tb, ib] = comparisonEntrySortValue(b);
+        return ta - tb || ia - ib;
+      });
       const sortedGPUs = [...selectedGPUs].toSorted(
         (a, b) => getModelSortIndex(a) - getModelSortIndex(b) || a.localeCompare(b),
       );
       return { dates: deduplicated, sortedGPUs };
     }, [selectedDateRange, selectedDates, selectedGPUs]);
+
+    // Run numbers for legend/line labels. Prefer the stable numbering passed by
+    // the parent (shared with the changelog, so labels match it and removed runs
+    // leave a gap); fall back to gap-free numbering of the on-chart series.
+    const runNumbering = useMemo(
+      () => providedRunNumbering ?? buildRunNumbering(gpuDatePairs.dates),
+      [providedRunNumbering, gpuDatePairs.dates],
+    );
+
+    // Removing a series from the legend should also drop it from the comparison
+    // selection so the config changelog stays in sync (two-way binding). Legend
+    // ids are `${entry}_${gpu}`; strip the gpu suffix to recover the entry. Range
+    // endpoints aren't individual selections, so those fall back to a visibility hide.
+    const handleLegendRemove = useCallback(
+      (id: string) => {
+        const gpu = selectedGPUs.find((g) => id.endsWith(`_${g}`));
+        const entry = gpu ? id.slice(0, id.length - gpu.length - 1) : id;
+        if (selectedDates.includes(entry)) {
+          setSelectedDates((prev) => prev.filter((e) => e !== entry));
+        } else {
+          removeActiveDate(id);
+        }
+      },
+      [selectedGPUs, selectedDates, setSelectedDates, removeActiveDate],
+    );
 
     const graphIdentifiers = useMemo(() => {
       const ids: string[] = [];
@@ -180,14 +255,17 @@ const GPUGraph = React.memo(
         | 'lower_right'
         | undefined;
       for (const key of Object.keys(groupedData)) {
+        // Exclude degenerate x <= 0 points (interactivity = 0, etc.) from the
+        // frontier so they are never drawn as optimal.
+        const eligible = groupedData[key].filter(isFrontierEligible);
         result[key] =
           dir === 'upper_right'
-            ? paretoFrontUpperRight(groupedData[key])
+            ? paretoFrontUpperRight(eligible)
             : dir === 'upper_left'
-              ? paretoFrontUpperLeft(groupedData[key])
+              ? paretoFrontUpperLeft(eligible)
               : dir === 'lower_left'
-                ? paretoFrontLowerLeft(groupedData[key])
-                : paretoFrontLowerRight(groupedData[key]);
+                ? paretoFrontLowerLeft(eligible)
+                : paretoFrontLowerRight(eligible);
       }
       return result;
     }, [groupedData, selectedYAxisMetric, chartDefinition]);
@@ -210,6 +288,85 @@ const GPUGraph = React.memo(
         );
       return pts;
     }, [groupedData, activeDates, hideNonOptimal, optimalPointKeys]);
+
+    // GPU comparison currently renders official DB-backed points only. Unofficial
+    // overlays have no benchmark_results id or persisted trace, so they cannot
+    // open the dedicated per-point charts route.
+    const agenticIds = useMemo(
+      () =>
+        filteredData.flatMap((point) =>
+          point.benchmark_type === 'agentic_traces' && typeof point.id === 'number'
+            ? [point.id]
+            : [],
+        ),
+      [filteredData],
+    );
+    const { data: traceAvailability } = useTraceAvailability(agenticIds);
+
+    // Warning annotations for visible series with known upstream issues —
+    // same treatment the scatter view gets, applied to the date-comparison view.
+    // Lines here are colored per (gpu, date) pair, so take the first active
+    // pair's color as the series swatch.
+    const knownIssueAnnotations = useMemo(
+      (): KnownIssueAnnotation[] =>
+        matchKnownConfigIssues(modelLabel, filteredData).map((issue) => {
+          const cfg = getHardwareConfig(issue.hwKey, modelLabel);
+          const colorEntry = allGraphs.find(
+            (entry) => entry.hwKey === issue.hwKey && activeDates.has(entry.id),
+          );
+          return {
+            issue,
+            label: cfg ? getDisplayLabel(cfg) : issue.hwKey,
+            color: getCssColor(colorEntry?.color ?? resolveColor(issue.hwKey)),
+            points: filteredData
+              .filter((p) => pointMatchesIssue(issue, p))
+              .map((p) => ({ x: p.x, y: p.y })),
+          };
+        }),
+      [modelLabel, filteredData, allGraphs, activeDates, resolveColor, getCssColor],
+    );
+
+    const drawKnownIssues = (
+      ctx: RenderContext,
+      xScale: ContinuousScale,
+      yScale: ContinuousScale,
+    ) => {
+      renderKnownIssueAnnotations(ctx.layout.g, ctx.layout.defs, {
+        chartId,
+        width: ctx.width,
+        height: ctx.height,
+        xScale,
+        yScale,
+        annotations: knownIssueAnnotations,
+        // Only measure the legend overlap when there are boxes to place —
+        // this runs on every zoom frame, and the measurement forces layout.
+        rightInset:
+          knownIssueAnnotations.length === 0
+            ? 0
+            : measureLegendRightInset(
+                chartId,
+                ctx.layout.svg.node(),
+                ctx.layout.margin.left,
+                ctx.width,
+              ),
+        background: getCssColor('--background'),
+        foreground: getCssColor('--foreground'),
+        mutedForeground: getCssColor('--muted-foreground'),
+        onLinkClick: (a) =>
+          track('inference_known_issue_clicked', {
+            hwKey: a.issue.hwKey,
+            issue: a.issue.issueRef,
+          }),
+      });
+    };
+    const knownIssueLayer: CustomLayerConfig = {
+      type: 'custom',
+      key: 'known-issues',
+      render: (_zoomGroup, ctx) =>
+        drawKnownIssues(ctx, ctx.xScale as ContinuousScale, ctx.yScale as ContinuousScale),
+      onZoom: (_zoomGroup, ctx) =>
+        drawKnownIssues(ctx, ctx.newXScale as ContinuousScale, ctx.newYScale as ContinuousScale),
+    };
 
     // Compute scale domains
     const xExtent = useMemo(() => {
@@ -321,7 +478,7 @@ const GPUGraph = React.memo(
                 pts[Math.max(0, Math.floor((pts.length * 2) / 3))],
                 pts.at(-1)!,
               ];
-              const labelText = labelTextFor(pts);
+              const labelText = labelTextFor(pts, runNumbering);
               let placedLabel = false;
               for (const pt of candidates) {
                 const px = xScale(pt.x);
@@ -361,7 +518,7 @@ const GPUGraph = React.memo(
               lineLabels.push({
                 key,
                 graphId,
-                label: labelTextFor(pts),
+                label: labelTextFor(pts, runNumbering),
                 color: getRooflineColor(key),
                 x: xScale(pt.x),
                 y: yScale(pt.y),
@@ -389,7 +546,7 @@ const GPUGraph = React.memo(
             }
           }
 
-          zoomGroup
+          const llSel = zoomGroup
             .selectAll<SVGGElement, LineLabel>('.line-label')
             .data(lineLabels, (d) => d.key)
             .join(
@@ -414,20 +571,30 @@ const GPUGraph = React.memo(
             .attr('data-line-key', (d) => d.key)
             .attr('data-graph-id', (d) => d.graphId)
             .attr('transform', (d) => `translate(${d.x + 8},${d.y - 14})`)
-            .style('opacity', (d) => (d.visible ? 0.95 : 0))
-            .each(function (d) {
-              const g = d3.select(this);
-              const text = g.select<SVGTextElement>('.ll-text').text(d.label);
-              const bbox = (text.node() as SVGTextElement).getBBox();
-              const px = 5;
-              const py = 3;
-              g.select('.ll-bg')
-                .attr('x', bbox.x - px)
-                .attr('y', bbox.y - py)
-                .attr('width', bbox.width + px * 2)
-                .attr('height', bbox.height + py * 2)
-                .attr('fill', d.color);
-            });
+            .style('opacity', (d) => (d.visible ? 0.95 : 0));
+
+          // Size each label's background to its text in two passes — write all
+          // texts, then measure all bboxes — so the batch forces one layout
+          // instead of one per label (mirrors ScatterGraph's label loops).
+          llSel.each(function (d) {
+            d3.select(this).select<SVGTextElement>('.ll-text').text(d.label);
+          });
+          const llMeasured: { node: SVGGElement; d: LineLabel; bbox: DOMRect }[] = [];
+          llSel.each(function (d) {
+            const text = this.querySelector<SVGTextElement>('.ll-text');
+            if (text) llMeasured.push({ node: this, d, bbox: text.getBBox() });
+          });
+          for (const { node, d, bbox } of llMeasured) {
+            const px = 5;
+            const py = 3;
+            d3.select(node)
+              .select('.ll-bg')
+              .attr('x', bbox.x - px)
+              .attr('y', bbox.y - py)
+              .attr('width', bbox.width + px * 2)
+              .attr('height', bbox.height + py * 2)
+              .attr('fill', d.color);
+          }
         },
         onZoom: (zoomGroup, ctx) => {
           if (!showLineLabels) return;
@@ -526,7 +693,14 @@ const GPUGraph = React.memo(
           });
         },
       }),
-      [showLineLabels, rooflines, isRooflineVisible, getRooflineColor, chartDefinition.chartType],
+      [
+        showLineLabels,
+        rooflines,
+        isRooflineVisible,
+        getRooflineColor,
+        chartDefinition.chartType,
+        runNumbering,
+      ],
     );
 
     // Dismiss tooltip when pinned point's combo is hidden
@@ -540,36 +714,31 @@ const GPUGraph = React.memo(
       chartRef.current?.dismissTooltip();
     }, [selectedPrecisions, selectedYAxisMetric, selectedGPUs, selectedDates, selectedDateRange]);
 
+    // Hover dimming animates via the inline `transition: opacity 150ms ease`
+    // onRender puts on dots and rooflines — a single style write per node. A
+    // d3 `.transition()` here would re-write opacity every animation frame,
+    // each write restarting the CSS transition (transitionrun/cancel per node
+    // per frame). Same rationale as ScatterGraph's hover handlers.
     const handleLegendHover = useCallback((seriesId: string) => {
       const svg = chartRef.current?.getSvgElement?.();
       if (!svg) return;
       const root = d3.select(svg);
       root
         .selectAll<SVGGElement, InferenceData>('.dot-group')
-        .transition('legend-hover')
-        .duration(150)
         .style('opacity', (d) => (`${d.date}_${d.hwKey}` === seriesId ? 1 : 0.15));
-      root
-        .selectAll<SVGPathElement, unknown>('.roofline-path')
-        .transition('legend-hover')
-        .duration(150)
-        .style('opacity', function () {
-          const key = (d3.select(this).datum() as { key: string } | null)?.key ?? '';
-          const series = key.slice(0, key.lastIndexOf('_'));
-          return series === seriesId ? null : '0.15';
-        });
+      root.selectAll<SVGPathElement, unknown>('.roofline-path').style('opacity', function () {
+        const key = (d3.select(this).datum() as { key: string } | null)?.key ?? '';
+        const series = key.slice(0, key.lastIndexOf('_'));
+        return series === seriesId ? null : '0.15';
+      });
     }, []);
 
     const handleLegendHoverEnd = useCallback(() => {
       const svg = chartRef.current?.getSvgElement?.();
       if (!svg) return;
       const root = d3.select(svg);
-      root.selectAll('.dot-group').transition('legend-hover').duration(150).style('opacity', null);
-      root
-        .selectAll('.roofline-path')
-        .transition('legend-hover')
-        .duration(150)
-        .style('opacity', null);
+      root.selectAll('.dot-group').style('opacity', null);
+      root.selectAll('.roofline-path').style('opacity', null);
     }, []);
 
     if (data.length === 0) {
@@ -639,8 +808,12 @@ const GPUGraph = React.memo(
             data: filteredData,
             config: {
               getColor,
-              hideLabels: hidePointLabels,
-              getLabelText: (d) => (useAdvancedLabels ? getPointLabel(d) : String(d.tp)),
+              hideLabels: !showPointLabels,
+              // Match ScatterGraph: append the concurrency (C=) to the
+              // parallelism/tp label so compare-mode points are annotated the
+              // same way as the single-run scatter chart.
+              getLabelText: (d) =>
+                useAdvancedLabels ? `${getPointLabel(d)}\nC=${d.conc}` : `${d.tp}\nC=${d.conc}`,
               foreground: 'var(--foreground)',
               dataAttrs: {
                 series: (d) => `${d.date}_${d.hwKey}`,
@@ -649,6 +822,7 @@ const GPUGraph = React.memo(
             },
           },
           lineLabelLayer,
+          knownIssueLayer,
         ]}
         zoom={{
           enabled: true,
@@ -678,6 +852,8 @@ const GPUGraph = React.memo(
               selectedYAxisMetric,
               hardwareConfig,
               runUrl: d.run_url ? updateRepoUrl(d.run_url) : undefined,
+              hasTrace: typeof d.id === 'number' ? traceAvailability?.[d.id] === true : false,
+              locale,
             }),
           getRulerX: (d, xScale) => (xScale as d3.ScaleLinear<number, number>)(d.x),
           getRulerY: (d, yScale) => (yScale as d3.ScaleLinear<number, number>)(d.y),
@@ -691,6 +867,37 @@ const GPUGraph = React.memo(
               sel.select('.visible-shape') as any,
               getShapeKeyForPrecision(d.precision, selectedPrecisions),
             ),
+          onPointClick: (d: InferenceData) => {
+            track('gpu_timeseries_data_point_clicked', {
+              id: d.id,
+              hw: String(d.hwKey),
+              x: d.x,
+              y: d.y,
+            });
+            const tooltipEl = chartRef.current?.getTooltipElement();
+            if (!tooltipEl) return;
+            const viewBtn = tooltipEl.querySelector('[data-action="view-charts"]');
+            if (!viewBtn || typeof d.id !== 'number') return;
+            viewBtn.addEventListener('click', (event) => {
+              event.stopPropagation();
+              track('gpu_timeseries_view_charts_opened', {
+                id: d.id,
+                hwKey: String(d.hwKey),
+                conc: d.conc,
+              });
+            });
+            // Pinning updates D3Chart's React state. GPU comparison rebuilds
+            // several inline layer configs on that render, whose cleanup can
+            // briefly hide the otherwise-pinned portal tooltip. Restore its
+            // pinned visibility after that render settles.
+            requestAnimationFrame(() => {
+              const pinnedTooltip = chartRef.current?.getTooltipElement();
+              if (!pinnedTooltip || chartRef.current?.getPinnedPoint() !== d) return;
+              pinnedTooltip.style.opacity = '1';
+              pinnedTooltip.style.display = 'block';
+              pinnedTooltip.style.pointerEvents = 'auto';
+            });
+          },
           attachToLayer: 1,
         }}
         onRender={(ctx: RenderContext) => {
@@ -703,6 +910,34 @@ const GPUGraph = React.memo(
           }
           // Set foreground color on scatter point labels
           ctx.layout.zoomGroup.selectAll('.point-label').style('fill', 'var(--foreground)');
+
+          // CSS transitions for smooth opacity animation on legend hover —
+          // the hover handlers write opacity once and let these animate.
+          ctx.layout.zoomGroup
+            .selectAll('.dot-group, .roofline-path')
+            .style('transition', 'opacity 150ms ease');
+
+          // Offload halo: dashed ring on every point that used KV offload
+          // (mirrors ScatterGraph so compare mode shows the same CPU-offload
+          // indicator). The ring is a child of the dot-group, so it travels
+          // with the point on zoom/pan without a separate onZoom pass.
+          ctx.layout.zoomGroup
+            .selectAll<SVGGElement, InferenceData>('.dot-group')
+            .each(function (d) {
+              const showHalo = d.offload_mode === 'on';
+              d3.select(this)
+                .selectAll<SVGCircleElement, boolean>('.offload-halo')
+                .data(showHalo ? [true] : [])
+                .join('circle')
+                .attr('class', 'offload-halo')
+                .attr('r', POINT_SIZE + 4)
+                .attr('fill', 'none')
+                .attr('stroke', 'var(--foreground)')
+                .attr('stroke-width', 1.5)
+                .attr('stroke-dasharray', '3 2')
+                .attr('opacity', 0.9)
+                .attr('pointer-events', 'none');
+            });
         }}
         legendElement={
           <ChartLegend
@@ -711,15 +946,15 @@ const GPUGraph = React.memo(
             disableActiveSort={true}
             onItemHover={handleLegendHover}
             onItemHoverEnd={handleLegendHoverEnd}
-            onItemRemove={removeActiveDate}
+            onItemRemove={handleLegendRemove}
             legendItems={allGraphs
               .filter(({ id }) => idsWithData.has(id))
               .map(({ date, color, hwKey, id }) => ({
-                name: `${hwKey} ${date}`,
+                name: `${hwKey} ${comparisonEntryLabel(date, runNumbering)}`,
                 hw: id,
-                label: date,
+                label: comparisonEntryLabel(date, runNumbering),
                 color,
-                title: getDisplayLabel(getHardwareConfig(hwKey)),
+                title: getDisplayLabel(getHardwareConfig(hwKey, modelLabel)),
                 isActive: activeDates.has(id),
                 onClick: () => {
                   toggleActiveDate(id);
@@ -734,7 +969,7 @@ const GPUGraph = React.memo(
             switches={[
               {
                 id: 'gpu-log-scale',
-                label: 'Log Scale',
+                label: legendT.logScale,
                 checked: logScale,
                 onCheckedChange: (c) => {
                   setLogScale(c);
@@ -743,7 +978,7 @@ const GPUGraph = React.memo(
               },
               {
                 id: 'gpu-high-contrast',
-                label: 'High Contrast',
+                label: legendT.highContrast,
                 checked: highContrast,
                 onCheckedChange: (c) => {
                   setHighContrast(c);
@@ -752,7 +987,7 @@ const GPUGraph = React.memo(
               },
               {
                 id: 'gpu-hide-non-optimal',
-                label: 'Optimal Only',
+                label: legendT.optimalOnly,
                 checked: hideNonOptimal,
                 onCheckedChange: (c) => {
                   setHideNonOptimal(c);
@@ -760,26 +995,29 @@ const GPUGraph = React.memo(
                 },
               },
               {
-                id: 'gpu-hide-point-labels',
-                label: 'Hide Labels',
-                checked: hidePointLabels,
+                id: 'gpu-point-labels',
+                label: legendT.labels,
+                checked: showPointLabels,
                 onCheckedChange: (c) => {
-                  setHidePointLabels(c);
-                  track('interactivity_hide_point_labels_toggled', { enabled: c });
+                  setShowPointLabels(c);
+                  track('interactivity_point_labels_toggled', { enabled: c });
                 },
               },
               {
                 id: 'gpu-parallelism-labels',
-                label: 'Parallelism Labels',
+                label: legendT.parallelismLabels,
                 checked: useAdvancedLabels,
                 onCheckedChange: (c) => {
                   setUseAdvancedLabels(c);
                   track('interactivity_advanced_labels_toggled', { enabled: c });
+                  // Parallelism labels are point labels; turning them on is
+                  // pointless if labels are hidden, so auto-enable Labels.
+                  if (c && !showPointLabels) setShowPointLabels(true);
                 },
               },
               {
                 id: 'gpu-line-labels',
-                label: 'Line Labels',
+                label: legendT.lineLabels,
                 checked: showLineLabels,
                 onCheckedChange: (c) => {
                   setShowLineLabels(c);
@@ -790,7 +1028,7 @@ const GPUGraph = React.memo(
             actions={[
               {
                 id: 'gpu-reset-filter',
-                label: 'Reset filter',
+                label: legendT.resetFilter,
                 onClick: () => {
                   selectAllActiveDates();
                   track('gpu_timeseries_reset_filter');

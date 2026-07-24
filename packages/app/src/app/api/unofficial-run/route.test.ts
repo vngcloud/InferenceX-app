@@ -65,6 +65,20 @@ function rawRow(overrides: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
+/** Minimal valid agentic row: scenario_type triggers the agentic path; `users` → conc. */
+function rawAgenticRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    infmax_model_prefix: 'dsv4',
+    hw: 'mi355x-amds',
+    framework: 'vllm',
+    precision: 'fp4',
+    scenario_type: 'agentic-coding',
+    users: 72,
+    tput_per_gpu: 20000,
+    ...overrides,
+  };
+}
+
 function rawEvalRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     hw: 'gb300-nv',
@@ -205,6 +219,36 @@ describe('normalizeArtifactRows', () => {
       '2026-03-11',
     );
     expect(rows.every((r) => r.date === '2026-03-11')).toBe(true);
+  });
+
+  it('surfaces the per-worker measured-power array on the BenchmarkRow', () => {
+    const workers = [
+      {
+        role: 'prefill',
+        worker_idx: 0,
+        hosts: ['pn0'],
+        num_gpus: 4,
+        avg_power_w: 612.3,
+        avg_temp_c: 71.2,
+      },
+      {
+        role: 'decode',
+        worker_idx: 0,
+        hosts: ['dn0', 'dn1'],
+        num_gpus: 8,
+        avg_power_w: 712.1,
+      },
+    ];
+    const rows = normalizeArtifactRows([rawRow({ workers })], '2026-03-01');
+    expect(rows[0].workers).toHaveLength(2);
+    expect(rows[0].workers![0].hosts).toEqual(['pn0']);
+    expect(rows[0].workers![0].avg_temp_c).toBe(71.2);
+    expect(rows[0].workers![1].role).toBe('decode');
+  });
+
+  it('leaves workers undefined when the artifact omits the field', () => {
+    const rows = normalizeArtifactRows([rawRow()], '2026-03-01');
+    expect(rows[0].workers).toBeUndefined();
   });
 });
 
@@ -405,6 +449,158 @@ describe('GET /api/unofficial-run', () => {
     expect(body.benchmarks[0].hardware).toBe('h200');
     expect(body.benchmarks[0].run_url).toBe('http://github.com/run/123');
     expect(body.evaluations).toEqual([]);
+  });
+
+  it('falls back to per-config bmk_* artifacts when results_bmk is missing (agentic-only sweeps)', async () => {
+    // Run metadata
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          id: 777,
+          name: 'agentic-run',
+          head_branch: 'amd/agentx',
+          head_sha: 'ccc',
+          created_at: '2026-07-07T00:00:00Z',
+          html_url: 'http://github.com/run/777',
+          conclusion: 'success',
+          status: 'completed',
+        }),
+    });
+    // Artifacts: no results_bmk — only per-config agentic artifacts (plus the
+    // big sibling `agentic_*` trace blobs the route must NOT download).
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          artifacts: [
+            { name: 'bmk_agentic_dsv4_conc72', id: 30, archive_download_url: 'http://dl-a' },
+            { name: 'bmk_agentic_dsv4_conc56', id: 31, archive_download_url: 'http://dl-b' },
+            { name: 'agentic_dsv4_conc72', id: 32, archive_download_url: 'http://dl-blob' },
+            { name: 'server_logs_dsv4_conc72', id: 33, archive_download_url: 'http://dl-log' },
+          ],
+        }),
+    });
+    // Two per-config downloads (Promise.all order matches artifact order)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    });
+    mockGetEntries
+      .mockReturnValueOnce([
+        {
+          entryName: 'dsv4_conc72.json',
+          getData: () => Buffer.from(JSON.stringify(rawAgenticRow())),
+        },
+      ])
+      .mockReturnValueOnce([
+        {
+          entryName: 'dsv4_conc56.json',
+          getData: () => Buffer.from(JSON.stringify(rawAgenticRow({ users: 56 }))),
+        },
+      ]);
+
+    const res = await GET(makeRequest('runId=777'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.benchmarks).toHaveLength(2);
+    expect(
+      body.benchmarks
+        .map((b: { conc: number }) => b.conc)
+        .toSorted((a: number, b: number) => a - b),
+    ).toEqual([56, 72]);
+    expect(body.benchmarks[0].benchmark_type).toBe('agentic_traces');
+    expect(body.benchmarks[0].hardware).toBe('mi355x');
+    expect(body.benchmarks[0].run_url).toBe('http://github.com/run/777');
+    // Only the two bmk_* artifacts were downloaded: run + artifacts + 2 downloads.
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not download per-config bmk_* artifacts when results_bmk exists', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          id: 888,
+          head_branch: 'main',
+          html_url: 'http://github.com/run/888',
+          created_at: '2026-07-07T00:00:00Z',
+        }),
+    });
+    // Merged artifact alongside per-config ones (mixed fixed-seq + agentic
+    // sweep) — the merged artifact already contains the per-config rows.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          artifacts: [
+            { name: 'results_bmk', id: 40, archive_download_url: 'http://dl-merged' },
+            { name: 'bmk_agentic_dsv4_conc72', id: 41, archive_download_url: 'http://dl-a' },
+          ],
+        }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    });
+    mockGetEntries.mockReturnValueOnce([
+      {
+        entryName: 'agg_bmk.json',
+        getData: () => Buffer.from(JSON.stringify([rawRow(), rawAgenticRow()])),
+      },
+    ]);
+
+    const res = await GET(makeRequest('runId=888'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.benchmarks).toHaveLength(2);
+    // Exactly one download (the merged artifact) — per-config was skipped.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps only the newest per-config artifact when names repeat', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          id: 999,
+          head_branch: 'feature/agentic',
+          html_url: 'http://github.com/run/999',
+          created_at: '2026-07-07T00:00:00Z',
+        }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          artifacts: [
+            { name: 'bmk_agentic_dsv4_conc72', id: 50, archive_download_url: 'http://dl-old' },
+            { name: 'bmk_agentic_dsv4_conc72', id: 51, archive_download_url: 'http://dl-new' },
+          ],
+        }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    });
+    mockGetEntries.mockReturnValueOnce([
+      {
+        entryName: 'dsv4_conc72.json',
+        getData: () => Buffer.from(JSON.stringify(rawAgenticRow())),
+      },
+    ]);
+
+    const res = await GET(makeRequest('runId=999'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.benchmarks).toHaveLength(1);
+    // Three fetches total; the single download hit the newest artifact URL.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[2][0]).toBe('http://dl-new');
   });
 
   it('returns evaluations for eval-only runs', async () => {

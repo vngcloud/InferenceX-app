@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Production image for the InferenceX Next.js dashboard.
 # Built by .github/workflows/deploy.yml on the self-hosted dashboard runner.
 #
@@ -42,11 +44,19 @@ RUN pnpm install --frozen-lockfile
 # Now copy the rest of the source and build.
 COPY . .
 
-# `next build` evaluates pages that may read env at build time. Pass dummy
-# Postgres URLs so the build doesn't crash on missing env. Runtime URLs
-# come from compose's environment block.
-RUN DATABASE_READONLY_URL=postgresql://x:x@x:5432/x \
-    DATABASE_WRITE_URL=postgresql://x:x@x:5432/x \
+# `next build` evaluates pages at build time, and some (e.g. the
+# compare-precision/compare-spec-decode OG images' generateStaticParams)
+# actually query Postgres to enumerate static params — a dummy/unreachable
+# host makes those pages fail the build outright. The deploy workflow passes
+# --network + --secret so this resolves the real (already-running) postgres
+# service; secrets are mounted as files, not baked into image layers/history.
+# Falls back to a dummy URL when no secret is supplied (e.g. a local
+# `docker build .` with no running postgres) — pages needing real data just
+# render with zero static params in that case.
+RUN --mount=type=secret,id=database_readonly_url \
+    --mount=type=secret,id=database_write_url \
+    DATABASE_READONLY_URL="$(cat /run/secrets/database_readonly_url 2>/dev/null || echo postgresql://x:x@x:5432/x)" \
+    DATABASE_WRITE_URL="$(cat /run/secrets/database_write_url 2>/dev/null || echo postgresql://x:x@x:5432/x)" \
     DATABASE_DRIVER=postgres \
     DATABASE_SSL=false \
     pnpm build
@@ -72,6 +82,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# CI=true again: `pnpm start` runs pnpm's dependency-status check, which can
+# invoke the root `prepare` script (`is-ci || lefthook install`). This stage
+# has no .git (COPY --from=builder doesn't bring it, and it's
+# .dockerignore'd besides), so without CI=true short-circuiting is-ci,
+# lefthook fails and crash-loops the container.
+ENV CI=true
 
 WORKDIR /app
 COPY --from=builder /app ./

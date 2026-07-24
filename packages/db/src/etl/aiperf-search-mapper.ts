@@ -39,9 +39,9 @@ interface SlugInfo {
   hw: string;
 }
 
-const GPU_TOKEN = /_((?:h|b)\d{3}|gb\d{3}|mi\d{3}x)-/u;
+const GPU_TOKEN = /_(?<gpu>(?:h|b)\d{3}|gb\d{3}|mi\d{3}x)-/u;
 /** Compact workload token "8k1k" / "16k1k" — values are in units of 1024 tokens. */
-const WORKLOAD_K_TOKEN = /^(\d+)k(\d+)k$/u;
+const WORKLOAD_K_TOKEN = /^(?<isl>\d+)k(?<osl>\d+)k$/u;
 /** A single raw integer token (e.g. "16384", "1024"). */
 const INT_TOKEN = /^\d+$/u;
 /** Smallest ISL we treat as a workload anchor — guards against a stray small int
@@ -79,8 +79,8 @@ export function parseAiperfSlug(dirName: string): SlugInfo | null {
   const kIdx = parts.findIndex((p) => WORKLOAD_K_TOKEN.test(p));
   if (kIdx > 0) {
     const wl = WORKLOAD_K_TOKEN.exec(parts[kIdx])!;
-    isl = parseInt(wl[1], 10) * 1024;
-    osl = parseInt(wl[2], 10) * 1024;
+    isl = parseInt(wl.groups!.isl, 10) * 1024;
+    osl = parseInt(wl.groups!.osl, 10) * 1024;
     wlIdx = kIdx;
     afterIdx = kIdx + 1;
   } else {
@@ -105,14 +105,14 @@ export function parseAiperfSlug(dirName: string): SlugInfo | null {
   const precision = parts[afterIdx] ?? '';
   const engine = parts[afterIdx + 1] ?? '';
 
-  const tpEp = /tp(\d+)-ep(\d+)/u.exec(base);
-  const tp = tpEp ? parseInt(tpEp[1], 10) : 1;
-  const ep = tpEp ? parseInt(tpEp[2], 10) : 1;
+  const tpEp = /tp(?<tp>\d+)-ep(?<ep>\d+)/u.exec(base);
+  const tp = tpEp ? parseInt(tpEp.groups!.tp, 10) : 1;
+  const ep = tpEp ? parseInt(tpEp.groups!.ep, 10) : 1;
 
   const disagg = /disagg-true/u.test(base);
 
   const gpu = GPU_TOKEN.exec(base);
-  const hw = gpu ? gpu[1] : '';
+  const hw = gpu ? gpu.groups!.gpu : '';
 
   if (!model || !precision || !engine || !hw) return null;
   return { model, isl, osl, precision, engine, tp, ep, disagg, hw };

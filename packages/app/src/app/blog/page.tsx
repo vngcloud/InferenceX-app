@@ -6,12 +6,13 @@ import { BlogTagLink } from '@/components/blog/blog-tag-link';
 import { Card } from '@/components/ui/card';
 import { JsonLd } from '@/components/json-ld';
 import { getAllPosts } from '@/lib/blog';
+import { enAlternates } from '@/lib/i18n';
 import { SITE_URL, SITE_NAME, AUTHOR_NAME } from '@semianalysisai/inferencex-constants';
 
 export const metadata: Metadata = {
   title: 'Articles',
   description: `Technical articles from ${SITE_NAME} by ${AUTHOR_NAME} — AI inference benchmarking, GPU performance analysis, and ML infrastructure insights.`,
-  alternates: { canonical: `${SITE_URL}/blog` },
+  alternates: enAlternates('/blog'),
   openGraph: {
     title: `Articles | ${SITE_NAME} by ${AUTHOR_NAME}`,
     description: 'AI inference benchmarking insights and GPU performance analysis.',
@@ -49,6 +50,13 @@ export default async function BlogPage({
             <h2 className="text-2xl lg:text-4xl font-bold tracking-tight">Articles</h2>
             <p className="mt-3 text-base lg:text-lg text-muted-foreground">
               Insights on AI inference benchmarking, GPU performance, and ML infrastructure.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              New to the terminology?{' '}
+              <Link href="/glossary" className="font-medium text-brand hover:underline">
+                Browse the AI inference glossary
+              </Link>
+              .
             </p>
             {allTags.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-4">

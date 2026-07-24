@@ -3,10 +3,13 @@
 import { track } from '@/lib/analytics';
 import Link from 'next/link';
 import { BarChart3, Table2 } from 'lucide-react';
+import { useLocale } from '@/lib/use-locale';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import CalculatorTable from '@/components/calculator/CalculatorTable';
-import { useGlobalFilters } from '@/components/GlobalFilterContext';
+import FleetPlanner from '@/components/calculator/FleetPlanner';
+import type { CalculatorUrlSeed } from '@/components/calculator/url-seed';
+import { GlobalFilterProvider, useGlobalFilters } from '@/components/GlobalFilterContext';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { ChartButtons } from '@/components/ui/chart-buttons';
@@ -43,10 +46,17 @@ import { calculatorChartToCsv } from '@/lib/csv-export-helpers';
 
 import ThroughputBarChart, {
   getChartTitle,
+  getCostProviderLabel,
   getThroughputForType,
   getTpPerMwForType,
 } from './ThroughputBarChart';
-import type { BarMetric, CostProvider, CostType, InterpolatedResult } from './types';
+import type {
+  BarMetric,
+  CalculatorMode,
+  CostProvider,
+  CostType,
+  InterpolatedResult,
+} from './types';
 import { useThroughputData } from './useThroughputData';
 
 const COST_PROVIDER_OPTIONS: { value: CostProvider; label: string }[] = [
@@ -66,12 +76,6 @@ const BAR_METRIC_OPTIONS: { value: BarMetric; label: string }[] = [
   { value: 'power', label: 'tok/s/MW' },
   { value: 'cost', label: 'Cost' },
 ];
-
-const getBarMetricLabel = (metric: BarMetric) => {
-  if (metric === 'throughput') return 'Throughput';
-  if (metric === 'cost') return 'Cost';
-  return 'tok/s/MW';
-};
 
 type CalculatorViewMode = 'chart' | 'table';
 
@@ -93,7 +97,142 @@ const CALCULATOR_VIEW_MODE_OPTIONS: SegmentedToggleOption<CalculatorViewMode>[] 
 const CALCULATOR_MOBILE_VIEW_MODE_OPTIONS: SegmentedToggleOption<CalculatorViewMode>[] =
   CALCULATOR_VIEW_MODE_OPTIONS.map(({ testId: _testId, ...option }) => option);
 
-export default function ThroughputCalculatorDisplay() {
+const STRINGS = {
+  en: {
+    title: 'TCO Calculator',
+    description:
+      'Set a target interactivity (tokens/sec/user) and compare the throughput and cost across all GPUs. Values are interpolated from real benchmark data.',
+    costProviderLabel: 'Cost Provider',
+    costProviderTooltip:
+      'The pricing tier used to calculate cost per million tokens. Hyperscaler (e.g. AWS/GCP), Neocloud (e.g. CoreWeave), or 3-year rental.',
+    costProviderPlaceholder: 'Cost provider',
+    tokenTypeLabel: 'Token Type',
+    tokenTypeTooltip:
+      'Whether to show costs for total tokens, input tokens only, or output tokens only.',
+    tokenTypePlaceholder: 'Token type',
+    metricLabel: 'Metric',
+    metricTooltip:
+      'The comparison metric shown in the chart. Throughput (tok/s/gpu), power efficiency (tok/s/MW), or cost per million tokens.',
+    targetLabel: 'Target Interactivity (tok/s/user)',
+    targetTooltip:
+      'The interactivity operating point used for interpolation. Adjust the slider to compare GPU throughput, cost, and power efficiency at different interactivity levels.',
+    metricThroughput: 'Throughput',
+    metricCost: 'Cost',
+    viewChart: 'Chart',
+    viewTable: 'Table',
+    viewModeAria: 'View mode',
+    errorLoading: 'Error loading data. Please try a different selection.',
+    clickToCompare: 'selected. Click another bar to compare.',
+    clearSelection: 'Clear selection',
+    highContrast: 'High Contrast',
+    resetFilter: 'Reset filter',
+    totalTokens: 'Total Tokens',
+    inputTokens: 'Input Tokens',
+    outputTokens: 'Output Tokens',
+    allInPower: 'All in Power/GPU: ',
+    tcoPerHr: 'TCO $/GPU/hr: ',
+    source: 'Source: ',
+    updated: ' • Updated: ',
+    note: 'Note:',
+    disaggCost:
+      ' Disaggregated inference configurations (e.g., MoRI SGLang, Dynamo TRTLLM) calculate cost per decode GPU or per prefill GPU, rather than per total GPU count. This makes direct cost comparison with aggregated configs not an apples-to-apples comparison.',
+    disaggThroughput:
+      ' Disaggregated inference configurations (e.g., MoRI SGLang, Dynamo TRTLLM) calculate throughput per decode GPU or per prefill GPU, rather than per total GPU count. This makes direct throughput comparison with aggregated configs not an apples-to-apples comparison.',
+    compMetricThroughput: 'throughput',
+    compMetricCost: 'cost efficiency',
+    compMetricPower: 'tok/s/MW',
+  },
+  zh: {
+    title: 'TCO 计算器',
+    description:
+      '设定目标交互性（tokens/sec/user），比较所有 GPU 的吞吐量和成本。数值基于真实基准测试数据插值计算。',
+    costProviderLabel: '成本供应商',
+    costProviderTooltip:
+      '用于计算每百万 token 成本的定价层级。Hyperscaler（如 AWS/GCP）、Neocloud（如 CoreWeave）或 3 年租赁。',
+    costProviderPlaceholder: '成本供应商',
+    tokenTypeLabel: 'Token 类型',
+    tokenTypeTooltip: '选择显示总 token、仅输入 token 还是仅输出 token 的成本。',
+    tokenTypePlaceholder: 'Token 类型',
+    metricLabel: '指标',
+    metricTooltip:
+      '图表中显示的比较指标。吞吐量（tok/s/gpu）、能效（tok/s/MW）或每百万 token 成本。',
+    targetLabel: '目标交互性 (tok/s/user)',
+    targetTooltip:
+      '用于插值的交互性操作点。调整滑块以比较不同交互性级别下 GPU 的吞吐量、成本和能效。',
+    metricThroughput: '吞吐量',
+    metricCost: '成本',
+    viewChart: '图表',
+    viewTable: '表格',
+    viewModeAria: '显示模式',
+    errorLoading: '加载数据出错，请尝试其他选择。',
+    clickToCompare: '已选中。点击另一个柱状图进行对比。',
+    clearSelection: '清除选择',
+    highContrast: '高对比度',
+    resetFilter: '重置筛选',
+    totalTokens: '总 Token',
+    inputTokens: '输入 Token',
+    outputTokens: '输出 Token',
+    allInPower: '全含功率/GPU：',
+    tcoPerHr: 'TCO $/GPU/hr：',
+    source: '来源：',
+    updated: ' • 更新于：',
+    note: '注意：',
+    disaggCost:
+      '解耦推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码 GPU 或预填充 GPU 计算成本，而非按 GPU 总数。因此与聚合配置的直接成本对比并非同类比较。',
+    disaggThroughput:
+      '解耦推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码 GPU 或预填充 GPU 计算吞吐量，而非按 GPU 总数。因此与聚合配置的直接吞吐量对比并非同类比较。',
+    compMetricThroughput: '吞吐量',
+    compMetricCost: '成本效率',
+    compMetricPower: 'tok/s/MW',
+  },
+} as const;
+
+function getChartTitleZh(
+  barMetric: BarMetric,
+  mode: CalculatorMode,
+  targetValue: number,
+  costType: CostType,
+  costProvider?: CostProvider,
+): string {
+  const targetLabel =
+    mode === 'interactivity_to_throughput'
+      ? `${targetValue} tok/s/user 交互性`
+      : `${targetValue} tok/s/gpu 吞吐量`;
+  const tokenTypeLabel = costType === 'input' ? '输入' : costType === 'output' ? '输出' : '总';
+  switch (barMetric) {
+    case 'power': {
+      return `${targetLabel}下每满配兆瓦${tokenTypeLabel} token 数`;
+    }
+    case 'cost': {
+      const providerLabel = getCostProviderLabel(costProvider || 'costh');
+      return `${targetLabel}下每百万${tokenTypeLabel} token 成本（${providerLabel}）`;
+    }
+    default: {
+      return mode === 'interactivity_to_throughput'
+        ? `${targetLabel}下每 GPU ${tokenTypeLabel} token 吞吐量`
+        : `${targetLabel}下的交互性`;
+    }
+  }
+}
+
+export default function ThroughputCalculatorDisplay({ urlSeed }: { urlSeed?: CalculatorUrlSeed }) {
+  if (urlSeed && (urlSeed.model || urlSeed.sequence || urlSeed.precisions)) {
+    return (
+      <GlobalFilterProvider
+        initialModel={urlSeed.model}
+        initialSequence={urlSeed.sequence}
+        initialPrecisions={urlSeed.precisions}
+      >
+        <ThroughputCalculatorInner />
+      </GlobalFilterProvider>
+    );
+  }
+  return <ThroughputCalculatorInner />;
+}
+
+function ThroughputCalculatorInner() {
+  const locale = useLocale();
+  const t = STRINGS[locale];
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const handleDropdownOpenChange = (dropdownKey: string) => (isOpen: boolean) => {
     if (isOpen) {
@@ -129,8 +268,34 @@ export default function ThroughputCalculatorDisplay() {
   const [highContrast, setHighContrast] = useState(false);
   const [viewMode, setViewMode] = useState<CalculatorViewMode>('chart');
 
-  const { hardwareConfig, ranges, getResults, loading, error, hasData, availableHwKeys } =
-    useThroughputData(selectedModel, selectedSequence, selectedPrecisions, selectedRunDate);
+  const costTypeLabels: Record<CostType, string> = useMemo(
+    () => ({ total: t.totalTokens, input: t.inputTokens, output: t.outputTokens }),
+    [t],
+  );
+
+  const viewModeOptions = useMemo<SegmentedToggleOption<CalculatorViewMode>[]>(() => {
+    if (locale === 'en') return CALCULATOR_VIEW_MODE_OPTIONS;
+    return CALCULATOR_VIEW_MODE_OPTIONS.map((opt) => ({
+      ...opt,
+      label: opt.value === 'chart' ? t.viewChart : t.viewTable,
+    }));
+  }, [locale, t]);
+
+  const mobileViewModeOptions = useMemo<SegmentedToggleOption<CalculatorViewMode>[]>(() => {
+    if (locale === 'en') return CALCULATOR_MOBILE_VIEW_MODE_OPTIONS;
+    return viewModeOptions.map(({ testId: _testId, ...opt }) => opt);
+  }, [locale, viewModeOptions]);
+
+  const {
+    gpuDataByGroupKey,
+    hardwareConfig,
+    ranges,
+    getResults,
+    loading,
+    error,
+    hasData,
+    availableHwKeys,
+  } = useThroughputData(selectedModel, selectedSequence, selectedPrecisions, selectedRunDate);
 
   // Dynamic vendor-aware colors for visible GPUs
   const visibleKeysArray = useMemo(() => [...visibleHwKeys], [visibleHwKeys]);
@@ -332,7 +497,11 @@ export default function ThroughputCalculatorDisplay() {
     };
 
     const metricName =
-      barMetric === 'power' ? 'tok/s/MW' : barMetric === 'cost' ? 'cost efficiency' : 'throughput';
+      barMetric === 'power'
+        ? t.compMetricPower
+        : barMetric === 'cost'
+          ? t.compMetricCost
+          : t.compMetricThroughput;
 
     // Generate pairwise comparisons — always use lower as denominator
     const comparisons: string[] = [];
@@ -368,15 +537,21 @@ export default function ThroughputCalculatorDisplay() {
 
         if (lowerVal > 0) {
           const ratio = higherVal / lowerVal;
-          comparisons.push(
-            `${getLabel(higher)} is ${ratio.toFixed(1)}x more ${metricName} than ${getLabel(lower)}`,
-          );
+          if (locale === 'zh') {
+            comparisons.push(
+              `${getLabel(higher)} 的${metricName}比 ${getLabel(lower)} 高 ${ratio.toFixed(1)} 倍`,
+            );
+          } else {
+            comparisons.push(
+              `${getLabel(higher)} is ${ratio.toFixed(1)}x more ${metricName} than ${getLabel(lower)}`,
+            );
+          }
         }
       }
     }
 
     return comparisons;
-  }, [selectedBars, results, hardwareConfig, barMetric, costType, mode]);
+  }, [selectedBars, results, hardwareConfig, barMetric, costType, mode, locale, t]);
 
   // Build legend items for ChartLegend sidebar, sorted by MODEL_ORDER (same as Inference Performance tab)
   const legendItems = useMemo(() => {
@@ -400,7 +575,7 @@ export default function ThroughputCalculatorDisplay() {
     return (
       <Card>
         <div className="flex items-center justify-center h-64 text-muted-foreground">
-          Error loading data. Please try a different selection.
+          {t.errorLoading}
         </div>
       </Card>
     );
@@ -413,11 +588,8 @@ export default function ThroughputCalculatorDisplay() {
           <div className="flex flex-col gap-4">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-semibold mb-2">TCO Calculator</h2>
-                <p className="text-muted-foreground text-sm mb-4">
-                  Set a target interactivity (tokens/sec/user) and compare the throughput and cost
-                  across all GPUs. Values are interpolated from real benchmark data.
-                </p>
+                <h2 className="text-lg font-semibold mb-2">{t.title}</h2>
+                <p className="text-muted-foreground text-sm mb-4">{t.description}</p>
               </div>
               <ChartShareActions />
             </div>
@@ -456,8 +628,8 @@ export default function ThroughputCalculatorDisplay() {
                 <div className="flex flex-col space-y-1.5 lg:col-span-1">
                   <LabelWithTooltip
                     htmlFor="calc-cost"
-                    label="Cost Provider"
-                    tooltip="The pricing tier used to calculate cost per million tokens. Hyperscaler (e.g. AWS/GCP), Neocloud (e.g. CoreWeave), or 3-year rental."
+                    label={t.costProviderLabel}
+                    tooltip={t.costProviderTooltip}
                   />
                   <div id="calc-cost" data-testid="calc-cost-selector">
                     <MultiSelect
@@ -473,7 +645,7 @@ export default function ThroughputCalculatorDisplay() {
                       }}
                       open={openDropdown === 'costProvider'}
                       onOpenChange={handleDropdownOpenChange('costProvider')}
-                      placeholder="Cost provider"
+                      placeholder={t.costProviderPlaceholder}
                       minSelections={1}
                       maxSelections={1}
                       showClearAll={false}
@@ -487,14 +659,14 @@ export default function ThroughputCalculatorDisplay() {
                 <div className="flex flex-col space-y-1.5 lg:col-span-1">
                   <LabelWithTooltip
                     htmlFor="calc-cost-type"
-                    label="Token Type"
-                    tooltip="Whether to show costs for total tokens, input tokens only, or output tokens only."
+                    label={t.tokenTypeLabel}
+                    tooltip={t.tokenTypeTooltip}
                   />
                   <div id="calc-cost-type" data-testid="calc-cost-type-selector">
                     <MultiSelect
                       options={COST_TYPE_OPTIONS.map((ct) => ({
                         value: ct.value,
-                        label: ct.label,
+                        label: costTypeLabels[ct.value],
                       }))}
                       value={[costType]}
                       onChange={(values) => {
@@ -504,7 +676,7 @@ export default function ThroughputCalculatorDisplay() {
                       }}
                       open={openDropdown === 'costType'}
                       onOpenChange={handleDropdownOpenChange('costType')}
-                      placeholder="Token type"
+                      placeholder={t.tokenTypePlaceholder}
                       minSelections={1}
                       maxSelections={1}
                       showClearAll={false}
@@ -520,8 +692,8 @@ export default function ThroughputCalculatorDisplay() {
                 <div className="flex flex-col space-y-1.5">
                   <LabelWithTooltip
                     htmlFor="calc-metric"
-                    label="Metric"
-                    tooltip="The comparison metric shown in the chart. Throughput (tok/s/gpu), power efficiency (tok/s/MW), or cost per million tokens."
+                    label={t.metricLabel}
+                    tooltip={t.metricTooltip}
                   />
                   <div className="flex rounded-lg border border-border overflow-hidden h-9">
                     {BAR_METRIC_OPTIONS.map((opt) => (
@@ -536,7 +708,11 @@ export default function ThroughputCalculatorDisplay() {
                         }`}
                         onClick={() => handleBarMetricChange(opt.value)}
                       >
-                        {getBarMetricLabel(opt.value)}
+                        {opt.value === 'throughput'
+                          ? t.metricThroughput
+                          : opt.value === 'cost'
+                            ? t.metricCost
+                            : 'tok/s/MW'}
                       </button>
                     ))}
                   </div>
@@ -547,8 +723,8 @@ export default function ThroughputCalculatorDisplay() {
                 <div className="space-y-2">
                   <LabelWithTooltip
                     htmlFor="calc-target"
-                    label="Target Interactivity (tok/s/user)"
-                    tooltip="The interactivity operating point used for interpolation. Adjust the slider to compare GPU throughput, cost, and power efficiency at different interactivity levels."
+                    label={t.targetLabel}
+                    tooltip={t.targetTooltip}
                   />
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
@@ -616,9 +792,9 @@ export default function ThroughputCalculatorDisplay() {
             leadingControls={
               <SegmentedToggle
                 value={viewMode}
-                options={CALCULATOR_VIEW_MODE_OPTIONS}
+                options={viewModeOptions}
                 onValueChange={handleViewModeChange}
-                ariaLabel="View mode"
+                ariaLabel={t.viewModeAria}
                 testId="calculator-view-toggle"
                 className="shrink-0"
               />
@@ -634,13 +810,15 @@ export default function ThroughputCalculatorDisplay() {
                     <>
                       <div className="flex items-start justify-between gap-4">
                         <h2 className="text-lg font-semibold">
-                          {getChartTitle(barMetric, mode, targetValue, costType, costProvider)}
+                          {locale === 'zh'
+                            ? getChartTitleZh(barMetric, mode, targetValue, costType, costProvider)
+                            : getChartTitle(barMetric, mode, targetValue, costType, costProvider)}
                         </h2>
                         <SegmentedToggle
                           value={viewMode}
-                          options={CALCULATOR_MOBILE_VIEW_MODE_OPTIONS}
+                          options={mobileViewModeOptions}
                           onValueChange={handleViewModeChange}
-                          ariaLabel="View mode"
+                          ariaLabel={t.viewModeAria}
                           className="md:hidden shrink-0"
                         />
                       </div>
@@ -649,8 +827,13 @@ export default function ThroughputCalculatorDisplay() {
                         {selectedPrecisions
                           .map((p) => getPrecisionLabel(p as Precision))
                           .join(', ')}{' '}
-                        • {getSequenceLabel(selectedSequence)} • Source: SemiAnalysis InferenceX™
-                        {selectedRunDate && <> • Updated: {selectedRunDate}</>}
+                        • {getSequenceLabel(selectedSequence)} • {t.source}SemiAnalysis InferenceX™
+                        {selectedRunDate && (
+                          <>
+                            {t.updated}
+                            {selectedRunDate}
+                          </>
+                        )}
                       </p>
                       {barMetric === 'power' && results.length > 0 && (
                         <>
@@ -658,7 +841,7 @@ export default function ThroughputCalculatorDisplay() {
                             className="text-muted-foreground mb-2 flex flex-wrap gap-2 items-center"
                             data-testid="calculator-cost-badges"
                           >
-                            All in Power/GPU:{' '}
+                            {t.allInPower}
                             {Object.entries(HW_REGISTRY).map(([base, specs]) => (
                               <Badge key={base} variant="outline">
                                 {base.toUpperCase()}: {specs.power}kW
@@ -667,7 +850,7 @@ export default function ThroughputCalculatorDisplay() {
                           </p>
                           <p className="text-muted-foreground">
                             <small>
-                              Source:{' '}
+                              {t.source}
                               <Link
                                 target="_blank"
                                 className="underline hover:text-foreground"
@@ -686,7 +869,7 @@ export default function ThroughputCalculatorDisplay() {
                             className="text-muted-foreground mb-2 flex flex-wrap gap-2 items-center"
                             data-testid="calculator-cost-badges"
                           >
-                            TCO $/GPU/hr:{' '}
+                            {t.tcoPerHr}
                             {Object.entries(HW_REGISTRY).map(([base, specs]) => (
                               <Badge key={base} variant="outline">
                                 {base.toUpperCase()}: $
@@ -702,7 +885,7 @@ export default function ThroughputCalculatorDisplay() {
                           </p>
                           <p className="text-muted-foreground">
                             <small>
-                              Source:{' '}
+                              {t.source}
                               <Link
                                 target="_blank"
                                 className="underline hover:text-foreground"
@@ -721,10 +904,8 @@ export default function ThroughputCalculatorDisplay() {
                         }`}
                       >
                         <p className="text-muted-foreground text-xs mt-2 border-l-2 border-amber-500 pl-2 bg-amber-500/5 py-1">
-                          <strong>Note:</strong> Disaggregated inference configurations (e.g., MoRI
-                          SGLang, Dynamo TRT) calculate cost per decode GPU or per prefill GPU,
-                          rather than per total GPU count. This makes direct cost comparison with
-                          aggregated configs not an apples-to-apples comparison.
+                          <strong>{t.note}</strong>
+                          {t.disaggCost}
                         </p>
                       </div>
                       <div
@@ -735,10 +916,8 @@ export default function ThroughputCalculatorDisplay() {
                         }`}
                       >
                         <p className="text-muted-foreground text-xs mt-2 border-l-2 border-amber-500 pl-2 bg-amber-500/5 py-1">
-                          <strong>Note:</strong> Disaggregated inference configurations (e.g., MoRI
-                          SGLang, Dynamo TRT) calculate throughput per decode GPU or per prefill
-                          GPU, rather than per total GPU count. This makes direct throughput
-                          comparison with aggregated configs not an apples-to-apples comparison.
+                          <strong>{t.note}</strong>
+                          {t.disaggThroughput}
                         </p>
                       </div>
                       <UnofficialDomainNotice />
@@ -772,7 +951,7 @@ export default function ThroughputCalculatorDisplay() {
                             switches={[
                               {
                                 id: 'calc-high-contrast',
-                                label: 'High Contrast',
+                                label: t.highContrast,
                                 checked: highContrast,
                                 onCheckedChange: (checked: boolean) => {
                                   setHighContrast(checked);
@@ -785,7 +964,7 @@ export default function ThroughputCalculatorDisplay() {
                                 ? [
                                     {
                                       id: 'calc-reset-filter',
-                                      label: 'Reset filter',
+                                      label: t.resetFilter,
                                       onClick: handleResetGpus,
                                     },
                                   ]
@@ -829,7 +1008,7 @@ export default function ThroughputCalculatorDisplay() {
                       const baseName = config ? getDisplayLabel(config) : r.hwKey;
                       return r.precision ? `${baseName} (${r.precision.toUpperCase()})` : baseName;
                     })()}{' '}
-                    selected. Click another bar to compare.
+                    {t.clickToCompare}
                   </p>
                 )}
                 {comparisonText && comparisonText.length > 0 && (
@@ -850,11 +1029,24 @@ export default function ThroughputCalculatorDisplay() {
                 }}
                 className="text-xs text-muted-foreground hover:text-foreground underline shrink-0"
               >
-                Clear selection
+                {t.clearSelection}
               </button>
             </div>
           </Card>
         </section>
+      )}
+
+      {/* Fleet planner: MW-budget projection + cost-target inverse lookup */}
+      {!loading && hasData && (
+        <FleetPlanner
+          results={results}
+          gpuDataByGroupKey={gpuDataByGroupKey}
+          hardwareConfig={hardwareConfig}
+          costProvider={costProvider}
+          costType={costType}
+          targetValue={targetValue}
+          visibleHwKeys={visibleHwKeys}
+        />
       )}
     </div>
   );

@@ -60,4 +60,14 @@ describe('Inference Chart', () => {
       .find('text.sla-line-label')
       .should('contain', 'SLA');
   });
+
+  it('renders quick filters and toggles a vendor pill', () => {
+    cy.get('[data-testid="quick-filters"]').should('exist');
+    cy.get('[data-testid="quick-filter-vendor-NVIDIA"]')
+      .should('have.attr', 'aria-pressed', 'false')
+      .click()
+      .should('have.attr', 'aria-pressed', 'true')
+      .click()
+      .should('have.attr', 'aria-pressed', 'false');
+  });
 });

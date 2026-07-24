@@ -10,6 +10,9 @@ describe('Chart Section Tabs — E2E', () => {
   });
 
   it('updates the URL path when switching tabs', () => {
+    cy.get('[data-testid="tab-trigger-overview"]').click();
+    cy.url().should('include', '/overview');
+
     cy.get('[data-testid="tab-trigger-evaluation"]').click();
     cy.url().should('include', '/evaluation');
 
@@ -47,13 +50,13 @@ describe('First-load navigation', () => {
       onBeforeLoad(win) {
         win.localStorage.removeItem('inferencex-starred');
         win.localStorage.removeItem('inferencex-star-modal-dismissed');
-        win.localStorage.removeItem('inferencex-dsv4-modal-dismissed');
-        win.localStorage.removeItem('inferencex-dsv4-banner-dismissed-v2');
+        win.localStorage.removeItem('inferencex-minimax-m3-modal-dismissed');
+        win.localStorage.removeItem('inferencex-minimax-m3-banner-dismissed');
       },
     });
 
     // Banner (inline) and overlay modal coexist in independent slots.
-    cy.get('[data-testid="dsv4-launch-modal"]').should('be.visible');
+    cy.get('[data-testid="launch-modal"]').should('be.visible');
     cy.get('body').should('not.have.attr', 'data-scroll-locked');
   });
 
@@ -75,5 +78,10 @@ describe('First-load navigation', () => {
   it('navigates to dashboard from the landing CTA with one click', () => {
     cy.contains('a', 'Open Dashboard').click();
     cy.location('pathname').should('eq', '/inference');
+  });
+
+  it('navigates to submissions from the landing CTA', () => {
+    cy.get('[data-testid="landing-submissions-link"]').click();
+    cy.location('pathname').should('eq', '/submissions');
   });
 });

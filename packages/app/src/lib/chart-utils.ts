@@ -10,6 +10,7 @@ import iwanthue from 'iwanthue';
 import type { AggDataEntry, ChartDefinition, InferenceData } from '@/components/inference/types';
 import { getGpuSpecs, isKnownGpu } from '@/lib/constants';
 import { getVendor, type Vendor } from '@/lib/dynamic-colors';
+import type { Locale } from '@/lib/i18n';
 
 // ---------------------------------------------------------------------------
 // High-contrast color generation (iwanthue — k-means in CIELab)
@@ -47,12 +48,31 @@ const PREFERRED_MAX = 4;
 const BAN_MAX = 10;
 
 /**
+ * Palette cache. iwanthue's force-vector clustering costs tens of
+ * milliseconds per call (quality 50 × 5 attempts) and shows up as main-thread
+ * time on every render that recomputes high-contrast colors. The output is
+ * fully deterministic (seeded RNG) and — crucially — independent of the key
+ * *names*: a vendor group's palette depends only on the item count, vendor
+ * zone/ban mode, theme seed, and lightness bounds. Identical requests across
+ * renders, charts, and tabs therefore share one entry. Key space is tiny
+ * (vendors × themes × counts × 3 modes), so no eviction is needed.
+ */
+const PALETTE_CACHE = new Map<string, string[]>();
+
+/**
  * Generates high-contrast colors using iwanthue (k-means in CIELab space).
  *
- * Tiered strategy per vendor:
+ * Tiered strategy per vendor (only when >1 vendor is present):
  *   ≤ PREFERRED_MAX → constrain to brand zone (NVIDIA=green, AMD=red)
  *   ≤ BAN_MAX       → full wheel minus rival's brand color
  *   > BAN_MAX       → full wheel, no restrictions, best spacing wins
+ *
+ * Single-vendor case (e.g. an all-NVIDIA agentic comparison of B200/B300 ×
+ * vLLM/SGLang): the brand zone and rival-ban exist to keep vendors apart at a
+ * glance, but with one vendor there's no rival — clamping every series into the
+ * same narrow hue band just collapses the contrast HC is supposed to maximize.
+ * So skip both restrictions and use the full wheel, giving the series the widest
+ * possible separation.
  */
 export const generateHighContrastColors = (
   keys: string[],
@@ -79,6 +99,12 @@ export const generateHighContrastColors = (
     list.push(key);
   }
 
+  // Brand-zone / rival-ban only serve to keep DIFFERENT vendors apart. With a
+  // single vendor present there's nothing to separate from, so those
+  // restrictions only shrink the usable hue range and kill contrast — open the
+  // full wheel instead (the common all-NVIDIA agentic comparison case).
+  const multiVendor = groups.size > 1;
+
   for (const [vendor, vendorKeys] of groups) {
     const count = vendorKeys.length;
     const isBanned = BANNED_HUE_TEST[vendor] ?? null;
@@ -87,34 +113,43 @@ export const generateHighContrastColors = (
     // Tier 1: few items → brand zone only
     // Tier 2: moderate  → full wheel minus rival color
     // Tier 3: many      → full wheel, no restrictions
-    const usePreferred = preferred && count <= PREFERRED_MAX;
-    const useBan = !usePreferred && isBanned && count <= BAN_MAX;
+    const usePreferred = multiVendor && preferred && count <= PREFERRED_MAX;
+    const useBan = multiVendor && !usePreferred && isBanned && count <= BAN_MAX;
 
-    const palette = iwanthue(count, {
-      colorSpace: usePreferred
-        ? {
-            hmin: preferred.hmin,
-            hmax: preferred.hmax,
-            cmin: preferred.cmin ?? 30,
-            cmax: 100,
-            lmin: Math.max(lmin, preferred.lmin ?? 0),
-            lmax,
-          }
-        : { hmin: 0, hmax: 360, cmin: 30, cmax: 100, lmin, lmax },
-      ...(useBan &&
-        isBanned && {
-          colorFilter: (_rgb: [number, number, number], lab: [number, number, number]) => {
-            // Enforce lightness bounds — force-vector can drift outside colorSpace
-            if (lab[0] < lmin || lab[0] > lmax) return false;
-            const hue = ((Math.atan2(lab[2], lab[1]) * 180) / Math.PI + 360) % 360;
-            return !isBanned(hue);
-          },
-        }),
-      seed: `${vendor}-${theme}`,
-      clustering: 'force-vector',
-      quality: 50,
-      attempts: 5,
-    });
+    // Everything iwanthue's output depends on (the ban filter and preferred
+    // zone are functions of vendor; the seed is vendor+theme).
+    const mode = usePreferred ? 'pref' : useBan ? 'ban' : 'open';
+    const cacheKey = `${vendor}|${theme}|${count}|${mode}|${lmin}|${lmax}`;
+
+    let palette = PALETTE_CACHE.get(cacheKey);
+    if (!palette) {
+      palette = iwanthue(count, {
+        colorSpace: usePreferred
+          ? {
+              hmin: preferred.hmin,
+              hmax: preferred.hmax,
+              cmin: preferred.cmin ?? 30,
+              cmax: 100,
+              lmin: Math.max(lmin, preferred.lmin ?? 0),
+              lmax,
+            }
+          : { hmin: 0, hmax: 360, cmin: 30, cmax: 100, lmin, lmax },
+        ...(useBan &&
+          isBanned && {
+            colorFilter: (_rgb: [number, number, number], lab: [number, number, number]) => {
+              // Enforce lightness bounds — force-vector can drift outside colorSpace
+              if (lab[0] < lmin || lab[0] > lmax) return false;
+              const hue = ((Math.atan2(lab[2], lab[1]) * 180) / Math.PI + 360) % 360;
+              return !isBanned(hue);
+            },
+          }),
+        seed: `${vendor}-${theme}`,
+        clustering: 'force-vector',
+        quality: 50,
+        attempts: 5,
+      });
+      PALETTE_CACHE.set(cacheKey, palette);
+    }
 
     vendorKeys.sort();
     vendorKeys.forEach((key, i) => {
@@ -148,6 +183,14 @@ export const Y_AXIS_METRICS = [
   'y_jTotal',
   'y_jOutput',
   'y_jInput',
+  // Measured power / energy (sourced from runner's aggregate_power.py output;
+  // distinct from the spec-sheet TDP-derived jTotal/jOutput/jInput above).
+  'y_measuredAvgPower',
+  'y_measuredPrefillAvgPower',
+  'y_measuredDecodeAvgPower',
+  'y_measuredJPerOutputToken',
+  'y_measuredJPerTotalToken',
+  'y_measuredJPerInputToken',
 ] as const;
 
 export type YAxisMetric = (typeof Y_AXIS_METRICS)[number];
@@ -158,12 +201,15 @@ export type YAxisMetric = (typeof Y_AXIS_METRICS)[number];
 export const getHardwareKey = (entry: AggDataEntry): string => {
   let normalizedHwName = entry.hw.split('-')[0];
   if (entry.framework) {
+    // Resolve legacy/aliased framework names (e.g. atom-disagg → mooncake-atom) so chart
+    // point keys match the canonical keys built by buildAvailabilityHwKey for the GPU filter.
+    const fw = resolveFrameworkAlias(entry.framework);
     // Try framework as-is first, then disagg variant if it exists
-    const candidateDirect = `${normalizedHwName}_${entry.framework}`;
+    const candidateDirect = `${normalizedHwName}_${fw}`;
     if (isKnownGpu(candidateDirect)) {
       normalizedHwName = candidateDirect;
     } else if (entry.disagg) {
-      const candidateDisagg = `${normalizedHwName}_${entry.framework}-disagg`;
+      const candidateDisagg = `${normalizedHwName}_${fw}-disagg`;
       normalizedHwName = isKnownGpu(candidateDisagg) ? candidateDisagg : candidateDirect;
     } else {
       normalizedHwName = candidateDirect;
@@ -201,7 +247,7 @@ export function normalizeEvalHardwareKey(
 
   // Strip additional qualifiers not relevant to GPU identification
   // e.g., "b200 nb" -> "b200", "h200 cw" -> "h200"
-  hwName = hwName.replace(/\s+(nb|cw|nv|dgxc|amds|cr|amd)$/iu, '');
+  hwName = hwName.replace(/\s+(?:nb|cw|nv|dgxc|amds|cr|amd)$/iu, '');
 
   // Try to find a more specific hardware config that includes framework
   if (framework) {
@@ -405,6 +451,28 @@ export function createChartDataPoint(
           },
         }
       : {}),
+
+    // Measured power / energy from runner's aggregate_power.py. Gated on the
+    // raw fields existing so points from runs predating the measurement land
+    // without these keys and the chart correctly filters them out.
+    ...(typeof entry.avg_power_w === 'number'
+      ? { measuredAvgPower: { y: entry.avg_power_w, roof: false } }
+      : {}),
+    ...(typeof entry.prefill_avg_power_w === 'number'
+      ? { measuredPrefillAvgPower: { y: entry.prefill_avg_power_w, roof: false } }
+      : {}),
+    ...(typeof entry.decode_avg_power_w === 'number'
+      ? { measuredDecodeAvgPower: { y: entry.decode_avg_power_w, roof: false } }
+      : {}),
+    ...(typeof entry.joules_per_output_token === 'number'
+      ? { measuredJPerOutputToken: { y: entry.joules_per_output_token, roof: false } }
+      : {}),
+    ...(typeof entry.joules_per_total_token === 'number'
+      ? { measuredJPerTotalToken: { y: entry.joules_per_total_token, roof: false } }
+      : {}),
+    ...(typeof entry.joules_per_input_token === 'number'
+      ? { measuredJPerInputToken: { y: entry.joules_per_input_token, roof: false } }
+      : {}),
   };
 }
 
@@ -422,6 +490,17 @@ export const getNestedYValue = <T extends InferenceData>(point: T, key: string):
   }
   return (point[key as keyof T] as number) ?? 0;
 };
+
+/**
+ * Whether a point may sit on the Pareto frontier / "optimal" set. Points with a
+ * non-positive or non-finite x (e.g. interactivity = 0 when ITL is missing/zero,
+ * or a 0/negative latency) are degenerate — no real config runs there — so they
+ * must never be marked optimal. Apply this to a frontier function's INPUT; the
+ * points still render in the show-all view, they just lose roofline eligibility.
+ * NOTE: filter at the call site, not inside the paretoFront* functions — those are
+ * kept 1:1 with the calculator's Python port (iso_interactivity.py).
+ */
+export const isFrontierEligible = (p: { x: number }): boolean => Number.isFinite(p.x) && p.x > 0;
 
 /**
  * Calculates the Pareto front (upper right) for a given set of points.
@@ -541,6 +620,20 @@ export const paretoFrontLowerRight = (points: InferenceData[]): InferenceData[] 
   return front;
 };
 
+const PARETO_BY_DIRECTION = {
+  upper_right: paretoFrontUpperRight,
+  upper_left: paretoFrontUpperLeft,
+  lower_left: paretoFrontLowerLeft,
+  lower_right: paretoFrontLowerRight,
+} as const;
+
+export type ParetoDirection = keyof typeof PARETO_BY_DIRECTION;
+
+/** Look up the Pareto frontier function for a roofline direction. */
+export const paretoFrontForDirection = (
+  dir: ParetoDirection,
+): ((points: InferenceData[]) => InferenceData[]) => PARETO_BY_DIRECTION[dir];
+
 /**
  * Calculates the roofline for a given set of points.
  */
@@ -565,10 +658,18 @@ export const calculateRoofline = (
     | `costri.y`
     | `jTotal.y`
     | `jOutput.y`
-    | `jInput.y`,
+    | `jInput.y`
+    | `measuredAvgPower.y`
+    | `measuredPrefillAvgPower.y`
+    | `measuredDecodeAvgPower.y`
+    | `measuredJPerOutputToken.y`
+    | `measuredJPerTotalToken.y`
+    | `measuredJPerInputToken.y`,
   rooflineDirection: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right',
 ): InferenceData[] => {
-  const pointsForRoofline = points.map((p) => {
+  // Exclude degenerate x <= 0 points (see isFrontierEligible) so they never
+  // anchor a roofline or show up in the optimal-only view.
+  const pointsForRoofline = points.filter(isFrontierEligible).map((p) => {
     const yValue = getNestedYValue(p, yKey);
     return { ...p, y: yValue };
   });
@@ -635,7 +736,13 @@ export function computeAllRooflines(
             | `costri.y`
             | `jTotal.y`
             | `jOutput.y`
-            | `jInput.y`,
+            | `jInput.y`
+            | `measuredAvgPower.y`
+            | `measuredPrefillAvgPower.y`
+            | `measuredDecodeAvgPower.y`
+            | `measuredJPerOutputToken.y`
+            | `measuredJPerTotalToken.y`
+            | `measuredJPerInputToken.y`,
           rooflineDirection,
         );
       }
@@ -679,6 +786,12 @@ export function markRooflinePoints(
       if (newPoint.jTotal) newPoint.jTotal.roof = false;
       if (newPoint.jOutput) newPoint.jOutput.roof = false;
       if (newPoint.jInput) newPoint.jInput.roof = false;
+      if (newPoint.measuredAvgPower) newPoint.measuredAvgPower.roof = false;
+      if (newPoint.measuredPrefillAvgPower) newPoint.measuredPrefillAvgPower.roof = false;
+      if (newPoint.measuredDecodeAvgPower) newPoint.measuredDecodeAvgPower.roof = false;
+      if (newPoint.measuredJPerOutputToken) newPoint.measuredJPerOutputToken.roof = false;
+      if (newPoint.measuredJPerTotalToken) newPoint.measuredJPerTotalToken.roof = false;
+      if (newPoint.measuredJPerInputToken) newPoint.measuredJPerInputToken.roof = false;
 
       for (const chartDefYKey of Y_AXIS_METRICS) {
         const rooflinePoints = computedRooflines[hwKey]?.[chartDefYKey];
@@ -738,10 +851,48 @@ export function markRooflinePoints(
           newPoint.jOutput.roof = onCurrentRoofline;
         } else if (chartDefYKey === 'y_jInput' && newPoint.jInput) {
           newPoint.jInput.roof = onCurrentRoofline;
+        } else if (chartDefYKey === 'y_measuredAvgPower' && newPoint.measuredAvgPower) {
+          newPoint.measuredAvgPower.roof = onCurrentRoofline;
+        } else if (
+          chartDefYKey === 'y_measuredPrefillAvgPower' &&
+          newPoint.measuredPrefillAvgPower
+        ) {
+          newPoint.measuredPrefillAvgPower.roof = onCurrentRoofline;
+        } else if (chartDefYKey === 'y_measuredDecodeAvgPower' && newPoint.measuredDecodeAvgPower) {
+          newPoint.measuredDecodeAvgPower.roof = onCurrentRoofline;
+        } else if (
+          chartDefYKey === 'y_measuredJPerOutputToken' &&
+          newPoint.measuredJPerOutputToken
+        ) {
+          newPoint.measuredJPerOutputToken.roof = onCurrentRoofline;
+        } else if (chartDefYKey === 'y_measuredJPerTotalToken' && newPoint.measuredJPerTotalToken) {
+          newPoint.measuredJPerTotalToken.roof = onCurrentRoofline;
+        } else if (chartDefYKey === 'y_measuredJPerInputToken' && newPoint.measuredJPerInputToken) {
+          newPoint.measuredJPerInputToken.roof = onCurrentRoofline;
         }
       }
       finalProcessedData.push(newPoint);
     }
   }
   return finalProcessedData;
+}
+
+// ---------------------------------------------------------------------------
+// Locale-aware metric label/title helpers
+// ---------------------------------------------------------------------------
+
+export function metricTitle(chartDef: ChartDefinition, metricKey: string, locale: Locale): string {
+  if (locale === 'zh') {
+    const zh = chartDef[`${metricKey}_titleZh`];
+    if (typeof zh === 'string' && zh) return zh;
+  }
+  return (chartDef[`${metricKey}_title`] as string) || '';
+}
+
+export function metricLabel(chartDef: ChartDefinition, metricKey: string, locale: Locale): string {
+  if (locale === 'zh') {
+    const zh = chartDef[`${metricKey}_labelZh`];
+    if (typeof zh === 'string' && zh) return zh;
+  }
+  return (chartDef[`${metricKey}_label`] as string) || '';
 }

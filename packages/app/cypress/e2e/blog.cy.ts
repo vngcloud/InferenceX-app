@@ -31,8 +31,10 @@ describe('Blog', () => {
       cy.visit('/blog/inferencemax-open-source-inference-benchmarking');
     });
 
-    it('renders the post title', () => {
-      cy.get('h2').should('contain.text', 'InferenceMAX');
+    it('renders the post title as the one and only h1', () => {
+      // The title is the page's single <h1> (primary-keyword top heading);
+      // MDX body sections map to <h2>, so there must be exactly one h1.
+      cy.get('h1').should('have.length', 1).and('contain.text', 'InferenceMAX');
     });
 
     it('displays post metadata', () => {
@@ -47,6 +49,22 @@ describe('Blog', () => {
 
     it('has a back link to the blog listing', () => {
       cy.get('a[href="/blog"]').should('exist');
+    });
+  });
+
+  describe('Inline code styling', () => {
+    before(() => {
+      cy.visit('/blog/b200-glm5-nvfp4-vs-h200-fp8-3-6x-perf-per-dollar');
+    });
+
+    it('does not render generated backticks around inline code', () => {
+      cy.contains('article.prose code', 'zai-org/GLM-5-FP8')
+        .first()
+        .should(($code) => {
+          expect($code.text()).to.equal('zai-org/GLM-5-FP8');
+          expect(getComputedStyle($code[0], '::before').content).to.equal('none');
+          expect(getComputedStyle($code[0], '::after').content).to.equal('none');
+        });
     });
   });
 });

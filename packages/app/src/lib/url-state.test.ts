@@ -27,12 +27,17 @@ describe('PARAM_DEFAULTS', () => {
 
   it('has expected default for g_model', async () => {
     const { PARAM_DEFAULTS } = await import('@/lib/url-state');
-    expect(PARAM_DEFAULTS.g_model).toBe('DeepSeek-R1-0528');
+    expect(PARAM_DEFAULTS.g_model).toBe('DeepSeek-V4-Pro');
   });
 
-  it('has expected default for i_seq', async () => {
+  it('has an EMPTY default for i_seq so the selected scenario is always written', async () => {
+    // Per-route `initialSequence` seeds (e.g. /compare pages) make the no-param
+    // resolution route-dependent. An '8k/1k' default would strip an explicit
+    // 8K/1K selection from the URL, which then resolves back to the route's
+    // seeded scenario on reload/share. Empty means no scenario value ever
+    // matches the default, so it's always persisted.
     const { PARAM_DEFAULTS } = await import('@/lib/url-state');
-    expect(PARAM_DEFAULTS.i_seq).toBe('8k/1k');
+    expect(PARAM_DEFAULTS.i_seq).toBe('');
   });
 
   it('has expected default for r_range', async () => {
@@ -62,6 +67,12 @@ describe('PARAM_DEFAULTS', () => {
     expect(PARAM_DEFAULTS.i_active).toBe('');
     expect(PARAM_DEFAULTS.e_active).toBe('');
     expect(PARAM_DEFAULTS.r_active).toBe('');
+  });
+
+  it('has empty string defaults for calculator fleet-planner params', async () => {
+    const { PARAM_DEFAULTS } = await import('@/lib/url-state');
+    expect(PARAM_DEFAULTS.c_mw).toBe('');
+    expect(PARAM_DEFAULTS.c_costcap).toBe('');
   });
 });
 
@@ -164,7 +175,7 @@ describe('writeUrlParams + buildShareUrl', () => {
     const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
 
     // write default value, should be omitted
-    writeUrlParams({ g_model: 'DeepSeek-R1-0528' });
+    writeUrlParams({ g_model: 'DeepSeek-V4-Pro' });
     await vi.advanceTimersByTimeAsync(200);
 
     const url = buildShareUrl();
@@ -180,6 +191,29 @@ describe('writeUrlParams + buildShareUrl', () => {
 
     const url = buildShareUrl();
     expect(url).not.toContain('g_model');
+  });
+
+  it('keeps an explicit i_seq=8k/1k in the share URL (no longer stripped as a default)', async () => {
+    setupWindow('', '/inference');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    // Picking the fixed-seq scenario must survive into the share URL; on routes
+    // seeded with a different initialSequence (e.g. /compare pages), stripping
+    // it would revert the pick back to the seeded scenario on reload.
+    writeUrlParams({ i_seq: '8k/1k' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(buildShareUrl()).toContain('i_seq=8k%2F1k');
+  });
+
+  it('still strips i_seq when it is empty (the no-selection case)', async () => {
+    setupWindow('', '/inference');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({ i_seq: '' });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(buildShareUrl()).not.toContain('i_seq');
   });
 
   it('batches multiple params in a single debounce window', async () => {
@@ -275,6 +309,27 @@ describe('buildShareUrl tab filtering', () => {
     const url = buildShareUrl();
     expect(url).toContain('r_range=last-7-days');
     expect(url).not.toContain('g_model');
+  });
+
+  it('includes global, inference and c_ params when on /calculator', async () => {
+    setupWindow('', '/calculator');
+    const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
+
+    writeUrlParams({
+      g_model: 'x',
+      i_seq: 'y',
+      c_mw: '10',
+      c_costcap: '0.5',
+      r_range: 'last-7-days',
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const url = buildShareUrl();
+    expect(url).toContain('g_model=x');
+    expect(url).toContain('i_seq=y');
+    expect(url).toContain('c_mw=10');
+    expect(url).toContain('c_costcap=0.5');
+    expect(url).not.toContain('r_range');
   });
 
   it('defaults to inference tab prefixes when on root path', async () => {
@@ -375,14 +430,14 @@ describe('buildShareUrl unofficialrun handling', () => {
   });
 
   it('preserves unofficialruns alongside other in-memory share params', async () => {
-    setupWindow('?unofficialruns=111&g_model=DeepSeek-R1-0528', '/inference');
+    setupWindow('?unofficialruns=111&g_model=DeepSeek-V4-Pro', '/inference');
     const { writeUrlParams, buildShareUrl } = await import('@/lib/url-state');
 
-    writeUrlParams({ g_model: 'DeepSeek-V4-Pro' });
+    writeUrlParams({ g_model: 'DeepSeek-R1-0528' });
     await vi.advanceTimersByTimeAsync(200);
 
     const url = buildShareUrl();
-    expect(url).toContain('g_model=DeepSeek-V4-Pro');
+    expect(url).toContain('g_model=DeepSeek-R1-0528');
     expect(url).toContain('unofficialruns=111');
   });
 

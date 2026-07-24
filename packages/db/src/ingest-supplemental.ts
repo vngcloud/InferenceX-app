@@ -22,15 +22,6 @@ import {
   normalizeSpecMethod,
   parseBool,
 } from './etl/normalizers';
-
-/**
- * Build a techniques jsonb from the legacy supplemental-data `spec_decoding`
- * field. Returns an empty object when the value is absent/none.
- */
-function techniquesFromSpec(spec: string): Record<string, string | number> {
-  const sm = normalizeSpecMethod(spec);
-  return sm === 'none' ? {} : { spec_method: sm };
-}
 import { bulkIngestBenchmarkRows, bulkUpsertAvailability } from './etl/benchmark-ingest';
 import { ingestEvalRow } from './etl/eval-ingest';
 
@@ -108,7 +99,7 @@ async function ingestSupplementalEvals(
       continue;
     }
     const { framework, disagg } = normalizeFramework(entry.framework, false);
-    const techniques = techniquesFromSpec(entry.spec_decoding);
+    const specMethod = normalizeSpecMethod(entry.spec_decoding);
     const dpAttn = parseBool(entry.dp_attention);
 
     try {
@@ -117,6 +108,7 @@ async function ingestSupplementalEvals(
         framework,
         model: modelKey,
         precision: entry.precision,
+        specMethod,
         disagg,
         isMultinode: false,
         prefillTp: entry.tp,
@@ -150,7 +142,6 @@ async function ingestSupplementalEvals(
             score: entry.score,
             score_se: entry.score_se,
           },
-          techniques,
         },
         workflowRunId,
         date,
@@ -228,12 +219,13 @@ async function ingestSupplementalBmk(
 
     const rows: {
       configId: number;
-      isl: number;
-      osl: number;
+      benchmarkType: 'single_turn' | 'agentic_traces';
+      offloadMode: string;
+      isl: number | null;
+      osl: number | null;
       conc: number;
       image: string | null;
       metrics: Record<string, number>;
-      techniques: Record<string, string | number>;
     }[] = [];
 
     for (const entry of entries) {
@@ -255,7 +247,7 @@ async function ingestSupplementalBmk(
         entry.framework,
         entry.disagg ?? false,
       );
-      const techniques = techniquesFromSpec(entry.spec_decoding);
+      const specMethod = normalizeSpecMethod(entry.spec_decoding);
       const dpAttn = parseBool(entry.dp_attention);
       const disagg = entry.disagg ?? frameworkDisagg;
 
@@ -264,6 +256,7 @@ async function ingestSupplementalBmk(
         framework,
         model: modelKey,
         precision: entry.precision,
+        specMethod,
         disagg,
         isMultinode: entry.is_multinode ?? false,
         prefillTp: entry.tp,
@@ -280,12 +273,13 @@ async function ingestSupplementalBmk(
 
       rows.push({
         configId,
+        benchmarkType: 'single_turn',
+        offloadMode: 'off',
         isl: entry.isl,
         osl: entry.osl,
         conc: entry.conc,
         image: entry.image,
         metrics: entry.metrics,
-        techniques,
       });
     }
 
@@ -304,19 +298,21 @@ async function ingestSupplementalBmk(
     // to `rows` are exactly the valid ones.
     const availRows: {
       model: string;
-      isl: number;
-      osl: number;
+      isl: number | null;
+      osl: number | null;
       precision: string;
       hardware: string;
       framework: string;
-      techniques: Record<string, string | number>;
+      specMethod: string;
       disagg: boolean;
+      benchmarkType: string;
     }[] = [];
     for (const entry of entries) {
       const modelKey = resolveModelKey({ model: entry.model, infmax_model_prefix: undefined });
       const hw = hwToGpuKey(entry.hw);
       if (!modelKey || !hw) continue;
       const { framework, disagg } = normalizeFramework(entry.framework, entry.disagg ?? false);
+      const specMethod = normalizeSpecMethod(entry.spec_decoding);
       availRows.push({
         model: modelKey,
         isl: entry.isl,
@@ -324,8 +320,9 @@ async function ingestSupplementalBmk(
         precision: entry.precision,
         hardware: hw,
         framework,
-        techniques: techniquesFromSpec(entry.spec_decoding),
+        specMethod,
         disagg,
+        benchmarkType: 'single_turn',
       });
     }
     if (availRows.length > 0) {
