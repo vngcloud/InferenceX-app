@@ -1,22 +1,19 @@
 name: deploy-dev
 
-# Push to dev → same self-hosted dashboard runner builds a SEPARATE dev image
-# and brings up a parallel stack that is fully isolated from prod:
+# Same self-hosted dashboard runner builds a SEPARATE dev image and brings up
+# a parallel stack that is fully isolated from prod:
 #   - compose project `inferencex-dev` (own containers + own postgres volume,
 #     i.e. a brand-new database — prod's `inferencex` stack is untouched)
 #   - image tag `inferencex-app-dev:latest` (prod consumes `inferencex-app:latest`,
 #     so a dev build never clobbers what prod recreates from)
 #   - app published directly on host :8080 (no nginx/TLS) → http://<host>:8080
-# `workflow_dispatch` lets you re-deploy dev without a code change.
+#
+# The automatic `push: branches: [dev]` trigger is intentionally disabled
+# (2026-07-24): `dev` is being used to stage work-in-progress code without
+# auto-deploying every push. `workflow_dispatch` still lets anyone re-deploy
+# dev on demand (pick any ref, including `dev`) — see the manual `deploy-dev`
+# runs against `master` around 2026-07-23 for an example of that flow.
 on:
-  push:
-    branches: [dev]
-    # A workflow- or docs-only commit can't change the app image, so don't
-    # rebuild the dev stack for those (mirrors prod's deploy.yml guard).
-    paths-ignore:
-      - '.github/**'
-      - 'docs/**'
-      - '**/*.md'
   workflow_dispatch:
 
 # Separate from prod's `deploy` group so a dev push never cancels a prod
