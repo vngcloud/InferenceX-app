@@ -220,6 +220,16 @@ export const getHardwareKey = (entry: AggDataEntry): string => {
   } else if (entry['spec_decoding'] && entry['spec_decoding'] !== 'none') {
     normalizedHwName = `${normalizedHwName}_${entry['spec_decoding']}`;
   }
+  // Topology suffix when there's more than one GPU in the deployment, so that
+  // 1× and 2× (or larger) deployments don't collapse into a single chart
+  // series. Suppressed for single-GPU runs to keep parity with upstream
+  // legends. Disagg = prefill + decode pools; non-disagg = single pool.
+  const totalGpus = entry.disagg
+    ? (entry.num_prefill_gpu ?? 0) + (entry.num_decode_gpu ?? 0)
+    : (entry.num_prefill_gpu ?? entry.num_decode_gpu ?? 0);
+  if (totalGpus > 1) {
+    normalizedHwName = `${normalizedHwName}_${totalGpus}x`;
+  }
   return normalizedHwName;
 };
 
@@ -270,6 +280,7 @@ export function buildAvailabilityHwKey(
   framework?: string,
   specMethod?: string,
   disagg?: boolean,
+  totalGpus?: number,
 ): string {
   let hwKey = hardware.split('-')[0];
   const fw = framework ? resolveFrameworkAlias(framework) : undefined;
@@ -287,6 +298,11 @@ export function buildAvailabilityHwKey(
   }
   if (specMethod === 'mtp') hwKey = `${hwKey}_mtp`;
   else if (specMethod && specMethod !== 'none') hwKey = `${hwKey}_${specMethod}`;
+  // Optional topology suffix — keeps 1× and 2× deployments as separate
+  // legend entries. Mirror of the suffix in getHardwareKey above. Callers
+  // that don't know the topology (e.g. legacy availability rows lacking GPU
+  // counts) pass undefined and the suffix is skipped.
+  if (totalGpus !== undefined && totalGpus > 1) hwKey = `${hwKey}_${totalGpus}x`;
   return hwKey;
 }
 

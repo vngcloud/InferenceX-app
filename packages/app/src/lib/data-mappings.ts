@@ -6,12 +6,14 @@ export enum Model {
   DeepSeek_R1 = 'DeepSeek-R1-0528',
   GptOss = 'gpt-oss-120b',
   Qwen3_5 = 'Qwen-3.5-397B-A17B',
+  Qwen3_5_27B = 'Qwen-3.5-27B',
   Kimi_K2_5 = 'Kimi-K2.5',
   MiniMax_M2_5 = 'MiniMax-M2.5',
   MiniMax_M3 = 'MiniMax-M3',
   GLM_5 = 'GLM-5',
   GLM_5_2 = 'GLM-5.2',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
+  Gemma_4_31B = 'Gemma-4-31B-it',
 }
 
 export type CategoryTag = 'default' | 'experimental' | 'maintenance' | 'deprecated' | 'hidden';
@@ -102,6 +104,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     prefix: 'kimik2.5',
     category: 'default',
   },
+  [Model.Qwen3_5_27B]: { label: 'Qwen3.5 27B', prefix: 'qwen3.5-27b', category: 'default' },
   [Model.MiniMax_M3]: {
     label: 'MiniMax M3 428B',
     prefix: 'minimaxm3',
@@ -125,6 +128,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
   },
   [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
   [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
+  [Model.Gemma_4_31B]: { label: 'Gemma-4 31B', prefix: 'gemma4', category: 'default' },
 };
 
 function modelsByCategory(cat: CategoryTag): ReadonlySet<Model> {
@@ -207,6 +211,7 @@ export enum Sequence {
   OneK_OneK = '1k/1k',
   OneK_EightK = '1k/8k',
   EightK_OneK = '8k/1k',
+  SixteenK_OneK = '16k/1k',
   AgenticTraces = 'agentic-traces',
 }
 
@@ -244,6 +249,12 @@ const SEQUENCE_CONFIG: Record<Sequence, SequenceConfig> = {
   [Sequence.EightK_OneK]: {
     label: '8K / 1K',
     compact: '8k1k',
+    category: 'default',
+    kind: 'fixed-seq',
+  },
+  [Sequence.SixteenK_OneK]: {
+    label: '16K / 1K',
+    compact: '16k1k',
     category: 'default',
     kind: 'fixed-seq',
   },

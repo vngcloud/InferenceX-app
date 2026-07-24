@@ -123,6 +123,31 @@ export const HW_REGISTRY: Record<string, HwEntry> = {
     costn: 1.9,
     costr: 2.1,
   },
+  // Consumer/workstation card used as live-check test-rig hardware (see
+  // design/new-test-design.md), not a fleet GPU with real datacenter
+  // economics. TDP is NVIDIA's published spec; costh has no real value
+  // (no hyperscaler offers this card) so it's an explicit placeholder;
+  // costn/costr are approximate marketplace rental rates (TensorDock,
+  // Vast.ai, mid-2026) rather than list prices. `power` (all-in kW/GPU
+  // incl. datacenter overhead) has no real basis for a standalone rig, so
+  // it's a placeholder too.
+  //
+  // Key is `rtx5090` (no hyphen) even though every other key here is a
+  // single token too -- hwToGpuKey()/getGpuSpecs() split hardware strings
+  // on '-'/'_' and take the first segment as the base key, so a hyphenated
+  // key like `rtx-5090` would silently resolve to a nonexistent `rtx` base
+  // and fall back to zeroed-out specs (caught by constants.test.ts).
+  rtx5090: {
+    vendor: 'NVIDIA',
+    arch: 'Blackwell (consumer)',
+    label: 'RTX 5090',
+    sort: 9,
+    tdp: 575,
+    power: 9.99,
+    costh: 9.99,
+    costn: 0.57,
+    costr: 0.6,
+  },
 };
 
 /** Canonical set of GPU key strings used across all packages. */

@@ -20,6 +20,8 @@ const getCachedBenchmarks = cachedQuery(
   { blobOnly: true },
 );
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
+
 // Exactly one run's results (GPU comparison of individual same-day runs). Cached
 // under a distinct key prefix so it never collides with the latest/as-of query.
 const getCachedBenchmarksForRun = cachedQuery(
@@ -31,7 +33,11 @@ const getCachedBenchmarksForRun = cachedQuery(
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const model = params.get('model') ?? '';
-  const date = params.get('date') ?? undefined;
+  // Reject anything that isn't an ISO YYYY-MM-DD — otherwise postgres-js will
+  // coerce `${date}::date` via `new Date(date)`, which on garbage produces NaN
+  // and throws `Invalid time value` from toISOString → opaque 500.
+  const rawDate = params.get('date');
+  const date = rawDate && ISO_DATE_RE.test(rawDate) ? rawDate : undefined;
   const exact = params.get('exact') === 'true';
   // Numeric GitHub run id only — anything else is ignored (treated as "latest").
   const runIdParam = params.get('runId');

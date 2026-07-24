@@ -1,0 +1,113 @@
+name: auto-ingest
+
+# Polls vngcloud/InferenceX every 15 min for completed benchmark workflow
+# runs whose `name:` starts with the INGEST_PREFIX marker, and ingests any
+# that aren't already in the dashboard DB. Also exposes a manual dispatch
+# that takes a run URL and force-ingests it (skips the prefix check).
+#
+# All logic lives in this repo — InferenceX needs no workflow changes.
+# Opt-in for a new bench config = name its workflow `[ingest] <whatever>`.
+#
+# Lag: up to the cron interval. GitHub will not natively fire cross-repo
+# events; the only true event-driven option requires a notifier step on
+# the InferenceX side, which contradicts the "all in inference-app" goal.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      run_url:
+        description: 'Force-ingest this run URL (bypasses scan + prefix filter)'
+        required: false
+        type: string
+
+# Serialize ingest runs — overlapping ingests of the same run would race
+# on the workflow_runs upsert, and a dispatch arriving mid-scan should
+# queue, not cancel.
+concurrency:
+  group: auto-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
+  SOURCE_REPO: vngcloud/InferenceX
+  INGEST_PREFIX: '[ingest]'
+
+jobs:
+  ingest:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    timeout-minutes: 20
+    steps:
+      - name: Resolve runs to ingest
+        env:
+          GH_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+          MANUAL_URL: ${{ inputs.run_url }}
+        run: |
+          set -euo pipefail
+          : > urls.txt
+
+          if [ -n "${MANUAL_URL:-}" ]; then
+            echo "manual dispatch: $MANUAL_URL"
+            echo "$MANUAL_URL" > urls.txt
+            exit 0
+          fi
+
+          # Recent successful runs whose workflow name starts with the marker.
+          # 50 covers ~a day of bench activity at current volume; bump if needed.
+          gh api "repos/$SOURCE_REPO/actions/runs?status=success&per_page=50" \
+            --jq ".workflow_runs[] | select(.name | startswith(\"$INGEST_PREFIX\")) | .html_url" \
+            > candidates.txt
+
+          # Already-ingested run IDs (newline-separated).
+          existing=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            psql -U inferencex -d inferencex -tAc \
+            "SELECT github_run_id FROM workflow_runs" | tr -d '\r')
+
+          new=0; skipped=0
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            id="${url##*/}"
+            if printf '%s\n' "$existing" | grep -qFx "$id"; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "new: $url"
+            echo "$url" >> urls.txt
+            new=$((new + 1))
+          done < candidates.txt
+          echo "scan summary: $new new, $skipped already ingested"
+
+      - name: Ingest each new run
+        run: |
+          set -euo pipefail
+          if [ ! -s urls.txt ]; then
+            echo "Nothing to ingest."
+            exit 0
+          fi
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            echo "=== ingesting $url ==="
+            docker compose -f "$COMPOSE_FILE" exec -T app \
+              pnpm admin:db:ingest:run "$url" "$SOURCE_REPO" --no-ssl
+          done < urls.txt
+
+      - name: Apply run overrides
+        # Idempotent. Honors PURGED_RUNS / CONCLUSION_OVERRIDES from
+        # packages/db/src/etl/run-overrides.ts. Cheap when nothing changed.
+        if: success()
+        run: |
+          if [ -s urls.txt ]; then
+            docker compose -f "$COMPOSE_FILE" exec -T app \
+              pnpm admin:db:apply-overrides --yes --no-ssl
+          fi
+
+      - name: Invalidate cache
+        if: success()
+        run: |
+          if [ -s urls.txt ]; then
+            docker compose -f "$COMPOSE_FILE" exec -T app pnpm admin:cache:invalidate
+          fi

@@ -62,6 +62,14 @@ export const METRIC_KEYS = new Set([
   'p99_intvty',
   'p99.9_intvty',
   'std_intvty',
+  // speculative-decoding acceptance — fraction of draft tokens accepted [0,1]
+  'median_acceptance_rate',
+  'mean_acceptance_rate',
+  'p99_acceptance_rate',
+  // speculative-decoding tokens per forward step — 1.0 when spec-dec is off
+  'median_tokens_per_step',
+  'mean_tokens_per_step',
+  'p99_tokens_per_step',
   // QPS — queries per second (agentic aiperf)
   'median_qps',
   'mean_qps',

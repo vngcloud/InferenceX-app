@@ -334,7 +334,14 @@ describe('transformBenchmarkRows', () => {
 
   it('labels M3 mtp configs with the "M3 EAGLE" suffix', () => {
     const rows = [
-      makeRow({ model: 'minimaxm3', hardware: 'h100', framework: 'vllm', spec_method: 'mtp' }),
+      makeRow({
+        model: 'minimaxm3',
+        hardware: 'h100',
+        framework: 'vllm',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig } = transformBenchmarkRows(rows);
     const entry = hardwareConfig['h100_vllm_mtp'];
@@ -344,7 +351,14 @@ describe('transformBenchmarkRows', () => {
 
   it('keeps the generic MTP suffix for non-M3 mtp configs', () => {
     const rows = [
-      makeRow({ model: 'dsr1', hardware: 'h200', framework: 'sglang', spec_method: 'mtp' }),
+      makeRow({
+        model: 'dsr1',
+        hardware: 'h200',
+        framework: 'sglang',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig } = transformBenchmarkRows(rows);
     const entry = hardwareConfig['h200_sglang_mtp'];
@@ -600,7 +614,9 @@ describe('transformBenchmarkRows — disaggregated configs', () => {
 
 describe('transformBenchmarkRows — hardware key resolution', () => {
   it('constructs hwKey from hardware + framework', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt' })];
+    const rows = [
+      makeRow({ hardware: 'h200', framework: 'trt', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     // getHardwareKey normalizes: h200 + trt => h200_trt
     const point = chartData.flat()[0];
@@ -609,7 +625,15 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
   });
 
   it('appends _mtp suffix when spec_method is mtp', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'mtp' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'mtp',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     const point = chartData.flat()[0];
     expect(point.hwKey).toBe('h200_trt_mtp');
@@ -617,7 +641,9 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
   });
 
   it('handles AMD hardware with vllm framework', () => {
-    const rows = [makeRow({ hardware: 'mi300x', framework: 'vllm' })];
+    const rows = [
+      makeRow({ hardware: 'mi300x', framework: 'vllm', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+    ];
     const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
     const point = chartData.flat()[0];
     expect(point.hwKey).toBe('mi300x_vllm');
@@ -645,9 +671,27 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
 describe('transformBenchmarkRows — hardware config caching', () => {
   it('deduplicates hardware config for rows with the same hwKey', () => {
     const rows = [
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 16 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 64 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 128 }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 16,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 64,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 128,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig, chartData } = transformBenchmarkRows(rows);
     // All three rows produce the same hwKey, so hardwareConfig should have exactly 1 entry
@@ -663,8 +707,14 @@ describe('transformBenchmarkRows — hardware config caching', () => {
 
   it('creates separate config entries for different frameworks on same GPU', () => {
     const rows = [
-      makeRow({ hardware: 'h100', framework: 'vllm' }),
-      makeRow({ hardware: 'h100', framework: 'dynamo-trt', conc: 32 }),
+      makeRow({ hardware: 'h100', framework: 'vllm', num_prefill_gpu: 1, num_decode_gpu: 1 }),
+      makeRow({
+        hardware: 'h100',
+        framework: 'dynamo-trt',
+        conc: 32,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { hardwareConfig } = transformBenchmarkRows(rows);
     const hwKeys = Object.keys(hardwareConfig);
@@ -764,9 +814,27 @@ describe('transformBenchmarkRows — data point values', () => {
 
   it('groups data points by hwKey within each chart', () => {
     const rows = [
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 16 }),
-      makeRow({ hardware: 'h200', framework: 'trt', conc: 64 }),
-      makeRow({ hardware: 'mi300x', framework: 'vllm', conc: 32 }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 16,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        conc: 64,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+      makeRow({
+        hardware: 'mi300x',
+        framework: 'vllm',
+        conc: 32,
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
     ];
     const { chartData } = transformBenchmarkRows(rows);
     // All points should have their hwKey set correctly
@@ -781,7 +849,15 @@ describe('transformBenchmarkRows — data point values', () => {
 
 describe('transformBenchmarkRows — spec decoding variants', () => {
   it('does not append suffix when spec_method is none', () => {
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'none' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'none',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData } = transformBenchmarkRows(rows);
     expect(chartData.flat()[0].hwKey).toBe('h200_trt');
   });
@@ -791,7 +867,15 @@ describe('transformBenchmarkRows — spec decoding variants', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
-    const rows = [makeRow({ hardware: 'h200', framework: 'trt', spec_method: 'eagle' })];
+    const rows = [
+      makeRow({
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'eagle',
+        num_prefill_gpu: 1,
+        num_decode_gpu: 1,
+      }),
+    ];
     const { chartData } = transformBenchmarkRows(rows);
     expect(chartData.flat()[0].hwKey).toBe('h200_trt_eagle');
 

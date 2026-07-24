@@ -93,6 +93,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: 'daily',
       priority: 0.8,
     }),
+    {
+      // No Chinese sibling page exists yet for /live-check — keep it
+      // English-only in the sitemap, unlike the localizedPair() entries.
+      url: `${BASE_URL}/live-check`,
+      lastModified: now,
+      changeFrequency: 'hourly',
+      priority: 0.6,
+    },
     ...localizedPair('/datasets', { lastModified: now, changeFrequency: 'weekly', priority: 0.6 }),
     ...localizedPair('/blog', { lastModified: now, changeFrequency: 'weekly', priority: 0.8 }),
     ...localizedPair('/glossary', {

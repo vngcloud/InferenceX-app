@@ -209,6 +209,14 @@ const formatChangelogDescription = (desc: string | string[]): React.JSX.Element 
 const CHART_MARGIN = { top: 24, right: 10, bottom: 60, left: 60 };
 
 /**
+ * Team SLA: per-user decode-speed floor (tok/s/user). Rendered as a vertical
+ * reference line on the interactivity chart so the messy full search-ladder
+ * scatter is readable — points at/right of the line meet SLA. Data-independent,
+ * so it applies identically to official runs and `?unofficialrun=` overlays.
+ */
+const SLA_TOK_S_PER_USER = 20;
+
+/**
  * Bucket points by their (requested) date. Comparison overlays put multiple
  * dates under one legend key, and rooflines / gradient paths must never span
  * dates — a May 15 point can't dominate a May 17 plot.
@@ -2417,6 +2425,61 @@ const ScatterGraph = React.memo(
         },
       };
 
+      // ── SLA reference line (interactivity charts only) ──
+      // x-axis is tok/s/user only on the interactivity chart, so the vertical
+      // line at SLA_TOK_S_PER_USER is meaningful only there. Drawn on top of the
+      // series as a thin dashed guide; repositioned (x only) on zoom.
+      const slaLineLayer: CustomLayerConfig | null =
+        chartDefinition.chartType === 'interactivity'
+          ? {
+              type: 'custom',
+              key: 'sla-line',
+              render: (zoomGroup, ctx) => {
+                const xScale = ctx.xScale as ContinuousScale;
+                let layer = zoomGroup.select<SVGGElement>('.sla-line-layer');
+                if (layer.empty()) {
+                  layer = zoomGroup
+                    .append('g')
+                    .attr('class', 'sla-line-layer')
+                    .attr('pointer-events', 'none');
+                }
+                const x = xScale(SLA_TOK_S_PER_USER);
+                layer
+                  .selectAll<SVGLineElement, number>('.sla-line')
+                  .data([SLA_TOK_S_PER_USER])
+                  .join('line')
+                  .attr('class', 'sla-line')
+                  .attr('x1', x)
+                  .attr('x2', x)
+                  .attr('y1', 0)
+                  .attr('y2', ctx.height)
+                  .attr('stroke', 'var(--muted-foreground)')
+                  .attr('stroke-width', 1.5)
+                  .attr('stroke-dasharray', '6 4')
+                  .attr('opacity', 0.7);
+                layer
+                  .selectAll<SVGTextElement, number>('.sla-line-label')
+                  .data([SLA_TOK_S_PER_USER])
+                  .join('text')
+                  .attr('class', 'sla-line-label')
+                  .attr('x', x + 6)
+                  .attr('y', 14)
+                  .attr('text-anchor', 'start')
+                  .attr('font-size', '11px')
+                  .attr('font-weight', '600')
+                  .attr('fill', 'var(--muted-foreground)')
+                  .text(`SLA ≥ ${SLA_TOK_S_PER_USER} tok/s/user`);
+              },
+              onZoom: (zoomGroup, ctx) => {
+                const newXScale = ctx.newXScale as ContinuousScale;
+                const x = newXScale(SLA_TOK_S_PER_USER);
+                const layer = zoomGroup.select('.sla-line-layer');
+                layer.select('.sla-line').attr('x1', x).attr('x2', x);
+                layer.select('.sla-line-label').attr('x', x + 6);
+              },
+            }
+          : null;
+
       // ── Known-issue annotations: warning box + arrow to the affected line ──
       const drawKnownIssues = (
         ctx: RenderContext,
@@ -2466,6 +2529,7 @@ const ScatterGraph = React.memo(
 
       const result: LayerConfig<InferenceData>[] = [rooflineLayer, scatterLayer];
       if (overlayLayer) result.push(overlayLayer);
+      if (slaLineLayer) result.push(slaLineLayer);
       result.push(speedOverlayLayer, knownIssueLayer);
       return result;
       // Interaction state (visibility, colors, precision shapes, known-issue

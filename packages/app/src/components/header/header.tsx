@@ -56,6 +56,12 @@ const NAV_LINKS = [
     event: 'header_datasets_clicked',
   },
   { href: '/blog', label: 'Articles', testId: 'nav-link-blog', event: 'header_blog_clicked' },
+  {
+    href: '/live-check',
+    label: 'Pipelines',
+    testId: 'nav-link-pipelines',
+    event: 'header_pipelines_clicked',
+  },
   { href: '/about', label: 'About', testId: 'nav-link-about', event: 'header_about_clicked' },
 ] as const;
 

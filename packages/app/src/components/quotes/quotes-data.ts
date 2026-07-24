@@ -11,6 +11,13 @@ export interface Quote {
 
 export const QUOTES: Quote[] = [
   {
+    text: 'Thank you InferenceMAX\u2122 for the great idea \u2014 we will make it become ours. If you copy from one, it\u2019s plagiarism; if you copy from two, it\u2019s research.',
+    name: 'Wilson Mizner',
+    title: 'Honorary patron \u00B7 GreenNode self-host fork',
+    org: 'GreenNode',
+    logo: 'greennode.png',
+  },
+  {
     text: "Vendor-neutral, continuously updated benchmarking is essential as models and inference stacks co-evolve. MiniMax M3 was built with both frontier capability and real-world deployment efficiency in mind, and the day-one vLLM support from the community reflects the collaborative spirit we're proud to be part of. InferenceX provides the kind of transparent, reproducible data the ecosystem needs.",
     textZh:
       '在模型与推理技术栈协同演进的今天，厂商中立、持续更新的基准测试不可或缺。MiniMax M3 在设计之初就兼顾了前沿能力与实际部署效率，而社区第一时间对 vLLM 的支持也体现了我们引以为豪的协作精神。InferenceX 正是生态所需的透明、可复现的数据平台。',

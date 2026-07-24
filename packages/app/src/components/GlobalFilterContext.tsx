@@ -294,6 +294,21 @@ export function GlobalFilterProvider({
     }
   }, [unofficialAvailable, selectedModel]);
 
+  // Auto-switch when the (URL- or default-) selected model has zero rows in
+  // availability — e.g. a small / freshly-truncated self-host DB where the
+  // upstream default (DeepSeek-R1) was never ingested. Without this, /evaluation
+  // and /inference both show "No data" on first paint and the user has to know
+  // to manually pick a model from the dropdown.
+  const didFallbackToFirstAvailableRef = useRef(false);
+  useEffect(() => {
+    if (!availabilityRows || availableModels.length === 0) return;
+    if (didFallbackToFirstAvailableRef.current) return;
+    if (availableModels.includes(selectedModel)) return;
+    if (getUrlParam('g_model')) return; // honor explicit URL pick even if empty
+    didFallbackToFirstAvailableRef.current = true;
+    setSelectedModel(availableModels[0]);
+  }, [availabilityRows, availableModels, selectedModel, getUrlParam]);
+
   // Sequences available for the selected model (DB ∪ unofficial run for this model).
   const availableSequences = useMemo(() => {
     const unofficialSeqs = unofficialAvailable

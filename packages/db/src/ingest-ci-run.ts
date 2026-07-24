@@ -44,6 +44,7 @@ import {
   readReusedIngestMetadata,
 } from './etl/reused-ingest-metadata';
 import { mapBenchmarkRow } from './etl/benchmark-mapper';
+import { readAiperfSearchDir } from './etl/aiperf-search-mapper';
 import {
   bulkIngestBenchmarkRows,
   bulkIngestRunStats,
@@ -616,6 +617,88 @@ async function main(): Promise<void> {
           `  ⚠ Dataset ${datasetSlug} is not in the datasets table — request-timeline deep links ` +
             `will 404 until it is ingested (packages/db/src/ingest-weka-dataset.ts)`,
         );
+      }
+    }
+  }
+
+  // ── Ingest AIPerf search ladder ───────────────────────────────────────
+  // Fastfood runs ship `aiperf_search_*` instead of `results_bmk`. Each search
+  // iteration is one candidate at one concurrency; we ingest the full ladder as
+  // benchmark_results rows (one per concurrency) reusing mapBenchmarkRow and the
+  // standard insert path. See docs/adr/0001.
+
+  console.log('\n--- AIPerf Search Ladder ---');
+  if (evalsOnly) {
+    console.log('  Skipped (evals-only run)');
+  } else {
+    const aiperfDirs = fs.existsSync(artifactsDir)
+      ? fs
+          .readdirSync(artifactsDir)
+          .filter((d) => d.startsWith('aiperf_search_'))
+          .map((d) => path.join(artifactsDir, d))
+          .filter((d) => fs.statSync(d).isDirectory())
+      : [];
+    console.log(`  Found ${aiperfDirs.length} aiperf_search_* artifact(s)`);
+
+    let aiperfNew = 0;
+    let aiperfDup = 0;
+    const aiperfAvailRows: typeof availRows = [];
+
+    for (const dir of aiperfDirs) {
+      const rawRows = readAiperfSearchDir(dir);
+      const rows = rawRows
+        .map((r) => mapBenchmarkRow(r, tracker))
+        .filter((r): r is NonNullable<typeof r> => r !== null);
+      if (rows.length === 0) continue;
+
+      const toInsert = [];
+      for (const row of rows) {
+        try {
+          const configId = await getOrCreateConfig(row.config);
+          toInsert.push({ ...row, configId });
+        } catch (error: any) {
+          tracker.recordDbError(`config for ${path.basename(dir)}`, error);
+        }
+      }
+      if (toInsert.length === 0) continue;
+
+      try {
+        const { newCount, dupCount } = await bulkIngestBenchmarkRows(
+          sql,
+          toInsert,
+          workflowRunId,
+          date,
+        );
+        aiperfNew += newCount;
+        aiperfDup += dupCount;
+        for (const r of toInsert) {
+          aiperfAvailRows.push({
+            model: r.config.model,
+            isl: r.isl,
+            osl: r.osl,
+            precision: r.config.precision,
+            hardware: r.config.hardware,
+            framework: r.config.framework,
+            specMethod: r.config.specMethod,
+            disagg: r.config.disagg,
+            benchmarkType: r.benchmarkType,
+          });
+        }
+      } catch (error: any) {
+        tracker.recordDbError(path.basename(dir), error);
+      }
+    }
+
+    totalNewBmk += aiperfNew;
+    totalDupBmk += aiperfDup;
+    console.log(`  AIPerf candidates: +${aiperfNew} new, ${aiperfDup} dup`);
+
+    if (aiperfAvailRows.length > 0) {
+      try {
+        await bulkUpsertAvailability(sql, aiperfAvailRows, date);
+        console.log(`  Availability: ${aiperfAvailRows.length} row(s) upserted`);
+      } catch (error: any) {
+        tracker.recordDbError('availability (aiperf)', error);
       }
     }
   }

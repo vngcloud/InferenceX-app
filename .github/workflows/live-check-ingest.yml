@@ -1,0 +1,105 @@
+name: live-check-ingest
+
+# Polls vngcloud/InferenceX every 15 min for completed Smoke Test AND
+# Throughput Test workflow runs and ingests any that aren't already in the
+# dashboard DB. Also exposes a manual dispatch that takes a run URL and
+# force-ingests it. The two are separate GitHub Actions workflows with no
+# shared run ID -- ingest-live-check.ts handles either one, detecting which
+# artifact family (smoke_test_results_* vs throughput_test_results_*) is
+# present. See design/new-test-design.md.
+#
+# Deliberately separate from auto-ingest.yml:
+#   - Matches the exact workflow `name:` ("Smoke Test" / "Throughput Test"),
+#     not an [ingest] prefix -- InferenceX doesn't opt these workflows in
+#     per-config, they're always-on for every discovered/configured stack.
+#   - Does NOT filter on `status=success` / `conclusion`. smoke-test
+#     intentionally exits non-zero whenever any probe (e.g. tool-calling)
+#     fails, but still uploads a valid results artifact -- filtering to
+#     success would silently miss every run.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      run_url:
+        description: 'Force-ingest this run URL (bypasses scan)'
+        required: false
+        type: string
+
+concurrency:
+  group: live-check-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMPOSE_FILE: /opt/docker-compose/docker-compose.yml
+  SOURCE_REPO: vngcloud/InferenceX
+
+jobs:
+  ingest:
+    runs-on: [self-hosted, dashboard, inferencex-app-deploy]
+    timeout-minutes: 20
+    steps:
+      - name: Resolve runs to ingest
+        env:
+          GH_TOKEN: ${{ secrets.INGEST_GITHUB_TOKEN }}
+          MANUAL_URL: ${{ inputs.run_url }}
+        run: |
+          set -euo pipefail
+          : > urls.txt
+
+          if [ -n "${MANUAL_URL:-}" ]; then
+            echo "manual dispatch: $MANUAL_URL"
+            echo "$MANUAL_URL" > urls.txt
+            exit 0
+          fi
+
+          # Recent completed Smoke Test / Throughput Test runs, any conclusion.
+          gh api "repos/$SOURCE_REPO/actions/runs?status=completed&per_page=50" \
+            --jq '.workflow_runs[] | select(.name == "Smoke Test" or .name == "Throughput Test") | .html_url' \
+            > candidates.txt
+
+          # Already-ingested run IDs (newline-separated). live_check_results
+          # rows are always attached to a workflow_runs row, so this is a
+          # superset check against every run this table has ever seen.
+          existing=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            psql -U inferencex -d inferencex -tAc \
+            "SELECT DISTINCT wr.github_run_id FROM live_check_results lcr JOIN workflow_runs wr ON wr.id = lcr.workflow_run_id" | tr -d '\r')
+
+          new=0; skipped=0
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            id="${url##*/}"
+            if printf '%s\n' "$existing" | grep -qFx "$id"; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "new: $url"
+            echo "$url" >> urls.txt
+            new=$((new + 1))
+          done < candidates.txt
+          echo "scan summary: $new new, $skipped already ingested"
+
+      - name: Ingest each new run
+        run: |
+          set -euo pipefail
+          if [ ! -s urls.txt ]; then
+            echo "Nothing to ingest."
+            exit 0
+          fi
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            echo "=== ingesting $url ==="
+            docker compose -f "$COMPOSE_FILE" exec -T app \
+              pnpm admin:db:live-check:ingest:run "$url" "$SOURCE_REPO" --no-ssl
+          done < urls.txt
+
+      - name: Invalidate cache
+        if: success()
+        run: |
+          if [ -s urls.txt ]; then
+            docker compose -f "$COMPOSE_FILE" exec -T app pnpm admin:cache:invalidate
+          fi
