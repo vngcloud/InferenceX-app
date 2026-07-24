@@ -380,12 +380,19 @@ export default function ChartDisplay() {
       if (!rawData || rawData.data.length === 0) return null;
 
       const effectiveXMetric = chartType === 'e2e' ? selectedE2eXAxisMetric : selectedXAxisMetric;
+      const isAgentic = sequenceKind(selectedSequence) === 'agentic';
       const processed = processOverlayChartData(
         rawData.data,
         chartType,
         selectedYAxisMetric,
         effectiveXMetric,
-        { isAgentic: sequenceKind(selectedSequence) === 'agentic' },
+        {
+          isAgentic,
+          selectedPercentile,
+          // Same gate useChartData applies to the official points — on any
+          // non-e2e x-mode, agentic rooflines are restricted to e2e winners.
+          restrictToE2eFrontier: isAgentic && selectedXAxisMode !== 'e2e',
+        },
       );
 
       let overlayPoints = processed;
@@ -425,6 +432,8 @@ export default function ChartDisplay() {
     selectedYAxisMetric,
     selectedXAxisMetric,
     selectedE2eXAxisMetric,
+    selectedPercentile,
+    selectedXAxisMode,
     compareGpuPair,
   ]);
 
