@@ -4,6 +4,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import * as d3 from 'd3';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { track } from '@/lib/analytics';
+import { isUnofficialHostname } from '@/lib/unofficial-domain';
 
 import {
   Dialog,
@@ -120,7 +121,7 @@ export const TopologyDiagram = forwardRef<
               variant="ghost"
               size="icon"
               onClick={() => navigate('prev')}
-              aria-label="Previous GPU"
+              aria-label="Previous Chip"
               data-testid="topology-nav-prev"
             >
               <ChevronLeft className="size-5" />
@@ -138,7 +139,7 @@ export const TopologyDiagram = forwardRef<
               variant="ghost"
               size="icon"
               onClick={() => navigate('next')}
-              aria-label="Next GPU"
+              aria-label="Next Chip"
               data-testid="topology-nav-next"
             >
               <ChevronRight className="size-5" />
@@ -407,28 +408,30 @@ function TopologyD3({ spec, config, compact }: TopologyD3Props) {
       .attr('role', 'img')
       .attr('aria-label', `${spec.name} ${spec.scaleOutTopology} scale-out topology diagram`);
 
-    // Add background logo watermark
-    const patternId = `logo-scaleout-${spec.name.replaceAll(/\s+/gu, '-')}-${compact ? 'c' : 'e'}`;
-    svg
-      .append('defs')
-      .append('pattern')
-      .attr('id', patternId)
-      .attr('patternUnits', 'userSpaceOnUse')
-      .attr('width', totalW)
-      .attr('height', viewBoxH)
-      .append('image')
-      .attr('href', '/brand/logo-color.webp')
-      .attr('width', totalW * 0.3)
-      .attr('height', viewBoxH * 0.3)
-      .attr('x', (totalW - totalW * 0.3) / 2)
-      .attr('y', (viewBoxH - viewBoxH * 0.3) / 2)
-      .attr('opacity', 0.1);
+    if (!isUnofficialHostname(window.location.hostname)) {
+      // Add background logo watermark
+      const patternId = `logo-scaleout-${spec.name.replaceAll(/\s+/gu, '-')}-${compact ? 'c' : 'e'}`;
+      svg
+        .append('defs')
+        .append('pattern')
+        .attr('id', patternId)
+        .attr('patternUnits', 'userSpaceOnUse')
+        .attr('width', totalW)
+        .attr('height', viewBoxH)
+        .append('image')
+        .attr('href', '/brand/logo-color.webp')
+        .attr('width', totalW * 0.3)
+        .attr('height', viewBoxH * 0.3)
+        .attr('x', (totalW - totalW * 0.3) / 2)
+        .attr('y', (viewBoxH - viewBoxH * 0.3) / 2)
+        .attr('opacity', 0.1);
 
-    svg
-      .insert('rect', ':first-child')
-      .attr('width', totalW)
-      .attr('height', viewBoxH)
-      .attr('fill', `url(#${patternId})`);
+      svg
+        .insert('rect', ':first-child')
+        .attr('width', totalW)
+        .attr('height', viewBoxH)
+        .attr('fill', `url(#${patternId})`);
+    }
 
     // === Connections (drawn first, behind boxes) ===
 
@@ -662,7 +665,7 @@ function TopologyD3({ spec, config, compact }: TopologyD3Props) {
         .attr('class', 'font-medium')
         .style('font-size', fontSize)
         .attr('fill', vendorColor)
-        .text(`GPU ${i}`);
+        .text(`Chip ${i}`);
     }
 
     // Abstracted server boxes (inside same pod as Server 1)

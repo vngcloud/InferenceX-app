@@ -6,6 +6,7 @@ import type { ChartDefinition, InferenceData } from '@/components/inference/type
 import { type DataTableColumn, DataTable } from '@/components/ui/data-table';
 import { getHardwareConfig } from '@/lib/constants';
 import { getNestedYValue } from '@/lib/chart-utils';
+import { sortRowsByYMetric } from '@/components/inference/ui/inference-table-sort';
 import { type Precision, getPrecisionLabel } from '@/lib/data-mappings';
 import { getDisplayLabel } from '@/lib/utils';
 
@@ -33,24 +34,15 @@ export default function InferenceTable({
   const yLabel = chartDefinition[`${selectedYAxisMetric}_label` as keyof ChartDefinition] as string;
   const xLabel = chartDefinition.x_label;
 
-  const rooflineDir = chartDefinition[
-    `${selectedYAxisMetric}_roofline` as keyof ChartDefinition
-  ] as string | undefined;
-  const yAscending = rooflineDir?.startsWith('lower');
-
-  const sorted = useMemo(() => {
-    if (!yPath) return data;
-    return [...data].toSorted((a, b) => {
-      const ay = getNestedYValue(a, yPath);
-      const by = getNestedYValue(b, yPath);
-      return yAscending ? ay - by : by - ay;
-    });
-  }, [data, yPath, yAscending]);
+  const sorted = useMemo(
+    () => sortRowsByYMetric(data, chartDefinition, selectedYAxisMetric),
+    [data, chartDefinition, selectedYAxisMetric],
+  );
 
   const columns = useMemo<DataTableColumn<InferenceData>[]>(
     () => [
       {
-        header: 'GPU',
+        header: 'Chip',
         cell: (row) => getDisplayLabel(getHardwareConfig(row.hwKey, row.model)),
         sortValue: (row) => getDisplayLabel(getHardwareConfig(row.hwKey, row.model)),
         className: 'font-medium whitespace-nowrap',
@@ -90,7 +82,7 @@ export default function InferenceTable({
         className: 'tabular-nums',
       },
       {
-        header: 'Throughput/GPU (tok/s)',
+        header: 'Throughput/Chip (tok/s)',
         align: 'right',
         cell: (row) => fmt(row.tput_per_gpu ?? 0, 1),
         sortValue: (row) => row.tput_per_gpu ?? 0,

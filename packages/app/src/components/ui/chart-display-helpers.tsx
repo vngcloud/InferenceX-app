@@ -84,19 +84,19 @@ function DisaggCaveat({
   const content =
     locale === 'zh' ? (
       <>
-        <strong>注意：</strong>分离式推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码 GPU 或预填充
-        GPU 计算
+        <strong>注意：</strong>分离式推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码 Chip 或预填充
+        Chip 计算
         {NOUN_ZH[calculationNoun] ?? calculationNoun}
-        ，而非按 GPU 总数计算。因此，与聚合配置进行
+        ，而非按 Chip 总数计算。因此，与聚合配置进行
         {NOUN_ZH[comparisonNoun] ?? comparisonNoun}
         的直接对比并不完全等价。
       </>
     ) : (
       <>
         <strong>Note:</strong> Disaggregated inference configurations (e.g., MoRI SGLang, Dynamo
-        TRTLLM) calculate {calculationNoun} per decode GPU or per prefill GPU, rather than per total
-        GPU count. This makes direct {comparisonNoun} comparison with aggregated configs not an
-        apples-to-apples comparison.
+        TRTLLM) calculate {calculationNoun} per decode chip or per prefill chip, rather than per
+        total chip count. This makes direct {comparisonNoun} comparison with aggregated configs not
+        an apples-to-apples comparison.
       </>
     );
 
@@ -154,6 +154,13 @@ export function MetricAssumptionNotes({
   const showInputCostSource = INPUT_COST_METRICS.has(selectedYAxisMetric);
   const showInputThroughputCaveat = selectedYAxisMetric === 'y_inputTputPerGpu';
   const showOutputThroughputCaveat = selectedYAxisMetric === 'y_outputTputPerGpu';
+  // Per-token-type cost only. A disagg config's prefill and decode chips are
+  // counted separately, so the input- and output-token costs are attributed to
+  // one side of the split and can't be lined up against an aggregated config.
+  // The total-token cost divides by the whole chip count, which is the same
+  // denominator an aggregated config uses, so it needs no caveat — the same
+  // split the throughput caveats above already make (input/output, not total).
+  const showCostCaveat = showOutputCostSource || showInputCostSource;
   const showJouleSource = selectedYAxisMetric.startsWith('y_j');
 
   const costValues =
@@ -161,8 +168,8 @@ export function MetricAssumptionNotes({
       ? getCostValues(selectedYAxisMetric)
       : null;
 
-  const powerLabel = locale === 'zh' ? '全包功耗/GPU：' : 'All in Power/GPU:';
-  const costLabel = locale === 'zh' ? 'TCO $/GPU/小时：' : 'TCO $/GPU/hr:';
+  const powerLabel = locale === 'zh' ? '全包功耗/Chip：' : 'All in Power/Chip:';
+  const costLabel = locale === 'zh' ? 'TCO $/chip/小时：' : 'TCO $/chip/hr:';
   const sourceLabel = locale === 'zh' ? '来源：' : 'Source:';
 
   return (
@@ -182,15 +189,11 @@ export function MetricAssumptionNotes({
         <>
           <MetricBadges label={costLabel} values={costValues} />
           <SourceLink href="https://semianalysis.com/ai-cloud-tco-model/" sourceLabel={sourceLabel}>
-            SemiAnalysis Market August 2025 Pricing Surveys & AI Cloud TCO Model
+            SemiAnalysis Market July 2026 Pricing Surveys & AI Cloud TCO Model
           </SourceLink>
         </>
       )}
-      <DisaggCaveat
-        visible={selectedYAxisMetric.startsWith('y_cost')}
-        calculationNoun="cost"
-        locale={locale}
-      />
+      <DisaggCaveat visible={showCostCaveat} calculationNoun="cost" locale={locale} />
       <DisaggCaveat
         visible={showInputThroughputCaveat}
         calculationNoun="input throughput"

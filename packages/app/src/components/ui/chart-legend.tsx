@@ -41,9 +41,13 @@ const STRINGS = {
     collapse: 'Collapse',
     expand: 'Expand',
     searchPlaceholder: 'Search...',
+    searchAria: 'Search legend',
     clearSearch: 'Clear search',
+    moreInfo: (label: string) => `More info about ${label}`,
     collapseLegend: 'Collapse legend',
     expandLegend: 'Expand legend',
+    hide: (label: string) => `Hide ${label}`,
+    showPoints: (label: string) => `Show all ${label} data points`,
     atomFootnote:
       'The ATOM engine is promising, however it has yet to serve production tokens. It is still in its infant stage.',
   },
@@ -52,9 +56,13 @@ const STRINGS = {
     collapse: '收起',
     expand: '展开',
     searchPlaceholder: '搜索…',
+    searchAria: '搜索图例',
     clearSearch: '清除搜索',
+    moreInfo: (label: string) => `查看${label}的更多信息`,
     collapseLegend: '收起图例',
     expandLegend: '展开图例',
+    hide: (label: string) => `隐藏${label}`,
+    showPoints: (label: string) => `显示${label}的全部数据点`,
     atomFootnote: 'ATOM 引擎前景可期，但尚未用于生产环境 token 服务，仍处于早期阶段。',
   },
 } as const;
@@ -133,11 +141,16 @@ export default function ChartLegend({
   const advancedControlsId = useId();
 
   const effectiveExpanded = isLegendExpanded;
+  // Counts only removable series: the guard below exists to stop the user
+  // emptying the chart, and label-only entries (unofficial runs) are not
+  // something removing leaves you without.
   const activeCount = useMemo(
-    () => legendItems.filter((item) => item.isActive).length,
+    () => legendItems.filter((item) => item.isActive && item.isRemovable !== false).length,
     [legendItems],
   );
   const effectiveRemove = onItemRemove && activeCount > 1 ? onItemRemove : undefined;
+  const removeFor = (item: CommonLegendItemProps) =>
+    item.isRemovable === false ? undefined : effectiveRemove;
 
   useLayoutEffect(() => {
     setHasLongText(legendItems.some((item) => item.label && item.label.length > 8));
@@ -270,6 +283,7 @@ export default function ChartLegend({
             onChange={(e) => setSearchQuery(e.target.value)}
             onBlur={trackSearchOnBlur}
             placeholder={t.searchPlaceholder}
+            aria-label={t.searchAria}
             className="w-full px-2 py-1 pr-6 rounded-md border border-border bg-background text-foreground text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-sky-500/50 focus:border-sky-500/50"
           />
           {searchQuery && (
@@ -316,7 +330,7 @@ export default function ChartLegend({
                     <button
                       type="button"
                       data-testid={`${sw.id}-info`}
-                      aria-label={`More info about ${sw.label}`}
+                      aria-label={t.moreInfo(sw.label)}
                       className="text-muted-foreground hover:text-foreground cursor-help -m-1.5 p-1.5 inline-flex items-center"
                     >
                       <Info size={14} />
@@ -446,6 +460,7 @@ export default function ChartLegend({
         name={item.name}
         label={item.label}
         color={item.color}
+        lineDasharray={item.lineDasharray}
         title={item.title}
         isHighlighted={item.isHighlighted}
         hw={item.hw}
@@ -453,8 +468,10 @@ export default function ChartLegend({
         onClick={item.onClick}
         onHover={onItemHover}
         onHoverEnd={onItemHoverEnd}
-        onRemove={effectiveRemove}
+        onRemove={removeFor(item)}
         onShowPoints={item.onShowPoints}
+        hideAriaLabel={t.hide(item.label)}
+        showPointsAriaLabel={t.showPoints(item.label)}
         asFragment
         isLegendExpanded={effectiveExpanded}
         sidebarMode={isSidebar}
@@ -544,13 +561,16 @@ export default function ChartLegend({
                         hw={item.hw}
                         label={item.label}
                         color={item.color}
+                        lineDasharray={item.lineDasharray}
                         title={item.title}
                         isActive={item.isActive}
                         onClick={item.onClick}
                         onHover={onItemHover}
                         onHoverEnd={onItemHoverEnd}
-                        onRemove={effectiveRemove}
+                        onRemove={removeFor(item)}
                         onShowPoints={item.onShowPoints}
+                        hideAriaLabel={t.hide(item.label)}
+                        showPointsAriaLabel={t.showPoints(item.label)}
                         sidebarMode={isSidebar}
                         asFragment
                       />

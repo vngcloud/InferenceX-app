@@ -65,6 +65,7 @@ describe('PARAM_DEFAULTS', () => {
   it('has empty string defaults for legend-active params', async () => {
     const { PARAM_DEFAULTS } = await import('@/lib/url-state');
     expect(PARAM_DEFAULTS.i_active).toBe('');
+    expect(PARAM_DEFAULTS.i_best).toBe('');
     expect(PARAM_DEFAULTS.e_active).toBe('');
     expect(PARAM_DEFAULTS.r_active).toBe('');
   });
@@ -318,6 +319,7 @@ describe('buildShareUrl tab filtering', () => {
     writeUrlParams({
       g_model: 'x',
       i_seq: 'y',
+      i_pctl: 'p75',
       c_mw: '10',
       c_costcap: '0.5',
       r_range: 'last-7-days',
@@ -327,6 +329,7 @@ describe('buildShareUrl tab filtering', () => {
     const url = buildShareUrl();
     expect(url).toContain('g_model=x');
     expect(url).toContain('i_seq=y');
+    expect(url).toContain('i_pctl=p75');
     expect(url).toContain('c_mw=10');
     expect(url).toContain('c_costcap=0.5');
     expect(url).not.toContain('r_range');

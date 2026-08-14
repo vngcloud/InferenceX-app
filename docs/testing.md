@@ -12,16 +12,22 @@ Enforced by `@pr-claude` — missing/low-quality tests are flagged 🔴 BLOCKING
 1. New utility functions → colocated unit test
 2. New UI features → E2E test in `cypress/e2e/<feature>.cy.ts`
 3. Bug fixes → regression test reproducing the bug
-4. Run `pnpm test:unit` and `pnpm test:e2e` before considering task complete
+4. Run `bun run test:unit` and the local smoke suite, `bun run test:e2e`, before considering a task complete. The full E2E suite runs in CI and is available locally as `bun run test:e2e:full`.
 
 ## Pre-commit Checklist
 
 ```bash
-pnpm dev --hostname 0.0.0.0 --port 3000 &
+bun run dev -- --hostname 0.0.0.0 --port 3000 &
 curl --retry 10 --retry-delay 2 --retry-connrefused -sSf http://localhost:3000 >/dev/null
-pnpm test:unit
-pnpm test:e2e
+bun run test:unit
+bun run test:e2e
 ```
+
+## Runtime and CI Sharding
+
+The local `bun run test:e2e` command is a curated smoke suite across the core page, chart, overlay, localization, and component paths. It is the default agent and developer check and is intended to stay under one minute once the app is running.
+
+The complete suite is `bun run test:e2e:full`. It runs all Cypress component and integration specs. GitHub Actions runs that same coverage as one component job plus four integration shards per browser, Chrome and Firefox. The CI workflow is the merge gate for the full E2E suite.
 
 ## Quality Standards
 

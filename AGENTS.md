@@ -25,16 +25,17 @@ InferenceX App — Next.js 16 dashboard for ML inference benchmark data. DB-back
 ## Quick Start
 
 ```bash
-pnpm install              # Install dependencies
-pnpm dev                  # Dev server with Turbopack (http://localhost:3000)
-pnpm build                # Production build
-pnpm typecheck            # TypeScript type checking (all packages)
-pnpm lint                 # Lint with oxlint
-pnpm lint:fix             # Auto-fix lint issues
-pnpm fmt                  # Format check with oxfmt
-pnpm fmt:fix              # Auto-fix formatting
-pnpm test:unit            # Vitest unit tests
-pnpm test:e2e             # Cypress E2E tests
+bun install               # Install dependencies
+bun run dev                # Dev server with Turbopack (http://localhost:3000)
+bun run build              # Production build
+bun run typecheck          # TypeScript type checking (all packages)
+bun run lint               # Lint with oxlint
+bun run lint:fix           # Auto-fix lint issues
+bun run fmt                # Format check with oxfmt
+bun run fmt:fix            # Auto-fix formatting
+bun run test:unit          # Vitest unit tests
+bun run test:e2e           # Cypress smoke suite, the default local check
+bun run test:e2e:full      # Full Cypress suite, normally covered by CI
 ```
 
 ## Monorepo Structure
@@ -71,10 +72,42 @@ API routes (`packages/app/src/app/api/v1/`):
 - `reliability` — raw `ReliabilityRow[]`
 - `evaluations` — raw `EvalRow[]`
 - `server-log` — retrieve benchmark runtime logs
-- `invalidate` — invalidate API cache (admin)
+- `invalidate` — invalidate API cache (admin; `?scope=collectivex` purges only that scope)
+- `collectivex/latest`, `collectivex/runs`, `collectivex/runs/[runId]` — CollectiveX sweep data
+  from a **separate** Neon DB, populated lazily on read from GitHub Actions artifacts and served
+  assembled through the shared reader (the one deliberate exception to the raw-rows rule below);
+  `runs/[runId]` also handles admin DELETE. See [CollectiveX](./docs/collectivex.md).
 - `tco-feed?model=dsv4&workloads=1024x1024,8192x1024&tiers=30,50,75,100&format=csv` — per-hardware Pareto-frontier output-throughput reads at fixed interactivity tiers, for external spreadsheet TCO models (Excel Power Query); `view=scores` (optional `weights`, `workload_weights`, `alpha`) folds them into one tier-weighted, workload-blended, output-equivalent score per hardware
+- `overview?tier=50&engine=community&compare=30d&ref=b200` — a compact, cached page-data response used only by `/overview` selector navigation
 
-**API routes return raw DB data** — no presentation logic. Frontend handles all transformations. Sole exception: `tco-feed`, which runs the calculator's frontier interpolation server-side because its consumers (spreadsheets) cannot execute the TS transforms; its assumptions (tier weights, workload mix, α) enter only as explicit query params with documented defaults, so a published sheet's URL fully records its methodology.
+**API routes return raw DB data** — no presentation logic. Frontend handles all transformations.
+Exceptions: the CollectiveX routes assemble raw stored documents through the shared reader in
+`packages/db/src/collectivex/` (see [docs/collectivex.md](./docs/collectivex.md) for why); and
+`tco-feed`, which runs the calculator's frontier interpolation server-side because its consumers
+(spreadsheets) cannot execute the TS transforms — its assumptions (tier weights, workload mix, α)
+enter only as explicit query params with documented defaults, so a published sheet's URL fully
+records its methodology; and `overview`, which assembles the same `OverviewPageData` used for the
+initial server render so selector changes can update the matrix without transferring every model's
+raw benchmark history or triggering a React Server Component (RSC) round trip. It is a page-owned
+backend-for-frontend (BFF), not a reusable public data API.
+
+### API Documentation Synchronization
+
+The public API reference at `/api` and `/zh/api`, plus the OpenAPI 3.1 document at
+`/api/openapi.json`, are generated from `packages/app/src/lib/api-documentation.ts`.
+
+**Any change to an API route, request parameter, response shape, status code, authentication,
+caching behavior, or shared API type MUST update the documentation registry in the same change.**
+Keep `packages/app/src/lib/api-route-catalog.ts` synchronized with every handler under
+`packages/app/src/app/api/`; the catalog classifies unpublished routes and records review digests
+for handlers and shared contract sources. Do not update a digest without first confirming whether
+the human reference, Chinese copy, examples, or OpenAPI schema also need changes.
+
+Run the synchronization guard from `packages/app`:
+
+```bash
+bun --env-file=../../.env vitest run src/lib/api-route-catalog.test.ts
+```
 
 Static content routes (no DB):
 
@@ -87,9 +120,9 @@ Static content routes (no DB):
 
 ## Code Style & Tooling
 
-- **Linter**: oxlint — `pnpm lint` / `pnpm lint:fix`
-- **Formatter**: oxfmt — `pnpm fmt` / `pnpm fmt:fix`
-- **Type checking**: `pnpm typecheck` (tsc --noEmit, strict mode)
+- **Linter**: oxlint — `bun run lint` / `bun run lint:fix`
+- **Formatter**: oxfmt — `bun run fmt` / `bun run fmt:fix`
+- **Type checking**: `bun run typecheck` (tsc --noEmit, strict mode)
 - **Node**: 24.x
 
 ## Environment Variables
@@ -99,6 +132,13 @@ See `.env.example`. Key vars: `GITHUB_TOKEN`, `DATABASE_READONLY_URL`, `DATABASE
 ## Testing
 
 See [Testing](./docs/testing.md) for full requirements, quality standards, and pre-commit checklist. Tests are **mandatory** — missing/low-quality tests are 🔴 BLOCKING on PR review.
+
+### E2E Runtime and PR Workflow
+
+- Prefer `bun run test:e2e` while iterating. It runs the local smoke suite and avoids blocking development on the full browser matrix.
+- Use `bun run test:e2e:full` only when a local full-suite run is useful. The merge gate runs the full suite in GitHub Actions.
+- A warm local full E2E run typically takes about **4–6 minutes** because the component and integration suites run sequentially on one machine; cold dependency/browser setup can take longer.
+- GitHub Actions runs integration specs across **four shards per browser** for Chrome and Firefox (eight parallel E2E jobs), while component tests run in a separate job. Recent successful workflows complete in roughly **3–5 minutes**.
 
 ## Analytics Requirement
 
@@ -153,11 +193,14 @@ The Python helper is a 1:1 port of these three TypeScript functions:
 
 Plus the wrapper `interpolateMetricAtInteractivity` in `packages/app/src/components/inference/hooks/useInterpolatedTrendData.ts` which composes them with the "no extrapolation → return null" rule.
 
+Plus `recoverReciprocalNumerator` in `interpolation.ts`, which decides whether a metric is splined directly or derived from the interpolated throughput. $/M tok and J/token are a per-chip constant over a throughput, so independently splining the metric breaks that identity between knots; both TS and Python spline the throughput and re-derive instead. See `docs/tco-calculator.md` for the reproducible measurement.
+
 **Rule: any PR that changes any of those four TypeScript functions MUST also update `.claude/skills/write-inferencex-blog/iso_interactivity.py` in the same commit.** Drift between the TS and Python implementations means the blog tables will silently diverge from the live chart on the very next post — readers will see one number in the table and a different one in the chart they click through to. This includes:
 
 - Changing the Pareto frontier definition (upper-left → lower-left, or adding tie-breaking rules)
 - Switching from Steffen's monotone slopes to a different spline construction (Fritsch-Carlson, natural cubic, etc.)
 - Loosening or tightening the extrapolation rule (currently: return `null` outside `[min x, max x]`)
+- Changing which metrics are derived from throughput rather than splined, or the tolerance that decides whether the data obeys `metric x throughput = constant`
 - Adjusting the Y-clamp behavior that prevents spline overshoot
 
 The Python file has a header comment explaining the pipeline and a `_cli()` entrypoint for stdin/stdout JSON usage. When you update it, keep the structure 1:1 with the TS so future readers can diff the two files line by line. Run the helper against a known dataset and confirm the outputs match what the chart renders before merging.
@@ -249,23 +292,11 @@ See [Blog](./docs/blog.md) for content format, available MDX components, and des
 
 Workflow for a periodic dep bump. Branch: `chore/bump-deps-YYYY-MM-DD`. Commit each step separately so failures are easy to bisect.
 
-1. **Bump versions**: `pnpm taze -I -r latest` (interactive, all workspaces). Approve what you want, skip what you don't. **Never let taze write the `pnpm-workspace.yaml` `overrides` block.** taze will propose bumping those entries, but the overrides are security pins driven **solely by `pnpm security`** (step 3) — bumping them here would float them off the lowest-patched-version rule. In interactive mode, deselect them; for a non-interactive `taze -w`, restore them afterward with `git checkout <base-branch> -- pnpm-workspace.yaml` (taze only touches the `overrides` in that file, so this leaves `packages`/`catalog`/`allowBuilds` intact).
-2. **Resolve install errors**:
-   - `ERR_PNPM_IGNORED_BUILDS` after a pnpm major bump means new `allowBuilds` entries in `pnpm-workspace.yaml` were left as placeholder strings — set them to `true` (or `false` if you don't want the build script to run).
-   - pnpm 11 moved `pnpm.overrides` from `package.json` to `pnpm-workspace.yaml`. Overrides left in `package.json` are silently ignored. Migrate them.
-3. **Audit security**: `pnpm security` (runs `pnpm audit && audit-ci`). This is the **only** step that edits the `pnpm-workspace.yaml` `overrides` block (step 1's bump must leave it untouched). For each remaining vulnerability, add a targeted override in `pnpm-workspace.yaml`:
-
-   ```yaml
-   overrides:
-     <pkg>@<vulnerable-range>: '>=<min-patched-version>'
-   ```
-
-   - **Use the lowest patched version** (e.g. `>=8.5.10`, not `>=8.5.14`). pnpm resolves to the highest available that satisfies the constraint, so we automatically get the latest patch — and the override doesn't go stale when 8.5.15 ships.
-   - **Use the narrow `<vulnerable-range>` selector** (not bare `<pkg>:`) so the override only fires on vulnerable resolutions and doesn't disturb pins already on safe versions.
-   - **Verify minimum set**: drop any override that doesn't map to a current advisory. Test by removing it and re-running `pnpm security`.
-
-4. **Fix lint/format**: `pnpm lint:fix && pnpm fmt:fix`. New rules from oxlint version bumps may not have autofixers (e.g. `require-unicode-regexp`, `unicorn/no-negated-condition`) — fix manually. For mechanical bulk changes, delegate to a subagent and verify with `pnpm typecheck`.
-5. **Final check**: `pnpm lint && pnpm fmt && pnpm typecheck && pnpm security` all pass. Pre-commit hook reruns these.
+1. **Bump versions**: `bun update --interactive --recursive`. Review every proposed update across workspaces. Press `l` to select the latest version when an update must cross the declared semver range.
+2. **Resolve install errors**: follow Bun's reported remediation and keep package-manager settings in `bunfig.toml` only when the documented configuration requires them.
+3. **Audit security**: `bun audit` checks the installed packages recorded in `bun.lock`. For each finding, update the affected dependency with `bun update` or `bun update --latest`, then rerun the audit. Do not suppress an advisory without a documented reason.
+4. **Fix lint/format**: `bun run lint:fix && bun run fmt:fix`. New rules from oxlint version bumps may not have autofixers (e.g. `require-unicode-regexp`, `unicorn/no-negated-condition`) — fix manually. For mechanical bulk changes, delegate to a subagent and verify with `bun run typecheck`.
+5. **Final check**: `bun run lint && bun run fmt && bun run typecheck && bun run security` all pass. Pre-commit hook reruns these.
 
 ## Subsystem Docs
 
@@ -291,7 +322,7 @@ Detailed design rationale (the "why" and "how", not the "what") lives in [docs/]
 Three jobs: a lightweight Haiku **`route`** classifier runs on any `@claude` mention in an issue/comment and emits a `profile`; its output gates **`implement`** or **`review`**. (The `review` job also triggers directly on PR open/sync, with no comment to route.)
 
 - `@claude <anything>` — `route` picks a **profile** (`ui` / `code` / `docs` / `question` / `review`) and, for implement profiles, a browser (`playwright` / `chrome` / `none`).
-  - **implement** job (`ui` / `code` / `docs` / `question`): provisions only what's needed — dev server, Playwright browser, and Cypress binary install **on demand** only for browser/UI work, so docs/DB/backend/question tasks stay fast. `ui` gets full browser verification (render real data, check the `?unofficialrun=` overlay, add `track()` + tests, pass `pnpm test:e2e`); the rest get scoped checks. Creates `claude/issue-{N}-*` branches and can push.
+  - **implement** job (`ui` / `code` / `docs` / `question`): provisions only what's needed — dev server, Playwright browser, and Cypress binary install **on demand** only for browser/UI work, so docs/DB/backend/question tasks stay fast. `ui` gets focused browser verification plus the `?unofficialrun=` overlay, then passes `bun run test:e2e`; the full suite remains covered by the merge checks. Creates `claude/issue-{N}-*` branches and can push.
   - **review** job (`review` profile, or any PR open/sync): a **read-only**, **verifying** review. It checks out the PR head, starts a local dev server backed by the real read-only DB, and uses the **Playwright MCP** on `http://localhost:3000` to confirm the changed UI actually works (renders real data, interactions behave, no console errors). It does **not** re-run the test suite — `typecheck`/`lint`/`test:unit` and the fixtures-based e2e are already covered by the dedicated `tests-*`/`lint` workflows; the review reads their status and folds failures into the review as 🔴 BLOCKING — plus the static diff review (bugs, security, missing tests). Never edits or pushes. A review-phrased ask in **any** wording (e.g. "@claude take a look at this PR") routes here, not just the exact `@claude review`. Prompt: `.github/claude/review-prompt.md`.
 - **Explicit overrides** (skip the classifier): `@claude review` → review; `@claude chrome` → Chrome DevTools MCP; `@claude frontend` → full Playwright + dev server; `@claude general` (or `lite`) → lean no-browser. If the router guesses wrong, re-run with the override.
 - `implement` and `review` share a `claude-<PR/issue number>` concurrency group, so reviews and implementation on the same PR serialize instead of clobbering each other.

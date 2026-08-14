@@ -62,6 +62,24 @@ export const METRIC_KEYS = new Set([
   'p99_intvty',
   'p99.9_intvty',
   'std_intvty',
+  // Full-response AgentX timing. These namespaced fields preserve provenance;
+  // ingest mirrors them onto the canonical *_itl / *_intvty chart fields.
+  'median_full_response_itl',
+  'mean_full_response_itl',
+  'p75_full_response_itl',
+  'p90_full_response_itl',
+  'p95_full_response_itl',
+  'p99_full_response_itl',
+  'p99.9_full_response_itl',
+  'std_full_response_itl',
+  'median_full_response_intvty',
+  'mean_full_response_intvty',
+  'p75_full_response_intvty',
+  'p90_full_response_intvty',
+  'p95_full_response_intvty',
+  'p99_full_response_intvty',
+  'p99.9_full_response_intvty',
+  'std_full_response_intvty',
   // QPS — queries per second (agentic aiperf)
   'median_qps',
   'mean_qps',
@@ -145,4 +163,16 @@ export const METRIC_KEYS = new Set([
   'peak_temp_c',
   'avg_util_pct',
   'avg_mem_used_mb',
+  // extended parallelism dimensions (2026-07+ artifacts): pipeline parallelism
+  // and decode/prefill context parallelism per role. These are config
+  // dimensions, not measurements, but the configs table has no columns for
+  // them — they ride along in the metrics JSONB via the mapper's auto-capture
+  // and the frontend reads pp from here for point labels / tooltips
+  // (rowToAggDataEntry in benchmark-transform.ts).
+  'prefill_pp',
+  'decode_pp',
+  'prefill_dcp_size',
+  'decode_dcp_size',
+  'prefill_pcp_size',
+  'decode_pcp_size',
 ]);

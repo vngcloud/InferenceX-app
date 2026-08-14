@@ -1,15 +1,39 @@
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
+
+import type { BenchmarkRow } from '@/lib/api';
+import { Percentile, Sequence } from '@/lib/data-mappings';
+import { overlayRunIndex } from '@/lib/overlay-run-style';
 
 import type { GPUDataPoint } from './types';
 import {
+  buildGpuGroups,
   getCostField,
   hermiteInterpolate,
   interpolateForGPU,
   maxInteractivityAtCost,
   monotoneSlopes,
   paretoFrontUpperLeft,
+  recoverReciprocalNumerator,
   sign,
 } from './useThroughputData';
+
+const PYTHON_INTERPOLATION_HELPER = resolve(
+  import.meta.dirname,
+  '../../../../..',
+  '.claude/skills/write-inferencex-blog/iso_interactivity.py',
+);
+
+function interpolateWithPython(request: Record<string, unknown>): number | null {
+  const result = spawnSync('python3', [PYTHON_INTERPOLATION_HELPER], {
+    input: JSON.stringify(request),
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) throw new Error(`Python interpolation failed: ${result.stderr}`);
+  return (JSON.parse(result.stdout) as { value: number | null }).value;
+}
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -327,8 +351,8 @@ describe('interpolateForGPU', () => {
 
   it('clamps target to the pareto-front input range instead of returning null', () => {
     const points = [
-      makePoint({ interactivity: 20, throughput: 500 }),
-      makePoint({ interactivity: 40, throughput: 300 }),
+      makePoint({ interactivity: 20, throughput: 500, tp: 4 }),
+      makePoint({ interactivity: 40, throughput: 300, tp: 8 }),
     ];
     const below = interpolateForGPU(points, 10, 'interactivity_to_throughput', 'costh');
     const above = interpolateForGPU(points, 50, 'interactivity_to_throughput', 'costh');
@@ -336,6 +360,19 @@ describe('interpolateForGPU', () => {
     expect(above).not.toBeNull();
     expect(below!.value).toBe(500);
     expect(above!.value).toBe(300);
+    expect(below!.nearestPoints).toEqual([expect.objectContaining({ interactivity: 20, tp: 4 })]);
+    expect(above!.nearestPoints).toEqual([expect.objectContaining({ interactivity: 40, tp: 8 })]);
+  });
+
+  it('uses the exact endpoint as the sole metadata source', () => {
+    const points = [
+      makePoint({ interactivity: 20, throughput: 500, tp: 4 }),
+      makePoint({ interactivity: 40, throughput: 300, tp: 8 }),
+    ];
+
+    const result = interpolateForGPU(points, 40, 'interactivity_to_throughput', 'costh');
+
+    expect(result?.nearestPoints).toEqual([expect.objectContaining({ interactivity: 40, tp: 8 })]);
   });
 
   it('returns the single point value when target matches exactly', () => {
@@ -969,5 +1006,507 @@ describe('maxInteractivityAtCost', () => {
     // Even though the dominated point is dirt cheap, it is off the frontier,
     // so a 0.1 budget still fits nothing.
     expect(maxInteractivityAtCost(withDominated, 0.1, 'costh', 'total')).toBeNull();
+  });
+});
+
+// =========================================================================
+// buildGpuGroups() — shared by the official and unofficial-run overlay paths
+// =========================================================================
+
+function makeRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
+  return {
+    id: 1,
+    hardware: 'b300',
+    framework: 'sglang',
+    model: 'dsv4',
+    precision: 'fp4',
+    spec_method: 'none',
+    disagg: false,
+    is_multinode: false,
+    prefill_tp: 8,
+    prefill_ep: 8,
+    prefill_dp_attention: false,
+    prefill_num_workers: 1,
+    decode_tp: 8,
+    decode_ep: 8,
+    decode_dp_attention: false,
+    decode_num_workers: 1,
+    num_prefill_gpu: 8,
+    num_decode_gpu: 8,
+    benchmark_type: 'single_turn',
+    isl: 1024,
+    osl: 1024,
+    conc: 8,
+    offload_mode: 'off',
+    image: 'sglang:test',
+    metrics: {
+      median_intvty: 50,
+      tput_per_gpu: 900,
+      output_tput_per_gpu: 300,
+      input_tput_per_gpu: 600,
+    },
+    date: '2026-07-19',
+    run_url: null,
+    ...overrides,
+  };
+}
+
+/** The official path's classifier: one group per hwKey (per precision when multi). */
+const singlePrecisionClassify = (hwKey: string) => ({ key: hwKey, meta: { hwKey } });
+
+describe('buildGpuGroups', () => {
+  const shared = { sequence: Sequence.OneK_OneK, precisions: ['fp4'] };
+
+  it('groups rows by the caller-supplied key and derives cost + power metrics', () => {
+    const { grouped, groupMeta, hwConfigMap } = buildGpuGroups(
+      [
+        makeRow({ conc: 8 }),
+        makeRow({ conc: 16, metrics: { median_intvty: 30, tput_per_gpu: 1500 } }),
+      ],
+      { ...shared, classify: singlePrecisionClassify },
+    );
+
+    const keys = Object.keys(grouped);
+    expect(keys).toHaveLength(1);
+    const [hwKey] = keys;
+    expect(grouped[hwKey]).toHaveLength(2);
+    expect(groupMeta[hwKey]).toEqual({ hwKey });
+    expect(hwConfigMap[hwKey]).toBeDefined();
+
+    const [first] = grouped[hwKey];
+    expect(first.interactivity).toBe(50);
+    expect(first.throughput).toBe(900);
+    expect(first.concurrency).toBe(8);
+    // Cost per million tokens is derived, not passed through.
+    expect(first.costh).toBeGreaterThan(0);
+    expect(first.tpPerMw).toBeGreaterThan(0);
+  });
+
+  it('drops rows whose isl/osl do not match the selected sequence', () => {
+    const { grouped } = buildGpuGroups(
+      [makeRow({ isl: 8192, osl: 1024 }), makeRow({ isl: null, osl: null })],
+      { ...shared, classify: singlePrecisionClassify },
+    );
+    expect(Object.keys(grouped)).toHaveLength(0);
+  });
+
+  it('drops rows whose precision is not selected', () => {
+    const { grouped } = buildGpuGroups([makeRow({ precision: 'fp8' })], {
+      ...shared,
+      classify: singlePrecisionClassify,
+    });
+    expect(Object.keys(grouped)).toHaveLength(0);
+  });
+
+  it('drops rows the caller classifies as null', () => {
+    const { grouped } = buildGpuGroups([makeRow()], {
+      ...shared,
+      classify: () => null,
+    });
+    expect(Object.keys(grouped)).toHaveLength(0);
+  });
+
+  it('splits into one group per precision when multiple precisions are selected', () => {
+    const { grouped, groupMeta } = buildGpuGroups(
+      [makeRow({ precision: 'fp4' }), makeRow({ precision: 'fp8' })],
+      {
+        sequence: Sequence.OneK_OneK,
+        precisions: ['fp4', 'fp8'],
+        classify: (hwKey, row) => ({
+          key: `${hwKey}__${row.precision}`,
+          meta: { hwKey, precision: row.precision },
+        }),
+      },
+    );
+
+    const keys = Object.keys(grouped).toSorted();
+    expect(keys).toHaveLength(2);
+    expect(keys.every((k) => k.includes('__fp4') || k.includes('__fp8'))).toBe(true);
+    for (const key of keys) {
+      expect(groupMeta[key].precision).toBe(key.endsWith('fp4') ? 'fp4' : 'fp8');
+    }
+  });
+
+  it('keys overlay rows per run so two runs never share a group', () => {
+    const runA = 'https://github.com/org/repo/actions/runs/111';
+    const runB = 'https://github.com/org/repo/actions/runs/222';
+    const runIndexByUrl = { [runA]: 0, [runB]: 1 };
+
+    const { grouped, groupMeta } = buildGpuGroups(
+      [makeRow({ run_url: runA }), makeRow({ run_url: runB, conc: 16 })],
+      {
+        ...shared,
+        classify: (hwKey, row) => {
+          const runIndex = overlayRunIndex(row.run_url, runIndexByUrl);
+          return { key: `${hwKey}__run${runIndex}`, meta: { hwKey, runIndex } };
+        },
+      },
+    );
+
+    const keys = Object.keys(grouped).toSorted();
+    expect(keys).toHaveLength(2);
+    expect(keys.map((k) => groupMeta[k].runIndex).toSorted()).toEqual([0, 1]);
+    // Each run keeps its own points — no cross-run mixing into one frontier.
+    expect(grouped[keys[0]]).toHaveLength(1);
+    expect(grouped[keys[1]]).toHaveLength(1);
+  });
+
+  it('shares the same hwKey between an official row and its overlay twin', () => {
+    const official = buildGpuGroups([makeRow()], {
+      ...shared,
+      classify: singlePrecisionClassify,
+    });
+    const overlay = buildGpuGroups(
+      [makeRow({ run_url: 'https://github.com/org/repo/actions/runs/111' })],
+      {
+        ...shared,
+        classify: (hwKey) => ({ key: `${hwKey}__run0`, meta: { hwKey, runIndex: 0 } }),
+      },
+    );
+
+    const officialHw = Object.values(official.groupMeta)[0].hwKey;
+    const overlayHw = Object.values(overlay.groupMeta)[0].hwKey;
+    // Legend visibility is keyed on hwKey, so the two must agree.
+    expect(overlayHw).toBe(officialHw);
+  });
+
+  it('calculates agentic groups from null-ISL/OSL rows at the selected percentile', () => {
+    const agenticMetrics = {
+      p75_itl: 0.02,
+      p75_ttlt: 12,
+      p90_itl: 0.05,
+      p90_ttlt: 20,
+      // Deliberately wrong artifact values: rowToAggDataEntry must derive
+      // interactivity as 1 / ITL for official and overlay parity.
+      p75_intvty: 999,
+      p90_intvty: 999,
+      tput_per_gpu: 900,
+      output_tput_per_gpu: 300,
+      input_tput_per_gpu: 600,
+    };
+    const rows = [
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        isl: null,
+        osl: null,
+        metrics: agenticMetrics,
+      }),
+    ];
+
+    const p90 = buildGpuGroups(rows, {
+      sequence: Sequence.AgenticTraces,
+      precisions: ['fp4'],
+      percentile: Percentile.P90,
+      classify: singlePrecisionClassify,
+    });
+    const p75 = buildGpuGroups(rows, {
+      sequence: Sequence.AgenticTraces,
+      precisions: ['fp4'],
+      percentile: Percentile.P75,
+      classify: singlePrecisionClassify,
+    });
+
+    expect(Object.values(p90.grouped)[0][0]).toMatchObject({
+      interactivity: 20,
+      e2eLatency: 20,
+    });
+    expect(Object.values(p75.grouped)[0][0]).toMatchObject({
+      interactivity: 50,
+      e2eLatency: 12,
+    });
+  });
+
+  it('restricts agentic interpolation to the same date-scoped e2e Pareto winners as the chart', () => {
+    const agenticRow = (
+      conc: number,
+      interactivity: number,
+      e2eLatency: number,
+      throughput: number,
+      date = '2026-07-19',
+    ) =>
+      makeRow({
+        id: conc,
+        benchmark_type: 'agentic_traces',
+        isl: null,
+        osl: null,
+        conc,
+        date,
+        metrics: {
+          p90_itl: 1 / interactivity,
+          p90_ttlt: e2eLatency,
+          tput_per_gpu: throughput,
+          output_tput_per_gpu: throughput * 0.3,
+          input_tput_per_gpu: throughput * 0.7,
+        },
+      });
+
+    const { grouped } = buildGpuGroups(
+      [
+        agenticRow(1, 100, 20, 900),
+        agenticRow(2, 80, 30, 800), // e2e-dominated by concurrency 1
+        agenticRow(4, 60, 40, 1200),
+        // A different date gets its own e2e frontier and must survive.
+        agenticRow(8, 40, 50, 700, '2026-07-20'),
+      ],
+      {
+        sequence: Sequence.AgenticTraces,
+        precisions: ['fp4'],
+        percentile: Percentile.P90,
+        classify: singlePrecisionClassify,
+      },
+    );
+
+    const points = Object.values(grouped)[0];
+    expect(points.map((point) => point.concurrency).toSorted()).toEqual([1, 4, 8]);
+  });
+
+  it('keeps agentic overlay frontiers isolated per unofficial run', () => {
+    const runA = 'https://github.com/org/repo/actions/runs/111';
+    const runB = 'https://github.com/org/repo/actions/runs/222';
+    const rows = [
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        isl: null,
+        osl: null,
+        run_url: runA,
+        metrics: { p90_itl: 0.02, p90_ttlt: 50, tput_per_gpu: 500 },
+      }),
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        isl: null,
+        osl: null,
+        run_url: runB,
+        metrics: { p90_itl: 0.01, p90_ttlt: 20, tput_per_gpu: 1000 },
+      }),
+    ];
+
+    const { grouped } = buildGpuGroups(rows, {
+      sequence: Sequence.AgenticTraces,
+      precisions: ['fp4'],
+      percentile: Percentile.P90,
+      classify: (hwKey, row) => {
+        const runIndex = overlayRunIndex(row.run_url, { [runA]: 0, [runB]: 1 });
+        return { key: `${hwKey}__run${runIndex}`, meta: { hwKey, runIndex } };
+      },
+    });
+
+    expect(Object.keys(grouped)).toHaveLength(2);
+    expect(Object.values(grouped).map((points) => points.length)).toEqual([1, 1]);
+  });
+});
+
+// =========================================================================
+// interpolateForGPU() — clamped reporting
+// =========================================================================
+
+describe('interpolateForGPU clamped flag', () => {
+  const points = [
+    makePoint({ interactivity: 20, throughput: 900 }),
+    makePoint({ interactivity: 50, throughput: 600 }),
+    makePoint({ interactivity: 80, throughput: 300 }),
+  ];
+
+  it('is falsy for a target inside the measured range', () => {
+    const result = interpolateForGPU(points, 50, 'interactivity_to_throughput', 'costh');
+    expect(result?.clamped).toBeFalsy();
+  });
+
+  it('is set for a target above every measured point', () => {
+    const result = interpolateForGPU(points, 200, 'interactivity_to_throughput', 'costh');
+    // Still returns a value (the calculator never drops a bar), but the caller
+    // can now tell the user it is the nearest edge point, not a measurement.
+    expect(result?.value).toBeGreaterThan(0);
+    expect(result?.clamped).toBe(true);
+  });
+
+  it('is set for a target below every measured point', () => {
+    const result = interpolateForGPU(points, 1, 'interactivity_to_throughput', 'costh');
+    expect(result?.clamped).toBe(true);
+  });
+
+  it('is set on the single-point path when the target misses that point', () => {
+    const single = [makePoint({ interactivity: 40, throughput: 700 })];
+    expect(
+      interpolateForGPU(single, 40, 'interactivity_to_throughput', 'costh')?.clamped,
+    ).toBeFalsy();
+    expect(interpolateForGPU(single, 90, 'interactivity_to_throughput', 'costh')?.clamped).toBe(
+      true,
+    );
+  });
+});
+
+// =========================================================================
+// Reciprocal metrics — cost is derived from throughput, not splined
+// =========================================================================
+
+describe('recoverReciprocalNumerator', () => {
+  it('recovers the constant when every point agrees', () => {
+    expect(recoverReciprocalNumerator([1, 2, 4], [400, 200, 100])).toBe(400);
+  });
+
+  it('tolerates float rounding, which is all production data shows', () => {
+    const k = 516.6666666666666;
+    const tputs = [1234.5, 987.65, 321.098];
+    const values = tputs.map((t) => k / t);
+    expect(recoverReciprocalNumerator(values, tputs)).toBeCloseTo(k, 9);
+  });
+
+  it('returns null when the points disagree — the numerator is not constant', () => {
+    // This is the safety rail: a metric whose numerator varies per point (e.g.
+    // measured power) must not have its values rewritten from one point's ratio.
+    expect(recoverReciprocalNumerator([1, 2], [400, 300])).toBeNull();
+  });
+
+  it('accepts costs rounded for publication but rejects a percent-level drift', () => {
+    // The tolerance is 0.1%. Blog tables are hand-assembled from costs written
+    // to a few decimals, and iso_interactivity.py must not silently fall back on
+    // them; a numerator that genuinely varies moves far more than this.
+    expect(
+      recoverReciprocalNumerator([0.0964, 0.2892, 0.6427, 1.928], [6000, 2000, 900, 300]),
+    ).not.toBeNull();
+    // 1% apart — rejected.
+    expect(recoverReciprocalNumerator([1, 2.02], [400, 200])).toBeNull();
+  });
+
+  it('skips unusable pairs rather than treating them as disagreement', () => {
+    expect(recoverReciprocalNumerator([0, 1, 2], [400, 400, 200])).toBe(400);
+    expect(recoverReciprocalNumerator([1, 2], [0, 200])).toBe(400);
+  });
+
+  it('returns null when no pair is usable', () => {
+    expect(recoverReciprocalNumerator([0, 0], [100, 200])).toBeNull();
+    expect(recoverReciprocalNumerator([], [])).toBeNull();
+  });
+});
+
+describe('interpolateForGPU cost derivation', () => {
+  /** Points obeying the real identity: cost = rate / throughput. */
+  const RATE = 578.4; // $/GPU-hr x 1e6 / 3600
+  const consistent = (interactivity: number, throughput: number) =>
+    makePoint({
+      interactivity,
+      throughput,
+      outputThroughput: throughput,
+      inputThroughput: throughput,
+      costh: RATE / throughput,
+      costhOutput: RATE / throughput,
+      costhi: RATE / throughput,
+    });
+
+  const frontier = [
+    consistent(10, 6000),
+    consistent(30, 2000),
+    consistent(55, 900),
+    consistent(80, 300),
+  ];
+
+  it('keeps cost x throughput equal to the provider rate between measured points', () => {
+    // The identity /inference's per-point values obey by construction. Splining
+    // cost independently breaks it by up to 25x on sparse frontiers.
+    for (const target of [15, 20, 42, 60, 75]) {
+      const r = interpolateForGPU(frontier, target, 'interactivity_to_throughput', 'costh')!;
+      expect(r.cost * r.value).toBeCloseTo(RATE, 6);
+      expect(r.costOutput * r.outputTputValue).toBeCloseTo(RATE, 6);
+      expect(r.costInput * r.inputTputValue).toBeCloseTo(RATE, 6);
+    }
+  });
+
+  it('matches the Python blog helper', () => {
+    const target = 42;
+    const typescriptValue = interpolateForGPU(
+      frontier,
+      target,
+      'interactivity_to_throughput',
+      'costh',
+    )!.cost;
+    const pythonValue = interpolateWithPython({
+      points: frontier.map((point) => ({
+        interactivity: point.interactivity,
+        throughput: point.throughput,
+        cost: point.costh,
+      })),
+      target_iv: target,
+      metric_key: 'cost',
+      reciprocal_of: 'throughput',
+    });
+
+    expect(pythonValue).toBeCloseTo(typescriptValue, 14);
+  });
+
+  it('makes the Python helper return null when reciprocal throughput is missing', () => {
+    const pythonValue = interpolateWithPython({
+      points: [
+        { interactivity: 10, throughput: 1000, output_throughput: 800, joules: 2 },
+        { interactivity: 30, throughput: 500, joules: 4 },
+      ],
+      target_iv: 20,
+      metric_key: 'joules',
+      reciprocal_of: 'output_throughput',
+    });
+
+    expect(pythonValue).toBeNull();
+  });
+
+  it('is exact at a measured point, where both methods agree anyway', () => {
+    const r = interpolateForGPU(frontier, 30, 'interactivity_to_throughput', 'costh')!;
+    expect(r.value).toBeCloseTo(2000, 6);
+    expect(r.cost).toBeCloseTo(RATE / 2000, 9);
+  });
+
+  it('reads below the old splined value on a two-knot bracket, near (1+r)^2/(4r)', () => {
+    // The mechanism: splining cost averages reciprocals (arithmetic mean) while
+    // deriving takes the reciprocal of an average (harmonic mean), and
+    // AM/HM = (1+r)^2/(4r) for throughputs differing by r. Steffen slopes make
+    // even a two-knot spline a slight cubic rather than a chord, so the match is
+    // close but not exact. Beyond two knots the cubic can undershoot the chord,
+    // so the direction is usual but not universal — measured at 73.6% high over
+    // real frontiers, min 0.95. See docs/tco-calculator.md.
+    const t1 = 6000;
+    const t2 = 300;
+    const xs = [10, 80];
+    const pair = [consistent(xs[0]!, t1), consistent(xs[1]!, t2)];
+    const mid = (xs[0]! + xs[1]!) / 2;
+
+    const derived = interpolateForGPU(pair, mid, 'interactivity_to_throughput', 'costh')!.cost;
+    // Reconstruct the previous behaviour: spline the cost values themselves.
+    const costs = [RATE / t1, RATE / t2];
+    const splined = hermiteInterpolate(xs, costs, monotoneSlopes(xs, costs), mid);
+
+    expect(derived).toBeLessThan(splined);
+    const r = t1 / t2;
+    expect(splined / derived).toBeCloseTo((1 + r) ** 2 / (4 * r), 0);
+    // and the derived value still satisfies the identity, which splining does not
+    const at = interpolateForGPU(pair, mid, 'interactivity_to_throughput', 'costh')!;
+    expect(at.cost * at.value).toBeCloseTo(RATE, 6);
+  });
+
+  it('falls back to splining when the points do not obey the identity', () => {
+    // Synthetic points whose cost is unrelated to throughput keep the old
+    // behaviour rather than being silently rewritten.
+    const inconsistent = [
+      makePoint({ interactivity: 10, throughput: 1000, costh: 0.2 }),
+      makePoint({ interactivity: 40, throughput: 200, costh: 2 }),
+    ];
+    const r = interpolateForGPU(inconsistent, 25, 'interactivity_to_throughput', 'costh')!;
+    expect(r.cost).toBeGreaterThan(0.2);
+    expect(r.cost).toBeLessThan(2);
+    // Not the derived value, which would have been 200/interpolated-throughput.
+    expect(r.cost * r.value).not.toBeCloseTo(200, 3);
+  });
+
+  it('derives cost from the target axis in throughput_to_interactivity mode', () => {
+    const r = interpolateForGPU(frontier, 1500, 'throughput_to_interactivity', 'costh')!;
+    // In reverse mode the target IS total throughput, so cost follows from it.
+    expect(r.cost).toBeCloseTo(RATE / 1500, 9);
+  });
+
+  it('agrees with maxInteractivityAtCost on the derived curve', () => {
+    const budget = 0.45;
+    const iv = maxInteractivityAtCost(frontier, budget, 'costh', 'total')!;
+    expect(iv).not.toBeNull();
+    const at = interpolateForGPU(frontier, iv, 'interactivity_to_throughput', 'costh')!;
+    expect(at.cost).toBeLessThanOrEqual(budget + 1e-6);
+    const above = interpolateForGPU(frontier, iv + 1, 'interactivity_to_throughput', 'costh')!;
+    expect(above.cost).toBeGreaterThan(budget);
   });
 });

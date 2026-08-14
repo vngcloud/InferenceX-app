@@ -8,7 +8,7 @@ import { track } from '@/lib/analytics';
 
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { MinecraftToggles } from '@/components/minecraft/minecraft-toggles';
-import { navigateInApp } from '@/lib/client-navigation';
+import { CLIENT_SEARCH_CHANGE_EVENT, navigateInApp } from '@/lib/client-navigation';
 import { hasZhSibling, isZhPathname, switchLocalePath, ZH_PREFIX, zhPath } from '@/lib/i18n';
 import { NAV_LABELS_ZH } from '@/lib/tab-meta-zh';
 import { cn } from '@/lib/utils';
@@ -17,7 +17,6 @@ import { GitHubStars } from './GithubStars';
 
 /** Dashboard tab paths that should highlight the "Dashboard" nav link. */
 const DASHBOARD_TABS = [
-  '/overview',
   '/inference',
   '/evaluation',
   '/historical',
@@ -25,12 +24,19 @@ const DASHBOARD_TABS = [
   '/reliability',
   '/gpu-specs',
   '/gpu-metrics',
+  '/collectivex',
   '/submissions',
   '/current-inferencex-image',
 ];
 
 const NAV_LINKS = [
   { href: '/', label: 'Home', testId: 'nav-link-home', event: 'header_home_clicked' },
+  {
+    href: '/overview',
+    label: 'Overview',
+    testId: 'nav-link-overview',
+    event: 'header_overview_clicked',
+  },
   {
     href: '/inference',
     label: 'Dashboard',
@@ -43,19 +49,6 @@ const NAV_LINKS = [
     testId: 'nav-link-compare',
     event: 'header_compare_clicked',
   },
-  {
-    href: '/quotes',
-    label: 'Supporters',
-    testId: 'nav-link-supporters',
-    event: 'header_supporters_clicked',
-  },
-  {
-    href: '/datasets',
-    label: 'Datasets',
-    testId: 'nav-link-datasets',
-    event: 'header_datasets_clicked',
-  },
-  { href: '/blog', label: 'Articles', testId: 'nav-link-blog', event: 'header_blog_clicked' },
   { href: '/about', label: 'About', testId: 'nav-link-about', event: 'header_about_clicked' },
 ] as const;
 
@@ -75,6 +68,17 @@ function isActive(pathname: string, href: string): boolean {
   return enPathname === href || enPathname.startsWith(`${href}/`);
 }
 
+/**
+ * Whether the link lands on the page already on screen. Deliberately not
+ * `isActive`, which also lights up for every sibling dashboard tab and for
+ * child routes — those are real destinations, so treating their clicks as
+ * no-ops would strand the user (Dashboard from `/evaluation`, Comparisons
+ * from `/compare/<slug>`).
+ */
+function isCurrentPage(pathname: string, displayHref: string): boolean {
+  return pathname === displayHref;
+}
+
 /** EN ↔ 中文 switcher; maps the current page to its sibling in the other language. */
 function LanguageToggle({
   pathname,
@@ -85,24 +89,39 @@ function LanguageToggle({
 }) {
   const isZh = isZhPathname(pathname);
   const target = switchLocalePath(pathname);
-  // The href carries the query too, so modified clicks and copied links keep
-  // shareable state (e.g. the overview's ?tier=) — same sync as TabNav's.
+  // The root layout is reused for search-only App Router transitions, so keep
+  // this persistent link synchronized with both browser history and the app's
+  // explicit soft-navigation signal.
   const [search, setSearch] = useState('');
   useEffect(() => {
-    const sync = () => setSearch(window.location.search);
-    sync();
+    const sync = (event: Event) => {
+      setSearch(
+        event instanceof CustomEvent && typeof event.detail === 'string'
+          ? event.detail
+          : window.location.search,
+      );
+    };
+    sync(new Event('initial'));
     window.addEventListener('popstate', sync);
-    return () => window.removeEventListener('popstate', sync);
+    window.addEventListener(CLIENT_SEARCH_CHANGE_EVENT, sync);
+    return () => {
+      window.removeEventListener('popstate', sync);
+      window.removeEventListener(CLIENT_SEARCH_CHANGE_EVENT, sync);
+    };
   }, [pathname]);
   return (
     <Link
       href={target + search}
+      // Only /overview rewrites this href per interaction, which would
+      // re-prefetch its force-dynamic sibling on every selector commit.
+      // Everywhere else the href is stable, so let Next prefetch it.
+      prefetch={isActive(pathname, '/overview') ? false : undefined}
       data-testid="language-toggle"
       hrefLang={isZh ? 'en' : 'zh-CN'}
       className="inline-flex items-center min-h-11 px-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors whitespace-nowrap"
       onClick={(event) => {
         track('header_language_toggled', { to: isZh ? 'en' : 'zh' });
-        navigateInApp(event, router, target + window.location.search);
+        navigateInApp(event, router, target + search);
       }}
     >
       {isZh ? 'EN' : '中文'}
@@ -189,6 +208,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                 key={href}
                 data-testid={testId}
                 href={displayHref}
+                prefetch={isActive(pathname, href) ? false : undefined}
                 className={cn(
                   'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                   isActive(pathname, href)
@@ -197,7 +217,15 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                 )}
                 onClick={(e) => {
                   track(event);
-                  if (href === '/inference') navigateInApp(e, router, displayHref);
+                  // Re-entering the current page would refetch the route and
+                  // discard whatever selector state the URL already carries.
+                  if (isCurrentPage(pathname, displayHref)) {
+                    e.preventDefault();
+                    return;
+                  }
+                  if (href === '/overview' || href === '/inference') {
+                    navigateInApp(e, router, displayHref);
+                  }
                 }}
               >
                 {label}
@@ -252,6 +280,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                     <Link
                       key={href}
                       href={displayHref}
+                      prefetch={isActive(pathname, href) ? false : undefined}
                       className={cn(
                         'flex items-center min-h-11 px-3 rounded-md text-sm font-medium transition-colors',
                         isActive(pathname, href)
@@ -260,7 +289,13 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                       )}
                       onClick={(e) => {
                         track(event);
-                        if (href === '/inference') navigateInApp(e, router, displayHref);
+                        if (isCurrentPage(pathname, displayHref)) {
+                          e.preventDefault();
+                          return;
+                        }
+                        if (href === '/overview' || href === '/inference') {
+                          navigateInApp(e, router, displayHref);
+                        }
                       }}
                     >
                       {label}

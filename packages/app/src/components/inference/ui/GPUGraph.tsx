@@ -8,7 +8,7 @@ import { useTheme } from 'next-themes';
 import { useInference } from '@/components/inference/InferenceContext';
 import ChartLegend from '@/components/ui/chart-legend';
 import { getHardwareConfig, getModelSortIndex } from '@/lib/constants';
-import { getChartWatermark } from '@/lib/data-mappings';
+import { getChartWatermark, Sequence } from '@/lib/data-mappings';
 import { generateGpuDateColors } from '@/lib/dynamic-colors';
 import { useLocale } from '@/lib/use-locale';
 import { formatNumber, getDisplayLabel, updateRepoUrl } from '@/lib/utils';
@@ -28,15 +28,13 @@ import {
   formatLargeNumber,
   getShapeKeyForPrecision,
   logTickFormat,
-  POINT_SIZE,
 } from '@/lib/chart-rendering';
 import {
   isFrontierEligible,
-  paretoFrontLowerLeft,
-  paretoFrontLowerRight,
-  paretoFrontUpperLeft,
-  paretoFrontUpperRight,
+  paretoFrontForDirection,
+  type ParetoDirection,
 } from '@/lib/chart-utils';
+import { canonicalParetoIntersection } from '@/components/inference/utils/canonicalFrontier';
 import type {
   ChartDefinition,
   InferenceData,
@@ -58,6 +56,13 @@ import {
   renderKnownIssueAnnotations,
 } from '@/components/inference/utils/knownIssueAnnotations';
 import { matchKnownConfigIssues, pointMatchesIssue } from '@/lib/known-issues';
+import {
+  OFFLOAD_HALO_DASHARRAY,
+  OFFLOAD_HALO_RADIUS,
+  OFFLOAD_HALO_STROKE_WIDTH,
+  OffloadHaloLegendKey,
+} from '@/components/inference/ui/OffloadHaloLegendKey';
+import { AgenticOptimizationNote } from '@/components/inference/ui/AgenticOptimizationNote';
 
 const CHART_MARGIN = { top: 24, right: 10, bottom: 60, left: 60 };
 
@@ -111,6 +116,7 @@ const GPUGraph = React.memo(
       selectedGPUs,
       selectedDateRange,
       selectedDates,
+      selectedSequence,
       setSelectedDates,
       toggleActiveDate,
       removeActiveDate,
@@ -135,6 +141,7 @@ const GPUGraph = React.memo(
     const legendT = GPU_STRINGS[locale];
     const { resolvedTheme } = useTheme();
     const chartRef = useRef<D3ChartHandle>(null);
+    const hasOffloadHalo = useMemo(() => data.some((point) => point.offload_mode === 'on'), [data]);
 
     // Shared date+GPU pairs. `dates` holds comparison-series entries (plain dates
     // and/or specific-run entries); a same-day range endpoint is dropped when that
@@ -248,24 +255,13 @@ const GPUGraph = React.memo(
     const rooflines = useMemo(() => {
       const result: Record<string, InferenceData[]> = {};
       const rooflineKey = `${selectedYAxisMetric}_roofline` as keyof ChartDefinition;
-      const dir = chartDefinition[rooflineKey] as
-        | 'upper_right'
-        | 'upper_left'
-        | 'lower_left'
-        | 'lower_right'
-        | undefined;
+      const dir = chartDefinition[rooflineKey] as ParetoDirection | undefined;
+      const frontier = paretoFrontForDirection(dir ?? 'lower_right');
       for (const key of Object.keys(groupedData)) {
-        // Exclude degenerate x <= 0 points (interactivity = 0, etc.) from the
-        // frontier so they are never drawn as optimal.
-        const eligible = groupedData[key].filter(isFrontierEligible);
-        result[key] =
-          dir === 'upper_right'
-            ? paretoFrontUpperRight(eligible)
-            : dir === 'upper_left'
-              ? paretoFrontUpperLeft(eligible)
-              : dir === 'lower_left'
-                ? paretoFrontLowerLeft(eligible)
-                : paretoFrontLowerRight(eligible);
+        const canonicalPoints = canonicalParetoIntersection(groupedData[key], dir ?? 'lower_right');
+        result[key] = (
+          canonicalPoints ?? frontier(groupedData[key].filter(isFrontierEligible))
+        ).toSorted((a, b) => a.x - b.x);
       }
       return result;
     }, [groupedData, selectedYAxisMetric, chartDefinition]);
@@ -762,7 +758,7 @@ const GPUGraph = React.memo(
               </svg>
               <h3 className="text-sm font-medium mb-1">No data available</h3>
               <p className="text-xs">
-                Please change the model, sequence, precision, date range or GPU selection.
+                Please change the model, sequence, precision, date range or chip selection.
               </p>
             </div>
           </div>
@@ -930,11 +926,11 @@ const GPUGraph = React.memo(
                 .data(showHalo ? [true] : [])
                 .join('circle')
                 .attr('class', 'offload-halo')
-                .attr('r', POINT_SIZE + 4)
+                .attr('r', OFFLOAD_HALO_RADIUS)
                 .attr('fill', 'none')
                 .attr('stroke', 'var(--foreground)')
-                .attr('stroke-width', 1.5)
-                .attr('stroke-dasharray', '3 2')
+                .attr('stroke-width', OFFLOAD_HALO_STROKE_WIDTH)
+                .attr('stroke-dasharray', OFFLOAD_HALO_DASHARRAY)
                 .attr('opacity', 0.9)
                 .attr('pointer-events', 'none');
             });
@@ -1036,6 +1032,14 @@ const GPUGraph = React.memo(
               },
             ]}
             precisionIndicators={selectedPrecisions}
+            keyIndicators={
+              hasOffloadHalo || selectedSequence === Sequence.AgenticTraces ? (
+                <>
+                  {hasOffloadHalo && <OffloadHaloLegendKey />}
+                  {selectedSequence === Sequence.AgenticTraces && <AgenticOptimizationNote />}
+                </>
+              ) : undefined
+            }
           />
         }
       />

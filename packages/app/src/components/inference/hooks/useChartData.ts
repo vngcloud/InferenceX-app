@@ -12,7 +12,7 @@ import type {
   RenderableGraph,
   YAxisMetricKey,
 } from '@/components/inference/types';
-import { filterDataByCostLimit } from '@/components/inference/utils';
+import { partitionChartDataByLimits } from '@/components/inference/utils';
 import {
   parseComparisonEntry,
   resolveComparisonEntries,
@@ -24,10 +24,13 @@ import {
   hardwareKeyMatchesAnyBase,
 } from '@/lib/constants';
 import { mergeRunScopedRows, transformBenchmarkRows } from '@/lib/benchmark-transform';
+import {
+  dedupeAgenticHistoryRuns,
+  dedupeRowsToLatestPerConfig as dedupeLatestBenchmarkSeries,
+} from '@/lib/benchmark-run-selection';
 import { Sequence, type Model } from '@/lib/data-mappings';
-import { isPersistedBenchmarkId } from '@/lib/benchmark-id';
 import { calculateCostsForGpus, calculatePowerForGpus } from '@/lib/utils';
-import { e2eFrontierWinners } from '@/components/inference/utils/e2eFrontier';
+import { overviewServingSeriesKey, type OverviewServingSeriesRow } from '@/lib/overview-data';
 import { resolveXAxisField } from '@/components/inference/utils/resolveXAxisField';
 import {
   applyQuickFilters,
@@ -39,23 +42,15 @@ import {
 /**
  * Chart x-axis variant selected by the mode buttons above the plot. This is
  * the single definition — InferenceContext (URL/state) and ChartDisplay
- * (buttons, derived-metric remapping) import it from here.
+ * (buttons) import it from here.
  */
-export type XAxisMode =
-  | 'ttft'
-  | 'e2e'
-  | 'normalized-e2e'
-  | 'interactivity'
-  | 'session-time'
-  | 'prefill-tps';
+export type XAxisMode = 'ttft' | 'e2e' | 'interactivity' | 'e2e-normalized-interactivity';
 
 export const X_AXIS_MODES: readonly XAxisMode[] = [
   'ttft',
   'e2e',
-  'normalized-e2e',
   'interactivity',
-  'session-time',
-  'prefill-tps',
+  'e2e-normalized-interactivity',
 ];
 
 /**
@@ -64,35 +59,7 @@ export const X_AXIS_MODES: readonly XAxisMode[] = [
  * trace_replay blob to derive them from).
  */
 export function isAgenticOnlyXAxisMode(mode: XAxisMode): boolean {
-  return mode === 'normalized-e2e' || mode === 'session-time' || mode === 'prefill-tps';
-}
-
-/**
- * Compute the set of benchmark_results.id values that sit on the
- * (e2e_latency, y) Pareto frontier within each (hwKey, precision, date)
- * group. Used to restrict the non-e2e xmode charts (ttft, interactivity,
- * session-time, prefill-tps) so they show *only* the points that win on
- * end-to-end latency — preventing benchmark-hacking where a config tops
- * one axis while tanking the other.
- *
- * Returns null when the y-metric has no roofline direction declared on
- * the e2e chart (caller falls back to no filtering in that case).
- */
-function e2eParetoIds(
-  points: InferenceData[],
-  selectedYAxisMetric: string,
-  percentile: string,
-): Set<number> | null {
-  // Shared seed with the overlay path (processOverlayChartData) so both draw
-  // the SAME e2e-restricted frontier. null = the y-metric has no e2e roofline
-  // direction → caller skips filtering. Only persisted DB rows carry ids to pin.
-  const winners = e2eFrontierWinners(points, selectedYAxisMetric, percentile);
-  if (winners === null) return null;
-  const ids = new Set<number>();
-  for (const winner of winners) {
-    if (isPersistedBenchmarkId(winner.id)) ids.add(winner.id);
-  }
-  return ids;
+  return mode === 'e2e-normalized-interactivity';
 }
 
 /** Build deduplicated comparison dates, excluding the main run date. */
@@ -101,13 +68,17 @@ export function buildComparisonDates(
   selectedDates: string[],
   selectedDateRange: { startDate: string; endDate: string },
   selectedRunDate: string | undefined,
+  selectedRunId?: string,
 ): string[] {
   if (selectedGPUs.length === 0) return [];
   // Range endpoints + individually-added dates/runs (redundant same-day range
-  // endpoints dropped), minus the main run date which the primary query covers.
-  return resolveComparisonEntries(selectedDates, selectedDateRange).filter(
-    (d) => d !== selectedRunDate,
-  );
+  // endpoints dropped), minus the main date/run which the primary query covers.
+  // Other run-qualified entries on the same day are distinct overlays and stay.
+  return resolveComparisonEntries(selectedDates, selectedDateRange).filter((entry) => {
+    if (entry === selectedRunDate) return false;
+    const { runId } = parseComparisonEntry(entry);
+    return runId === undefined || runId !== selectedRunId;
+  });
 }
 
 /** Filter data by GPU key, resolving aliases to canonical keys. */
@@ -126,7 +97,17 @@ export function filterByGPU<T extends { hwKey: unknown }>(
   });
 }
 
-type RooflineDirection = 'upper_left' | 'upper_right' | 'lower_left' | 'lower_right';
+/** Restrict one snapshot to the exact serving envelope selected by Overview. */
+export function filterOverviewHistoryRows<T extends OverviewServingSeriesRow>(
+  rows: T[],
+  configKey: string | undefined,
+): T[] {
+  return configKey === undefined
+    ? rows
+    : rows.filter((row) => overviewServingSeriesKey(row) === configKey);
+}
+
+export type RooflineDirection = 'upper_left' | 'upper_right' | 'lower_left' | 'lower_right';
 const FLIP_MAP: Record<RooflineDirection, RooflineDirection> = {
   upper_left: 'upper_right',
   upper_right: 'upper_left',
@@ -139,6 +120,41 @@ export function flipRooflineDirection(dir: RooflineDirection): RooflineDirection
   return FLIP_MAP[dir];
 }
 
+/**
+ * Roofline corner for a trace-derived x-axis mode. Derived modes render on the
+ * e2e chart definition, whose corners assume lower-x-is-better; when the
+ * derived metric is higher-is-better (E2E Normalized Interactivity) the corner mirrors
+ * horizontally. This keeps the y-metric's own good direction — throughput
+ * lands on an upper corner, cost and joules on a lower one — where hardcoding
+ * a single corner inverted the frontier for the cost metrics.
+ */
+export function derivedModeRoofline(
+  configuredE2eCorner: RooflineDirection | undefined,
+  higherXIsBetter: boolean,
+): RooflineDirection | undefined {
+  if (!configuredE2eCorner || !higherXIsBetter) return configuredE2eCorner;
+  return flipRooflineDirection(configuredE2eCorner);
+}
+
+// Statistic words that may already prefix an x-axis label (from chart config
+// or the TTFT override label). Trailing whitespace is consumed so a replace
+// never doubles the separator space.
+const X_LABEL_STAT_PREFIX_RE = /^(?:Median|Mean|P75|P90|P95|P99(?:\.9)?)\b\s*/iu;
+
+/**
+ * Agentic sequences plot percentile fields (e.g. `p90_intvty`, `p75_e2el`),
+ * so the x-axis label must carry the selected percentile. Replaces an
+ * existing leading statistic word (e.g. the TTFT override's "P90 Time To
+ * First Token (s)") or prefixes the percentile when the configured label has
+ * none (e.g. "Interactivity (tok/s/user)" → "P90 Interactivity (tok/s/user)").
+ * Only call for agentic sequences — fixed-seq labels must stay untouched.
+ */
+export function applyAgenticPercentileToXLabel(label: string, pctlWord: string): string {
+  return X_LABEL_STAT_PREFIX_RE.test(label)
+    ? label.replace(X_LABEL_STAT_PREFIX_RE, `${pctlWord} `)
+    : `${pctlWord} ${label}`;
+}
+
 /** The dedup key fields a chart series is identified by. */
 interface DedupeRow {
   hardware: string;
@@ -147,32 +163,40 @@ interface DedupeRow {
   disagg: boolean;
   precision: string;
   offload_mode?: string | null;
+  benchmark_type?: string;
   date: string;
+  workflow_run_id?: number;
+  run_started_at?: string | null;
 }
 
 // offload_mode normalized `?? 'off'` to match the SQL layer's getBenchmarksForRun
 // lineKey — agentic offload=on and offload=off are distinct series.
-const dedupeSeriesKey = (r: DedupeRow): string =>
-  `${r.hardware}|${r.framework}|${r.spec_method}|${r.disagg}|${r.precision}|${r.offload_mode ?? 'off'}`;
-
 /**
- * For each series — (hardware, framework, spec_method, disagg, precision,
- * offload_mode) — keep only the rows from that series' most recent date. When
- * parallelism settings change between runs, old config_ids create stale points
- * under the same legend line; dropping all-but-latest removes them.
- *
- * Without `offload_mode` in the key, an offload=on sweep ingested on a LATER date
- * than the offload=off sweep would win the shared group and silently drop the
- * (earlier-dated) offload=off variant — a data-loss regression.
+ * Keep only the newest workflow run for each chart series. Agentic series omit
+ * point-level spec decoding from their curve identity; fixed-sequence series do not.
  */
 export function dedupeRowsToLatestPerConfig<T extends DedupeRow>(rows: T[]): T[] {
-  const maxDatePerGroup = new Map<string, string>();
-  for (const r of rows) {
-    const k = dedupeSeriesKey(r);
-    const cur = maxDatePerGroup.get(k);
-    if (!cur || r.date > cur) maxDatePerGroup.set(k, r.date);
+  return dedupeLatestBenchmarkSeries(rows);
+}
+
+/**
+ * Coarse filters that apply to every y-axis metric: the explicit GPU picks, the
+ * vendor / deployment / spec quick-filter pills, and the two-GPU compare scope.
+ * Deliberately excludes the y-metric coverage filter, so the result is the set
+ * of configs the user could have selected regardless of which axis is drawn.
+ */
+export function applyScopeFilters(
+  points: InferenceData[],
+  selectedGPUs: string[],
+  quickFilters: QuickFilters,
+  compareGpuPair?: readonly [string, string] | null,
+): InferenceData[] {
+  let scoped = filterByGPU(points, selectedGPUs, GPU_ALIAS_TO_CANONICAL);
+  scoped = applyQuickFilters(scoped, quickFilters);
+  if (compareGpuPair) {
+    scoped = scoped.filter((d) => hardwareKeyMatchesAnyBase(String(d.hwKey), compareGpuPair));
   }
-  return rows.filter((r) => r.date === maxDatePerGroup.get(dedupeSeriesKey(r)));
+  return scoped;
 }
 
 export function useChartData(
@@ -198,15 +222,12 @@ export function useChartData(
    * configs that the selected run did not produce.
    */
   selectedRunId?: string,
-  /**
-   * Current x-axis mode. When set to anything other than 'e2e', the displayed
-   * data is filtered to the (e2e-latency, y) Pareto frontier so the ttft /
-   * interactivity / session-time / prefill-tps charts show only points that
-   * also win on end-to-end latency — preventing benchmark-hacking where a
-   * config tops one metric while tanking the other. The 'e2e' mode is the
-   * source of truth and keeps the full point set.
-   */
-  selectedXAxisMode: XAxisMode = 'e2e',
+  /** Selected main run id, including non-contested runs, used only to avoid
+   * fetching the primary run again as a same-day comparison overlay. */
+  comparisonMainRunId?: string,
+  /** Current x-axis mode. Canonical agentic-frontier stamping happens later,
+   * after ChartDisplay has fetched the trace-derived normalized metric. */
+  _selectedXAxisMode: XAxisMode = 'e2e',
   /**
    * GitHub run id for the "as of run" base view. Set only when an
    * earlier-than-latest run is selected.
@@ -217,6 +238,10 @@ export function useChartData(
    * (also applied to overlay points in ScatterGraph so both paths stay in sync).
    */
   quickFilters: QuickFilters = EMPTY_QUICK_FILTERS,
+  overviewHistoryPair?: {
+    currentConfigKey: string;
+    baselineConfigKey: string;
+  },
 ) {
   // When the selected date is the latest available, use '' (empty string) to match
   // the initial no-date query key, reusing the eagerly-fetched benchmarks from the
@@ -263,8 +288,15 @@ export function useChartData(
 
   // GPU comparison: fetch data for each additional comparison date
   const comparisonDates = useMemo(
-    () => buildComparisonDates(selectedGPUs, selectedDates, selectedDateRange, selectedRunDate),
-    [selectedGPUs, selectedDates, selectedDateRange, selectedRunDate],
+    () =>
+      buildComparisonDates(
+        selectedGPUs,
+        selectedDates,
+        selectedDateRange,
+        selectedRunDate,
+        comparisonMainRunId,
+      ),
+    [selectedGPUs, selectedDates, selectedDateRange, selectedRunDate, comparisonMainRunId],
   );
 
   // Each comparison entry is either a plain date (latest run that day, exact-date
@@ -299,7 +331,10 @@ export function useChartData(
     if (!allRows) return [];
     const seqFilter = (r: { isl: number | null; osl: number | null; benchmark_type: string }) =>
       rowToSequence(r) === selectedSequence;
-    const seqFiltered = allRows.filter(seqFilter);
+    const seqFiltered = filterOverviewHistoryRows(
+      allRows.filter(seqFilter),
+      overviewHistoryPair?.currentConfigKey,
+    );
 
     // Keep only each series' latest-date rows (drops stale config_ids left behind
     // when parallelism settings change between runs). Keyed per offload variant so
@@ -310,13 +345,25 @@ export function useChartData(
       selectedRunDate ? { ...r, date: selectedRunDate, actualDate: r.date } : r,
     );
     if (comparisonDates.length === 0) return mainRows;
-    const extraRows = comparisonQueries.flatMap((q, i) =>
-      (q.data ?? [])
-        .filter(seqFilter)
-        .map((r) => ({ ...r, date: comparisonDates[i], actualDate: r.date })),
-    );
+    const extraRows = comparisonQueries.flatMap((q, i) => {
+      const filtered = filterOverviewHistoryRows(
+        (q.data ?? []).filter(seqFilter),
+        overviewHistoryPair?.baselineConfigKey,
+      );
+      const selected =
+        selectedSequence === Sequence.AgenticTraces ? dedupeAgenticHistoryRuns(filtered) : filtered;
+      return selected.map((r) => ({ ...r, date: comparisonDates[i], actualDate: r.date }));
+    });
     return [...mainRows, ...extraRows];
-  }, [allRows, selectedSequence, comparisonDates, comparisonDataKey, selectedRunDate]);
+  }, [
+    allRows,
+    selectedSequence,
+    comparisonDates,
+    comparisonDataKey,
+    selectedRunDate,
+    overviewHistoryPair?.currentConfigKey,
+    overviewHistoryPair?.baselineConfigKey,
+  ]);
 
   // Transform filtered rows into chart data
   const { chartData, hardwareConfig: rawHardwareConfig } = useMemo(() => {
@@ -409,13 +456,15 @@ export function useChartData(
 
         // Agentic: relabel to the chosen percentile (the resolver already
         // rewrote the field) — xAxisLabel still carries the raw chartDef
-        // prefix. The chart heading ("vs. <latency>") is also rewritten so the
-        // title above the plot reflects what's drawn.
+        // prefix (or none: the base Interactivity / E2E Latency config labels
+        // have no statistic word, so the percentile is prefixed). The chart
+        // heading ("vs. <latency>") is also rewritten so the title above the
+        // plot reflects what's drawn.
         const headingKey = `${selectedYAxisMetric}_heading` as keyof ChartDefinition;
         let chartHeading = (chartDef[headingKey] as string) || chartDef.heading;
         if (isAgentic) {
           const pctlWord = selectedPercentile.toUpperCase();
-          xAxisLabel = xAxisLabel.replace(/^(?:Median|Mean|P75|P90|P95|P99(?:\.9)?)\b/iu, pctlWord);
+          xAxisLabel = applyAgenticPercentileToXLabel(xAxisLabel, pctlWord);
           chartHeading = chartHeading.replace(
             /^(?<vsPrefix>vs\.\s+)(?:(?:Median|Mean|P75|P90|P95|P99(?:\.9)?)\s+)?/iu,
             `$1${pctlWord} `,
@@ -481,48 +530,22 @@ export function useChartData(
 
     const result = stableChartDefinitions.map(
       ({ chartDefinition, metricKey, xAxisField }, index) => {
-        let filteredData = dataSource[index] || [];
+        // Quick filters (vendor / deployment / mtp-stp) are part of this coarse
+        // pre-filter, which also prunes the legend and rooflines since they
+        // derive from this set.
+        const filteredData = applyScopeFilters(
+          dataSource[index] || [],
+          selectedGPUs,
+          quickFilters,
+          compareGpuPair,
+        );
 
-        // Filter by selected GPUs if any
-        filteredData = filterByGPU(filteredData, selectedGPUs, GPU_ALIAS_TO_CANONICAL);
-
-        // Quick filters (vendor / agg-disagg / mtp-stp) — coarse pre-filter that
-        // also prunes the legend and rooflines since they derive from this set.
-        filteredData = applyQuickFilters(filteredData, quickFilters);
-
-        if (compareGpuPair) {
-          filteredData = filteredData.filter((d) =>
-            hardwareKeyMatchesAnyBase(String(d.hwKey), compareGpuPair),
-          );
-        }
-
-        filteredData = filterDataByCostLimit(filteredData, chartDefinition, selectedYAxisMetric);
-
-        // For AGENTIC workloads only: when the user is NOT viewing the
-        // e2e latency chart, mark each point with whether it sits on the
-        // (e2e_latency, y) Pareto frontier for its (hwKey, precision,
-        // date) group. The chart still renders every point as scatter —
-        // only e2e-Pareto winners feed the roofline (ScatterGraph honors
-        // the flag). Prevents benchmark-hacking the TTFT / interactivity
-        // line by tanking decode (or vice versa) without hiding the
-        // non-optimal configs from view.
-        //
-        // Fixed-seq workloads keep the existing per-axis Pareto since
-        // there's no separate "session-time" notion of total latency —
-        // their e2e IS the request latency, so a TTFT hack there reads
-        // honestly on e2e too. The anti-hack constraint is specifically
-        // about multi-turn agentic where TTFT measures a tiny fraction
-        // of the user-visible session time.
-        const isAgentic = selectedSequence === Sequence.AgenticTraces;
-        const e2eParetoSet =
-          isAgentic && selectedXAxisMode !== 'e2e'
-            ? e2eParetoIds(filteredData, selectedYAxisMetric, selectedPercentile)
-            : null;
-
-        // Filter to points that have the selected metric, then remap x/y
+        // Filter to points that have the selected metric, then remap x/y.
+        // Intentional cost/TTFT outliers are partitioned only after this step
+        // so ScatterGraph can retain them for dashed boundary continuations.
         const hasMetric = filteredData.some((d) => metricKey in d);
         const isTtftX = typeof xAxisField === 'string' && xAxisField.endsWith('_ttft');
-        const processedData = hasMetric
+        const mappedData = hasMetric
           ? filteredData
               .filter((d) => metricKey in d)
               .map((d: InferenceData) => {
@@ -534,36 +557,30 @@ export function useChartData(
                 // d.x would otherwise mask the regression).
                 const xCandidate = (d as Partial<AggDataEntry>)[xAxisField];
                 const xValue = typeof xCandidate === 'number' ? xCandidate : d.x;
-                const isOnE2eFrontier =
-                  e2eParetoSet === null
-                    ? undefined
-                    : isPersistedBenchmarkId(d.id) && e2eParetoSet.has(d.id);
                 return {
                   ...d,
                   x: xValue,
                   y: yValue,
                   roof,
-                  isOnE2eFrontier,
                 };
               })
-              // When TTFT is on the x-axis, apply the latency limit to filter
-              // overload outliers (fixed-seq conc=2048 rows with TTFT > 60s that
-              // compress all real data to the far left). Skip for agentic — long
-              // TTFTs there reflect real workloads (multi-turn, big prompts).
-              .filter(
-                (d) =>
-                  !isTtftX ||
-                  isAgentic ||
-                  !chartDefinition.y_latency_limit ||
-                  d.x <= chartDefinition.y_latency_limit,
-              )
           : [];
+
+        const isAgentic = selectedSequence === Sequence.AgenticTraces;
+
+        const { data: processedData, clippedData } = partitionChartDataByLimits(
+          mappedData,
+          chartDefinition,
+          selectedYAxisMetric,
+          { isTtftX, isAgentic },
+        );
 
         return {
           model: selectedModel,
           sequence: selectedSequence,
           chartDefinition,
           data: processedData,
+          clippedData,
         };
       },
     );
@@ -578,10 +595,21 @@ export function useChartData(
     userPowers,
     stableChartDefinitions,
     compareGpuPair,
-    selectedXAxisMode,
     selectedPercentile,
     quickFilters,
   ]);
 
-  return { graphs, loading, error, hardwareConfig, availableQuickFilters };
+  // Points that pass every scope filter but NOT the y-metric coverage filter.
+  // The legend's active set must be reconciled against these, never against
+  // `graphs`: reconcileActiveSet intersects the user's selection with the set
+  // it is handed and never re-widens, so reconciling against metric-filtered
+  // data permanently deletes every config without telemetry for the selected
+  // axis (the Measured Energy axes) the moment that axis is picked. Both chart
+  // definitions are built from the same rows, so index 0 carries every hw key.
+  const selectionPoints = useMemo(
+    () => applyScopeFilters(chartData[0] ?? [], selectedGPUs, quickFilters, compareGpuPair),
+    [chartData, selectedGPUs, quickFilters, compareGpuPair],
+  );
+
+  return { graphs, selectionPoints, loading, error, hardwareConfig, availableQuickFilters };
 }

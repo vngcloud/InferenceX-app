@@ -35,12 +35,9 @@ const getCachedDerivedAgenticMetrics = cachedQuery(
  *
  * Returns per-id derived metrics computed live from the stored aiperf
  * profile_export.jsonl blobs:
- *  - normalized_session_time_s: mean across sessions of session e2e time
- *    (Σ per-turn request_latency) rescaled by mean_load / session_load.
- *  - p90_prefill_tps_per_user: P90 of per-turn prefill TPS/user (ISL / TTFT)
- *    across every turn in every session.
- *  - p75/p90_normalized_e2e_400_s: percentile of per-request
- *    TTFT + 399 × observed ITL.
+ *  - p75/p90_e2e_norm_intvty: slow-tail OSL / E2E-latency in tok/s/user,
+ *    computed as 1 / pXX(per-request E2EL/OSL) across every turn in every
+ *    session — plain interactivity charged for the prefill wait.
  *
  * Ids without a trace_replay blob or with unparseable records are omitted.
  */

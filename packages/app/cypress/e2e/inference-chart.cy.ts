@@ -23,6 +23,13 @@ describe('Inference Chart', () => {
     cy.get('[data-testid="scatter-graph"]').first().find('svg').should('exist');
   });
 
+  it('hides the logo watermark when the unofficial-domain notice is shown', () => {
+    cy.contains('This deployment is not hosted at').should('be.visible');
+    cy.get('[data-testid="inference-chart-display"] pattern[id^="logo-pattern-"]').should(
+      'not.exist',
+    );
+  });
+
   it('SVG contains data point circles', () => {
     cy.get('[data-testid="scatter-graph"]')
       .first()
@@ -52,6 +59,9 @@ describe('Inference Chart', () => {
 
   it('renders quick filters and toggles a vendor pill', () => {
     cy.get('[data-testid="quick-filters"]').should('exist');
+    cy.get('[data-testid="quick-filter-deployment-single-node"]').should('contain', 'Single-node');
+    cy.get('[data-testid="quick-filter-deployment-multi-node"]').should('contain', 'Multi-node');
+    cy.get('[data-testid="quick-filter-deployment-disagg"]').should('contain', 'Disaggregated');
     cy.get('[data-testid="quick-filter-vendor-NVIDIA"]')
       .should('have.attr', 'aria-pressed', 'false')
       .click()

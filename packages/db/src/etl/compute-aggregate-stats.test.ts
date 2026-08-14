@@ -66,12 +66,10 @@ describe('computeAggregateStats', () => {
     expect(stats.osl).toBeNull();
     expect(stats.kvCacheUtil).toBeNull();
     expect(stats.prefixCacheHitRate).toBeNull();
-    expect(stats.normalizedSessionTimeS).toBeNull();
-    expect(stats.p90PrefillTpsPerUser).toBeNull();
-    expect(stats.normalizedE2e400).toBeNull();
+    expect(stats.e2elPerOsl).toBeNull();
   });
 
-  it('computes ISL/OSL percentiles + derived metrics from the profile blob', async () => {
+  it('computes ISL/OSL percentiles + the E2EL/OSL ratio bundle from the profile blob', async () => {
     const profileBlob = makeProfileBlob([
       { isl: 100, osl: 50, rl: 1000, ttft: 100 },
       { isl: 200, osl: 75, rl: 2000, ttft: 200 },
@@ -88,15 +86,11 @@ describe('computeAggregateStats', () => {
     expect(stats.kvCacheUtil).toBeNull();
     expect(stats.prefixCacheHitRate).toBeNull();
 
-    // Derived: prefill TPS per turn = isl / (ttft/1000) = 1000 for each, so p90 = 1000.
-    expect(stats.p90PrefillTpsPerUser).toBeCloseTo(1000, 6);
-    // Normalized session time: T̃_i = T_i × (mean_load / load_i), then mean.
-    //   loads = [150, 275, 400], mean_load = 275
-    //   scaled times (s) = [1×275/150, 2×275/275, 3×275/400] = [1.8333, 2, 2.0625]
-    //   mean ≈ 1.9653
-    expect(stats.normalizedSessionTimeS).toBeCloseTo(1.9653, 3);
-    expect(stats.normalizedE2e400?.n).toBe(3);
-    expect(stats.normalizedE2e400?.p90).toBeGreaterThan(0);
+    // Per-request E2EL/OSL ratios (s/tok): 1/50=0.02, 2/75≈0.02667, 3/100=0.03.
+    expect(stats.e2elPerOsl?.n).toBe(3);
+    expect(stats.e2elPerOsl?.p50).toBeCloseTo(2 / 75, 6);
+    // p90 of 3 values (linear interpolation): pos=1.8 → 0.02667 + 0.8×(0.03-0.02667)
+    expect(stats.e2elPerOsl?.p90).toBeCloseTo(2 / 75 + 0.8 * (0.03 - 2 / 75), 6);
   });
 
   it('computes KV util + prefix hit rate from the server blob alone', async () => {
@@ -112,9 +106,7 @@ describe('computeAggregateStats', () => {
     // Profile-derived metrics absent.
     expect(stats.isl).toBeNull();
     expect(stats.osl).toBeNull();
-    expect(stats.normalizedSessionTimeS).toBeNull();
-    expect(stats.p90PrefillTpsPerUser).toBeNull();
-    expect(stats.normalizedE2e400).toBeNull();
+    expect(stats.e2elPerOsl).toBeNull();
   });
 
   it('tolerates a malformed profile blob by leaving its metrics null', async () => {
@@ -123,9 +115,7 @@ describe('computeAggregateStats', () => {
     const stats = await computeAggregateStats({ profileBlob: garbage, serverBlob: null });
     expect(stats.isl).toBeNull();
     expect(stats.osl).toBeNull();
-    expect(stats.normalizedSessionTimeS).toBeNull();
-    expect(stats.p90PrefillTpsPerUser).toBeNull();
-    expect(stats.normalizedE2e400).toBeNull();
+    expect(stats.e2elPerOsl).toBeNull();
     // Version still set so the row is considered "computed".
     expect(stats.version).toBe(STATS_VERSION);
   });
@@ -145,8 +135,35 @@ describe('mergeProfileStatsUpgrade', () => {
     const merged = mergeProfileStatsUpgrade(existing, profile);
     expect(merged.version).toBe(STATS_VERSION);
     expect(merged.isl?.mean).toBe(100);
-    expect(merged.normalizedE2e400?.p90).toBeGreaterThan(0);
+    expect(merged.e2elPerOsl?.p90).toBeCloseTo(2.08 / 100, 6);
     expect(merged.kvCacheUtil).toEqual(existing.kvCacheUtil);
     expect(merged.prefixCacheHitRate).toEqual(existing.prefixCacheHitRate);
+  });
+
+  it('drops the retired derived fields when upgrading a pre-v6 bundle', async () => {
+    // Bundles written before v6 carry normalizedSessionTimeS /
+    // p90PrefillTpsPerUser / normalizedE2e400 — the upgrade must not
+    // resurrect them into the new bundle.
+    const legacy = {
+      version: STATS_VERSION - 1,
+      isl: null,
+      osl: null,
+      kvCacheUtil: { mean: 0.4, p50: 0.4, p75: 0.5, p90: 0.6, p99: 0.7, n: 3 },
+      prefixCacheHitRate: null,
+      normalizedSessionTimeS: 999,
+      p90PrefillTpsPerUser: 999,
+      normalizedE2e400: { mean: 1, p50: 1, p75: 1, p90: 2, p99: 3, n: 5 },
+    };
+    const profile = await computeAggregateStats({
+      profileBlob: makeProfileBlob([{ isl: 100, osl: 100, rl: 2080, ttft: 100 }]),
+      serverBlob: null,
+    });
+
+    const merged = mergeProfileStatsUpgrade(legacy, profile);
+    expect(merged.version).toBe(STATS_VERSION);
+    expect(merged.kvCacheUtil).toEqual(legacy.kvCacheUtil);
+    expect(merged).not.toHaveProperty('normalizedSessionTimeS');
+    expect(merged).not.toHaveProperty('p90PrefillTpsPerUser');
+    expect(merged).not.toHaveProperty('normalizedE2e400');
   });
 });

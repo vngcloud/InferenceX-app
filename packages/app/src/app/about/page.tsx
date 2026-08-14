@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { Card } from '@/components/ui/card';
 import { FAQ_ITEMS } from '@/components/about/faq-data';
+import { AgentXFaq } from '@/components/about/agentx-faq';
 import { JsonLd } from '@/components/json-ld';
 import { enAlternates } from '@/lib/i18n';
 import { GITHUB_OWNER, GITHUB_REPO, SITE_URL } from '@semianalysisai/inferencex-constants';
@@ -83,6 +84,8 @@ export default function AboutPage() {
           </Card>
         </section>
 
+        <AgentXFaq locale="en" />
+
         <section id="reproducibility" className="scroll-mt-24">
           <Card>
             <h2 className="text-lg font-semibold mb-2">Reproducibility</h2>
@@ -118,7 +121,7 @@ export default function AboutPage() {
                 </span>
                 <div>
                   <strong className="text-foreground">Artifacts uploaded.</strong> Request
-                  latencies, token counts, GPU power telemetry, and evaluation samples are attached
+                  latencies, token counts, chip power telemetry, and evaluation samples are attached
                   to the run page. GitHub Actions retains them for 90 days, and a weekly snapshot of
                   the full benchmark database is published as a public GitHub Release for longer
                   auditability.

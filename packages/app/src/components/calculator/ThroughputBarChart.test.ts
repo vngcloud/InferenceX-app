@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { splitLabel } from '@/lib/d3-chart/axis-labels';
+
 import type { InterpolatedResult } from './types';
 import {
+  generateTooltipHTML,
+  getResultLabel,
   getCostForType,
   getCostProviderLabel,
   getCostTypeLabel,
@@ -209,19 +213,19 @@ describe('getMetricLabel', () => {
 
   it('returns throughput label for interactivity_to_throughput mode with total type', () => {
     expect(getMetricLabel('throughput', 'interactivity_to_throughput', 'total')).toBe(
-      'Throughput per GPU (tok/s/gpu)',
+      'Throughput per Chip (tok/s/chip)',
     );
   });
 
   it('returns input throughput label for interactivity_to_throughput mode with input type', () => {
     expect(getMetricLabel('throughput', 'interactivity_to_throughput', 'input')).toBe(
-      'Input Throughput per GPU (tok/s/gpu)',
+      'Input Throughput per Chip (tok/s/chip)',
     );
   });
 
   it('returns output throughput label for interactivity_to_throughput mode with output type', () => {
     expect(getMetricLabel('throughput', 'interactivity_to_throughput', 'output')).toBe(
-      'Output Throughput per GPU (tok/s/gpu)',
+      'Output Throughput per Chip (tok/s/chip)',
     );
   });
 
@@ -275,21 +279,21 @@ describe('getValueLabel', () => {
   it('formats total throughput value in interactivity_to_throughput mode', () => {
     const result = makeResult({ value: 456.7 });
     expect(getValueLabel(result, 'throughput', 'interactivity_to_throughput', 'total')).toBe(
-      '456.7 tok/s/gpu',
+      '456.7 tok/s/chip',
     );
   });
 
   it('formats input throughput value when costType is input', () => {
     const result = makeResult({ inputTputValue: 55.3 });
     expect(getValueLabel(result, 'throughput', 'interactivity_to_throughput', 'input')).toBe(
-      '55.3 tok/s/gpu',
+      '55.3 tok/s/chip',
     );
   });
 
   it('formats output throughput value when costType is output', () => {
     const result = makeResult({ outputTputValue: 401.2 });
     expect(getValueLabel(result, 'throughput', 'interactivity_to_throughput', 'output')).toBe(
-      '401.2 tok/s/gpu',
+      '401.2 tok/s/chip',
     );
   });
 
@@ -326,22 +330,34 @@ describe('getCostProviderLabel', () => {
 describe('getChartTitle', () => {
   it('returns total throughput title with interactivity target label', () => {
     const title = getChartTitle('throughput', 'interactivity_to_throughput', 30, 'total');
-    expect(title).toBe('Total Token Throughput per GPU at 30 tok/s/user Interactivity');
+    expect(title).toBe('Total Token Throughput per Chip at 30 tok/s/user Interactivity');
+  });
+
+  it('includes the selected percentile in an agentic interactivity title', () => {
+    const title = getChartTitle(
+      'throughput',
+      'interactivity_to_throughput',
+      30,
+      'total',
+      undefined,
+      'p90',
+    );
+    expect(title).toBe('Total Token Throughput per Chip at 30 tok/s/user P90 Interactivity');
   });
 
   it('returns input throughput title when costType is input', () => {
     const title = getChartTitle('throughput', 'interactivity_to_throughput', 30, 'input');
-    expect(title).toBe('Input Token Throughput per GPU at 30 tok/s/user Interactivity');
+    expect(title).toBe('Input Token Throughput per Chip at 30 tok/s/user Interactivity');
   });
 
   it('returns output throughput title when costType is output', () => {
     const title = getChartTitle('throughput', 'interactivity_to_throughput', 30, 'output');
-    expect(title).toBe('Output Token Throughput per GPU at 30 tok/s/user Interactivity');
+    expect(title).toBe('Output Token Throughput per Chip at 30 tok/s/user Interactivity');
   });
 
   it('returns interactivity title in throughput_to_interactivity mode', () => {
     const title = getChartTitle('throughput', 'throughput_to_interactivity', 500, 'total');
-    expect(title).toBe('Interactivity at 500 tok/s/gpu Throughput');
+    expect(title).toBe('Interactivity at 500 tok/s/chip Throughput');
   });
 
   it('returns total power title with target label', () => {
@@ -389,7 +405,7 @@ describe('getChartTitle', () => {
   it('defaults to hyperscaler when no costProvider is specified for cost', () => {
     const title = getChartTitle('cost', 'throughput_to_interactivity', 500, 'total');
     expect(title).toBe(
-      'Cost per Million Total Tokens (Owning - Hyperscaler) at 500 tok/s/gpu Throughput',
+      'Cost per Million Total Tokens (Owning - Hyperscaler) at 500 tok/s/chip Throughput',
     );
   });
 });
@@ -492,5 +508,129 @@ describe('getSortedResults', () => {
     const sorted = getSortedResults(single, 'throughput', 'total');
     expect(sorted).toHaveLength(1);
     expect(sorted[0].hwKey).toBe('x');
+  });
+});
+
+// =========================================================================
+// getResultLabel() — official + unofficial-run overlay bars
+// =========================================================================
+
+describe('getResultLabel', () => {
+  // Empty config → the helper falls back to the global getHardwareConfig
+  // lookup, which resolves 'b300' to its registry display label.
+  const noConfig = {};
+
+  it('returns the bare hardware name for a single-precision official bar', () => {
+    expect(getResultLabel(makeResult({ hwKey: 'b300' }), noConfig)).toBe('B300');
+  });
+
+  it('appends the precision when multiple precisions are selected', () => {
+    expect(getResultLabel(makeResult({ hwKey: 'b300', precision: 'fp4' }), noConfig)).toBe(
+      'B300 (FP4)',
+    );
+  });
+
+  it('marks an overlay bar with ✕ and the branch name', () => {
+    const label = getResultLabel(
+      makeResult({ hwKey: 'b300', isOverlay: true, runIndex: 0, runLabel: 'feat/my-branch' }),
+      noConfig,
+    );
+    expect(label).toBe('B300 (✕ feat/my-branch)');
+  });
+
+  it('combines precision and branch inside a single paren group', () => {
+    const label = getResultLabel(
+      makeResult({
+        hwKey: 'b300',
+        precision: 'fp8',
+        isOverlay: true,
+        runIndex: 1,
+        runLabel: 'feat/my-branch',
+      }),
+      noConfig,
+    );
+    // One paren group only — twoRowYAxisLabels({split:'parens'}) splits on the
+    // last "(...)", so a second group would break the two-row y-axis label.
+    expect(label).toBe('B300 (FP8 · ✕ feat/my-branch)');
+    expect(splitLabel(label, 'parens')).toEqual(['B300', '(FP8 · ✕ feat/my-branch)']);
+  });
+
+  it('falls back to "unofficial" when the run has no branch name', () => {
+    expect(getResultLabel(makeResult({ hwKey: 'b300', isOverlay: true }), noConfig)).toBe(
+      'B300 (✕ unofficial)',
+    );
+  });
+});
+
+// =========================================================================
+// generateTooltipHTML() — overlay treatment
+// =========================================================================
+
+describe('generateTooltipHTML overlay treatment', () => {
+  const officialRunUrl = 'https://github.com/org/repo/actions/runs/999';
+  const overlayRunUrl = 'https://github.com/org/repo/actions/runs/111';
+
+  it('omits the unofficial header for official bars', () => {
+    const html = generateTooltipHTML(
+      makeResult({ hwKey: 'b300' }),
+      {},
+      'interactivity_to_throughput',
+      'throughput',
+      'total',
+      officialRunUrl,
+    );
+    expect(html).not.toContain('UNOFFICIAL RUN');
+    expect(html).toContain(officialRunUrl);
+  });
+
+  it('adds the unofficial header, branch, and run link for overlay bars', () => {
+    const html = generateTooltipHTML(
+      makeResult({
+        hwKey: 'b300',
+        isOverlay: true,
+        runIndex: 0,
+        runLabel: 'feat/my-branch',
+        runUrl: overlayRunUrl,
+      }),
+      {},
+      'interactivity_to_throughput',
+      'throughput',
+      'total',
+      officialRunUrl,
+    );
+    expect(html).toContain('UNOFFICIAL RUN');
+    expect(html).toContain('feat/my-branch');
+    // Links to the overlay's own workflow run, not the official one behind the
+    // DB data — the two are unrelated.
+    expect(html).toContain(overlayRunUrl);
+    expect(html).not.toContain(officialRunUrl);
+  });
+
+  it('localizes the overlay strings when Chinese strings are supplied', () => {
+    const html = generateTooltipHTML(
+      makeResult({
+        hwKey: 'b300',
+        isOverlay: true,
+        runIndex: 0,
+        runLabel: 'feat/my-branch',
+        runUrl: overlayRunUrl,
+      }),
+      {},
+      'interactivity_to_throughput',
+      'throughput',
+      'total',
+      undefined,
+      false,
+      {
+        unofficialRun: '非官方运行',
+        branch: '分支',
+        viewRun: '查看工作流运行',
+        clamped: '超出实测范围——显示最接近的数据点',
+      },
+    );
+    expect(html).toContain('非官方运行');
+    expect(html).toContain('分支');
+    expect(html).toContain('查看工作流运行');
+    expect(html).not.toContain('UNOFFICIAL RUN');
   });
 });

@@ -10,9 +10,6 @@ describe('Chart Section Tabs — E2E', () => {
   });
 
   it('updates the URL path when switching tabs', () => {
-    cy.get('[data-testid="tab-trigger-overview"]').click();
-    cy.url().should('include', '/overview');
-
     cy.get('[data-testid="tab-trigger-evaluation"]').click();
     cy.url().should('include', '/evaluation');
 
@@ -50,8 +47,8 @@ describe('First-load navigation', () => {
       onBeforeLoad(win) {
         win.localStorage.removeItem('inferencex-starred');
         win.localStorage.removeItem('inferencex-star-modal-dismissed');
-        win.localStorage.removeItem('inferencex-minimax-m3-modal-dismissed');
-        win.localStorage.removeItem('inferencex-minimax-m3-banner-dismissed');
+        win.localStorage.removeItem('inferencex-kimi-k3-modal-dismissed');
+        win.localStorage.removeItem('inferencex-kimi-k3-banner-dismissed');
       },
     });
 
@@ -60,9 +57,14 @@ describe('First-load navigation', () => {
     cy.get('body').should('not.have.attr', 'data-scroll-locked');
   });
 
-  it('navigates to articles with one click while the launch modal is visible', () => {
-    cy.get('[data-testid="nav-link-blog"]').click();
+  it('navigates to articles from the footer while the launch modal is visible', () => {
+    cy.get('[data-testid="footer-link-articles"]').scrollIntoView().click();
     cy.location('pathname').should('eq', '/blog');
+  });
+
+  it('navigates to overview from the top-level header link', () => {
+    cy.get('[data-testid="nav-link-overview"]').click();
+    cy.location('pathname').should('eq', '/overview');
   });
 
   it('navigates to dashboard from the header with one click', () => {
@@ -75,8 +77,16 @@ describe('First-load navigation', () => {
     cy.location('pathname').should('eq', '/compare');
   });
 
-  it('navigates to dashboard from the landing CTA with one click', () => {
-    cy.contains('a', 'Open Dashboard').click();
+  it('navigates to overview and the full dashboard from the landing CTAs', () => {
+    cy.get('[data-testid="landing-overview-link"]')
+      .should('have.attr', 'href', '/overview')
+      .click();
+    cy.location('pathname').should('eq', '/overview');
+
+    cy.visit('/');
+    cy.get('[data-testid="landing-full-dashboard-link"]')
+      .should('have.attr', 'href', '/inference')
+      .click();
     cy.location('pathname').should('eq', '/inference');
   });
 

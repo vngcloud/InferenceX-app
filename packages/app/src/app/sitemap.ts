@@ -22,6 +22,7 @@ const TABS = [
   'reliability',
   'gpu-specs',
   'gpu-metrics',
+  'collectivex',
 ] as const;
 
 type SitemapEntry = MetadataRoute.Sitemap[number];
@@ -94,6 +95,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.8,
     }),
     ...localizedPair('/datasets', { lastModified: now, changeFrequency: 'weekly', priority: 0.6 }),
+    ...localizedPair('/api', { lastModified: now, changeFrequency: 'monthly', priority: 0.7 }),
     ...localizedPair('/blog', { lastModified: now, changeFrequency: 'weekly', priority: 0.8 }),
     ...localizedPair('/glossary', {
       lastModified: now,

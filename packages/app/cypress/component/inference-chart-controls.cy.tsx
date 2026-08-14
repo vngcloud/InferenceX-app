@@ -37,7 +37,7 @@ describe('Inference ChartControls', () => {
   it('calls setSelectedYAxisMetric when a Y-axis option is chosen', () => {
     cy.get('[data-testid="yaxis-metric-selector"]').click();
     // "Throughput per GPU" is the label for y_tpPerGpu — pick a different one
-    cy.contains('[role="option"]', 'Output Token Throughput per GPU').click();
+    cy.contains('[role="option"]', 'Output Token Throughput per Chip').click();
     cy.get('@setSelectedYAxisMetric').should('have.been.calledOnce');
   });
 
@@ -49,7 +49,7 @@ describe('Inference ChartControls', () => {
 
   it('renders the GPU config multi-select', () => {
     // The GPU Config label should be present (hideGpuComparison defaults to false)
-    cy.contains('GPU Config').should('be.visible');
+    cy.contains('Chip Config').should('be.visible');
     cy.get('[data-testid="gpu-multiselect"]').should('be.visible');
   });
 });
@@ -65,6 +65,30 @@ describe('Inference ChartControls with GPUs selected', () => {
 
     cy.contains('Comparison Date Range').should('be.visible');
   });
+
+  it('flags the date range when nothing has been picked to compare against', () => {
+    mountWithProviders(<InferenceChartControls />, {
+      inference: {
+        selectedGPUs: ['h100'],
+        selectedDateRange: { startDate: '', endDate: '' },
+        selectedDates: [],
+      },
+    });
+
+    cy.contains('button', 'Select date range').should('have.class', 'animate-pulse');
+  });
+
+  it('leaves the date range unflagged when exact comparison entries are pinned', () => {
+    mountWithProviders(<InferenceChartControls />, {
+      inference: {
+        selectedGPUs: ['b200_sglang', 'b200_vllm'],
+        selectedDateRange: { startDate: '', endDate: '' },
+        selectedDates: ['2026-08-07', '2026-07-09~r27489075807'],
+      },
+    });
+
+    cy.contains('button', 'Select date range').should('not.have.class', 'animate-pulse');
+  });
 });
 
 describe('Inference ChartControls with hideGpuComparison', () => {
@@ -73,7 +97,7 @@ describe('Inference ChartControls with hideGpuComparison', () => {
       inference: {},
     });
 
-    cy.contains('GPU Config').should('not.exist');
+    cy.contains('Chip Config').should('not.exist');
     cy.get('[data-testid="gpu-multiselect"]').should('not.exist');
   });
 });

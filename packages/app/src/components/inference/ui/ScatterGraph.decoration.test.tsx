@@ -22,7 +22,9 @@ vi.mock('@/lib/d3-chart/chart-setup', { spy: true });
 vi.mock('@/lib/analytics', () => ({ track: vi.fn() }));
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'dark' }) }));
 // The legend is React-rendered (covered elsewhere) — keep the tree light.
-vi.mock('@/components/ui/chart-legend', () => ({ default: () => null }));
+vi.mock('@/components/ui/chart-legend', () => ({
+  default: ({ keyIndicators }: { keyIndicators?: React.ReactNode }) => keyIndicators ?? null,
+}));
 
 const inferenceState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock('@/components/inference/InferenceContext', () => ({
@@ -41,7 +43,7 @@ vi.mock('@/hooks/api/use-trace-availability', () => ({
   useTraceAvailability: () => ({ data: undefined }),
 }));
 
-import ScatterGraph from './ScatterGraph';
+import ScatterGraph, { pointLabelText } from './ScatterGraph';
 
 // ── Environment stubs ────────────────────────────────────────────────────────
 class MockResizeObserver {
@@ -73,6 +75,28 @@ const CHART_DEFINITION = { chartType: 'interactivity' } as unknown as ChartDefin
 
 const noop = () => {};
 
+describe('pointLabelText', () => {
+  it('keeps decode mode out of mixed agentic point labels', () => {
+    const standard = point('h100', 'fp8', 1, 1, 8);
+    standard.benchmark_type = 'agentic_traces';
+    standard.spec_decoding = 'none';
+    const mtp = { ...standard, spec_decoding: 'mtp' };
+    const eagle = { ...standard, spec_decoding: 'eagle' };
+
+    expect(pointLabelText(standard, false)).toBe('8\nC=16');
+    expect(pointLabelText(mtp, false)).toBe('8\nC=16');
+    expect(pointLabelText(eagle, false)).toBe('8\nC=16');
+  });
+
+  it('keeps fixed-sequence labels unchanged', () => {
+    const fixed = point('h100', 'fp8', 1, 1, 8);
+    fixed.benchmark_type = 'single_turn';
+    fixed.spec_decoding = 'mtp';
+
+    expect(pointLabelText(fixed, false)).toBe('8\nC=16');
+  });
+});
+
 function baseInferenceState() {
   return {
     activeHwTypes: new Set(['h100', 'b200']),
@@ -89,8 +113,8 @@ function baseInferenceState() {
       computeToggle(prev, item, allItems),
     selectedPrecisions: ['fp8'],
     selectedYAxisMetric: 'y',
-    quickFilters: { vendors: [], frameworks: [], disagg: [], spec: [] },
-    availableQuickFilters: { vendors: [], frameworks: [], disagg: [], spec: [] },
+    quickFilters: { vendors: [], frameworks: [], deployment: [], spec: [] },
+    availableQuickFilters: { vendors: [], frameworks: [], deployment: [], spec: [] },
     availableRuns: null,
     selectedRunId: '',
     hideNonOptimal: false,
@@ -115,9 +139,6 @@ function baseInferenceState() {
     setShowSpeedOverlay: noop,
     showMinecraftOverlay: false,
     setShowMinecraftOverlay: noop,
-    trackedConfigs: [],
-    addTrackedConfig: noop,
-    removeTrackedConfig: noop,
   };
 }
 
@@ -212,6 +233,50 @@ describe('ScatterGraph toggle decoration', () => {
     expect(dotGroups(container)).toHaveLength(POINTS.length);
     expect(container.querySelectorAll('.roofline-path').length).toBeGreaterThan(0);
     expect(rebuildCount()).toBeGreaterThan(0);
+    unmount();
+  });
+
+  it('keeps speculative decoding out of point decorations and shows only KV offload', () => {
+    const standard = {
+      ...point('h100', 'fp8', 1, 1, 1),
+      benchmark_type: 'agentic_traces',
+      spec_decoding: 'none',
+      offload_mode: 'off',
+    } as InferenceData;
+    const mtp = {
+      ...point('h100', 'fp8', 20, 200, 2),
+      benchmark_type: 'agentic_traces',
+      spec_decoding: 'mtp',
+      offload_mode: 'off',
+    } as InferenceData;
+    const mtpWithOffload = {
+      ...point('h100', 'fp8', 40, 400, 4),
+      benchmark_type: 'agentic_traces',
+      spec_decoding: 'mtp',
+      offload_mode: 'on',
+    } as InferenceData;
+    const fixedMtp = {
+      ...point('h100', 'fp8', 100, 1000, 8),
+      benchmark_type: 'single_turn',
+      spec_decoding: 'mtp',
+      offload_mode: 'off',
+    } as InferenceData;
+
+    inferenceState.current = {
+      ...baseInferenceState(),
+      selectedSequence: 'agentic-traces',
+    };
+    const { container, unmount } = mountChart({
+      data: [standard, mtp, mtpWithOffload, fixedMtp],
+    });
+    const groups = dotGroups(container);
+
+    expect(container.querySelector('.spec-decode-marker')).toBeNull();
+    expect(groups[1].querySelector('.offload-halo')).toBeNull();
+    expect(groups[2].querySelector('.offload-halo')).not.toBeNull();
+    expect(container.querySelector('[data-testid="spec-decode-marker-key"]')).toBeNull();
+    expect(container.querySelector('[data-testid="offload-halo-key"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="agentic-optimization-note"]')).not.toBeNull();
     unmount();
   });
 
@@ -377,6 +442,48 @@ describe('ScatterGraph toggle decoration', () => {
     unmount();
   });
 
+  it('keeps speculative decoding out of unofficial-run point decorations', () => {
+    const runUrl = 'https://github.com/o/r/actions/runs/123';
+    const overlayPoints = [
+      {
+        ...point('h100', 'fp8', 30, 300, 2),
+        benchmark_type: 'agentic_traces',
+        spec_decoding: 'mtp',
+        offload_mode: 'on',
+        run_url: runUrl,
+      } as InferenceData,
+      {
+        ...point('h100', 'fp8', 35, 350, 4),
+        benchmark_type: 'agentic_traces',
+        spec_decoding: 'none',
+        offload_mode: 'off',
+        run_url: runUrl,
+      } as InferenceData,
+    ];
+    overlayState.current = {
+      ...baseOverlayState(),
+      isUnofficialRun: true,
+      activeOverlayHwTypes: new Set(['h100']),
+      allOverlayHwTypes: new Set(['h100']),
+      runIndexByUrl: { [runUrl]: 0 },
+      unofficialRunInfos: [{ id: '123', branch: 'test-branch', url: runUrl }],
+    };
+
+    const { container, unmount } = mountChart({
+      overlayData: {
+        data: overlayPoints,
+        hardwareConfig: HARDWARE_CONFIG,
+      } as unknown as Parameters<typeof ScatterGraph>[0]['overlayData'],
+    });
+    const groups = [...container.querySelectorAll<SVGGElement>('.unofficial-overlay-pt')];
+
+    expect(groups[0].querySelector('.spec-decode-marker')).toBeNull();
+    expect(groups[0].querySelector('.offload-halo')).not.toBeNull();
+    expect(groups[1].querySelector('.spec-decode-marker')).toBeNull();
+    expect(groups[1].querySelector('.offload-halo')).toBeNull();
+    unmount();
+  });
+
   it('applies quick filters to unofficial-run overlay markers', () => {
     const overlayPoints = [point('h100', 'fp8', 30, 300, 2), point('h100', 'fp8', 35, 350, 4)].map(
       (p) => ({ ...p, run_url: 'https://github.com/o/r/actions/runs/123' }),
@@ -395,7 +502,7 @@ describe('ScatterGraph toggle decoration', () => {
     // exactly as it would the official points.
     inferenceState.current = {
       ...baseInferenceState(),
-      quickFilters: { vendors: ['AMD'], frameworks: [], disagg: [], spec: [] },
+      quickFilters: { vendors: ['AMD'], frameworks: [], deployment: [], spec: [] },
     };
     const { container, unmount } = mountChart({
       overlayData: {

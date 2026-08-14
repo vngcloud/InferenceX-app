@@ -16,7 +16,7 @@ vi.mock('./blob-cache', () => ({
   blobPurge: vi.fn(),
 }));
 
-import { cachedQuery, purgeAll, cachedJson } from './api-cache';
+import { cachedQuery, purgeAll, purgeCollectiveX, cachedJson } from './api-cache';
 import { revalidateTag, unstable_cache } from 'next/cache';
 import { blobGet, blobSet, blobPurge } from './blob-cache';
 
@@ -126,6 +126,39 @@ describe('cachedQuery', () => {
       expect(mockBlobSet).toHaveBeenCalledWith('bench:llama:2025-01-01', ['llama', '2025-01-01']);
     });
 
+    it('hashes oversized argument lists into a bounded deterministic key', async () => {
+      mockBlobGet.mockResolvedValue(null);
+      mockBlobSet.mockResolvedValue(undefined);
+      const fn = vi.fn((ids: number[]) => Promise.resolve(ids.length));
+      const wrapped = cachedQuery(fn, 'derived-agentic-metrics-v7', { blobOnly: true });
+      const ids = Array.from({ length: 200 }, (_, index) => 434_388 + index);
+
+      await wrapped(ids);
+      await wrapped(ids);
+
+      const firstKey = mockBlobGet.mock.calls[0]![0];
+      const secondKey = mockBlobGet.mock.calls[1]![0];
+      expect(firstKey).toBe(secondKey);
+      expect(firstKey).toMatch(/^derived-agentic-metrics-v7:sha256:[a-f0-9]{64}$/u);
+      expect(firstKey.length).toBeLessThan(128);
+      expect(mockBlobSet).toHaveBeenCalledWith(firstKey, 200);
+    });
+
+    it('serves a successful query result when the blob write fails', async () => {
+      mockBlobGet.mockResolvedValue(null);
+      mockBlobSet.mockRejectedValue(new Error('pathname is too long'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const fn = vi.fn((_ids: number[]) => Promise.resolve({ answer: 42 }));
+      const wrapped = cachedQuery(fn, 'derived-agentic-metrics-v7', { blobOnly: true });
+
+      await expect(wrapped([1, 2, 3])).resolves.toEqual({ answer: 42 });
+      expect(warn).toHaveBeenCalledWith(
+        '[blob cache] could not persist derived-agentic-metrics-v7; serving uncached result. pathname is too long',
+      );
+
+      warn.mockRestore();
+    });
+
     it('uses bare prefix when no args are passed', async () => {
       mockBlobGet.mockResolvedValue('cached');
       const fn = vi.fn(() => Promise.resolve('fresh'));
@@ -155,6 +188,14 @@ describe('purgeAll', () => {
     expect(mockBlobPurge).toHaveBeenCalled();
   });
 
+  it('drops the CollectiveX tag too — the blob purge removed its entries', async () => {
+    mockBlobPurge.mockResolvedValue(1);
+
+    await purgeAll();
+
+    expect(mockRevalidateTag).toHaveBeenCalledWith('collectivex', { expire: 0 });
+  });
+
   it('returns 0 when no blobs were deleted', async () => {
     mockBlobPurge.mockResolvedValue(0);
 
@@ -172,6 +213,16 @@ describe('purgeAll', () => {
   });
 });
 
+describe('purgeCollectiveX', () => {
+  it('drops only the collectivex tag — no blobs belong to that scope', () => {
+    purgeCollectiveX();
+
+    expect(mockBlobPurge).not.toHaveBeenCalled();
+    expect(mockRevalidateTag).toHaveBeenCalledWith('collectivex', { expire: 0 });
+    expect(mockRevalidateTag).not.toHaveBeenCalledWith('db', { expire: 0 });
+  });
+});
+
 describe('cachedJson', () => {
   it('sets Cache-Control with max-age=0 and 1 day s-maxage', () => {
     const res = cachedJson({ ok: true });
@@ -181,6 +232,20 @@ describe('cachedJson', () => {
   it('sets Vercel-Cache-Tag to db', () => {
     const res = cachedJson({ ok: true });
     expect(res.headers.get('Vercel-Cache-Tag')).toBe('db');
+  });
+
+  it('carries a custom cache tag when one is passed', () => {
+    const res = cachedJson({ ok: true }, { tag: 'collectivex' });
+    expect(res.headers.get('Vercel-Cache-Tag')).toBe('collectivex');
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=0, s-maxage=86400');
+  });
+
+  it('honors a custom Cache-Control for lazily-refreshed routes', () => {
+    const res = cachedJson(
+      { ok: true },
+      { tag: 'collectivex', cacheControl: 'public, max-age=0, s-maxage=60' },
+    );
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=0, s-maxage=60');
   });
 
   it('sets an environment-scoped Vercel-Cache-Tag', () => {
