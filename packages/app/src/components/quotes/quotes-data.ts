@@ -257,6 +257,26 @@ export const QUOTES: Quote[] = [
     link: 'https://x.com/sriramk/status/2048824255702262135',
   },
   {
+    text: 'Premium Inference is a new category, driven by agents that need fast, interactive tokens with the best per-chip throughput on intelligent frontier models. InferenceX™ is one of the few benchmarks measuring this chip performance in the open, across every major accelerator. We look forward to participating in the official InferenceX with SN50 and showing our premium decode performance on frontier open models tracked transparently.',
+    textZh:
+      '高端推理（Premium Inference）正在成为一个全新品类，其驱动力来自智能体：它们需要快速、可交互的 token，并要求在前沿智能模型上实现最佳的单芯片吞吐量。InferenceX™ 是少数在所有主流加速器上公开衡量这类芯片性能的基准测试之一。我们期待以 SN50 参与官方 InferenceX，在透明追踪之下展示我们在前沿开源模型上的高端解码性能。',
+    name: 'Rodrigo Liang',
+    title: 'Co-Founder & CEO, SambaNova',
+    org: 'SambaNova',
+    logo: 'sambanova.webp',
+    link: 'https://www.linkedin.com/in/rodrigo-liang/',
+  },
+  {
+    text: "TileRT's ultra-low-latency inference requires abolishing the kernel as the unit of execution, not just launching kernels faster. InferenceX™'s open, reproducible, and continuously updated benchmarks gave us fair & neutral stage to verify what a persistent Engine Kernel can deliver — 500 tokens/s/user on frontier open models from a single B200 node. We look forward to continuing this collaboration as InferenceX expands into long context Agentic benchmarks.",
+    textZh:
+      'TileRT 的超低延迟推理要求彻底废除以 kernel 作为执行单元的范式，而不只是把 kernel 启动得更快。InferenceX™ 开放、可复现且持续更新的基准测试为我们提供了一个公平、中立的舞台，用以验证常驻式 Engine Kernel 的真实能力——在单个 B200 节点上，于前沿开源模型达到 500 tokens/s/user。随着 InferenceX 扩展到长上下文 Agentic 基准测试，我们期待继续这一合作。',
+    name: 'TileRT Team',
+    title: '',
+    org: 'TileRT',
+    logo: 'tilert.webp',
+    link: 'https://www.tilert.ai/',
+  },
+  {
     text: 'Open collaboration is driving the next era of AI innovation. The open-source InferenceMAX benchmark gives the community transparent, nightly results that inspire trust and accelerate progress. It highlights the competitive TCO performance of our AMD Instinct MI300, MI325X, and MI355X GPUs across diverse workloads, underscoring the strength of our platform and our commitment to giving developers real-time visibility into our software progress.',
     textZh:
       '开放协作正在推动 AI 创新的下一个时代。开源的 InferenceMAX 基准测试为社区提供透明的每夜结果，激发信任并加速进步。它突出了我们 AMD Instinct MI300、MI325X 和 MI355X GPU 在多样化工作负载中极具竞争力的 TCO 表现，彰显了我们平台的实力以及我们致力于让开发者实时了解软件进展的承诺。',
@@ -498,24 +518,28 @@ export const CAROUSEL_ORGS = [
   'Microsoft',
   'Meta Superintelligence Labs',
   'Oracle',
-  'Together AI',
   'vLLM',
   'GPU Mode',
   'PyTorch Foundation',
   'CoreWeave',
-  'Nebius',
   'TensorWave',
   'SGLang',
   'WEKA',
   'Stanford',
   'Hugging Face',
   'Lambda',
-  'UC San Diego',
   'Red Hat',
-  'White House',
+  'SambaNova',
+  'TileRT',
 ] as const;
 
-/** Display label overrides for carousel orgs. */
+/**
+ * Display label overrides for carousel orgs.
+ *
+ * `Together AI` is not currently in CAROUSEL_ORGS, so its override is inert —
+ * it is kept so the card reads "Tri Dao" rather than "Together AI" if the org
+ * is added back to the carousel.
+ */
 export const CAROUSEL_LABELS: Record<string, string> = {
   'Together AI': 'Tri Dao',
   'PyTorch Foundation': 'PyTorch',

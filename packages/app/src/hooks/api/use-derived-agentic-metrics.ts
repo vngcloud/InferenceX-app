@@ -2,16 +2,11 @@ import { bulkIdsFetcher, useBulkIdsQuery } from './benchmark-id-query';
 
 export interface DerivedAgenticMetric {
   id: number;
-  /** Mean across sessions of e2e time (Σ per-turn request_latency) rescaled
-   *  by mean_load / session_load. Null when the JSONL had no usable records. */
-  normalized_session_time_s: number | null;
-  /** P90 of per-turn ISL/TTFT across every turn in every session.
-   *  Null when no prefill rates could be computed. */
-  p90_prefill_tps_per_user: number | null;
-  /** P75 normalized per-request E2E at a fixed 400-token output length. */
-  p75_normalized_e2e_400_s: number | null;
-  /** P90 normalized per-request E2E at a fixed 400-token output length. */
-  p90_normalized_e2e_400_s: number | null;
+  /** Slow-tail P75 E2E Normalized Interactivity in tok/s/user — 1 / p75(per-request E2EL/OSL).
+   *  Null when the JSONL had no usable records. */
+  p75_e2e_norm_intvty: number | null;
+  /** Slow-tail P90 E2E Normalized Interactivity in tok/s/user — 1 / p90(per-request E2EL/OSL). */
+  p90_e2e_norm_intvty: number | null;
 }
 
 export type DerivedAgenticMetricMap = Record<number, DerivedAgenticMetric>;
@@ -43,9 +38,9 @@ async function fetchDerivedAgenticMetrics(
 }
 
 /**
- * Fetch per-id derived agentic metrics (session time + p90 prefill TPS/user)
+ * Fetch per-id derived agentic metrics (slow-tail E2E Normalized Interactivity tok/s/user)
  * computed live from the stored aiperf profile_export.jsonl. Used to drive
- * the "Session Time" and "Prefill TPS/user" chart variants.
+ * the "E2E Normalized Interactivity" chart variant.
  *
  * Ids without a trace_replay blob (older or non-aiperf agentic runs) are
  * silently omitted from the response.

@@ -3,6 +3,12 @@
  * Each function is a thin fetch wrapper returning typed data.
  */
 
+import {
+  COLLECTIVEX_DEFAULT_VERSION,
+  type CollectiveXDataset,
+  type CollectiveXRunSummary,
+  type CollectiveXVersion,
+} from '@/components/collectivex/types';
 import type { WorkerPower } from '@/components/inference/types';
 
 import type { SubmissionsResponse } from './submissions-types';
@@ -46,6 +52,9 @@ export interface BenchmarkRow {
    */
   workers?: WorkerPower[];
   date: string;
+  /** Internal workflow identity used to keep merged agentic curves within one run. */
+  workflow_run_id?: number;
+  run_started_at?: string | null;
   run_url: string | null;
 }
 
@@ -154,12 +163,17 @@ export function fetchBenchmarks(
   runId?: string,
   /** When true with a runId, fetch exactly that run's results (GPU comparison). */
   exactRun?: boolean,
+  view?: { type: 'calculator'; sequence: string },
 ) {
   const params = new URLSearchParams({ model });
   if (date) params.set('date', date);
   if (exact) params.set('exact', 'true');
   if (runId) params.set('runId', runId);
   if (exactRun) params.set('exactRun', 'true');
+  if (view) {
+    params.set('view', view.type);
+    params.set('sequence', view.sequence);
+  }
   return fetchJson<BenchmarkRow[]>(`/api/v1/benchmarks?${params}`, signal);
 }
 
@@ -168,16 +182,21 @@ export function fetchBenchmarkHistory(
   isl: number,
   osl: number,
   signal?: AbortSignal,
+  benchmarkType?: 'agentic_traces',
 ) {
   const params = new URLSearchParams({ model, isl: String(isl), osl: String(osl) });
+  if (benchmarkType) params.set('benchmarkType', benchmarkType);
   return fetchJson<BenchmarkRow[]>(`/api/v1/benchmarks/history?${params}`, signal);
 }
 
-export function fetchWorkflowInfo(date: string, signal?: AbortSignal) {
-  return fetchJson<WorkflowInfoResponse>(
-    `/api/v1/workflow-info?date=${encodeURIComponent(date)}`,
-    signal,
-  );
+export function fetchWorkflowInfo(
+  date: string,
+  signal?: AbortSignal,
+  benchmarkType?: 'agentic_traces',
+) {
+  const params = new URLSearchParams({ date });
+  if (benchmarkType) params.set('benchmarkType', benchmarkType);
+  return fetchJson<WorkflowInfoResponse>(`/api/v1/workflow-info?${params}`, signal);
 }
 
 export interface AvailabilityRow {
@@ -302,6 +321,46 @@ export function fetchEvalSamplesLive(
 
 export function fetchSubmissions(signal?: AbortSignal) {
   return fetchJson<SubmissionsResponse>('/api/v1/submissions', signal);
+}
+
+/** Stored sweep runs plus whether lazy discovery has reached the end of history. */
+export function fetchCollectiveXRunList(
+  version: CollectiveXVersion = COLLECTIVEX_DEFAULT_VERSION,
+  signal?: AbortSignal,
+) {
+  return fetchJson<{
+    version: CollectiveXVersion;
+    runs: CollectiveXRunSummary[];
+    discovery_complete: boolean;
+  }>(`/api/v1/collectivex/runs?version=${version}`, signal);
+}
+
+/** Resolve a specific ingested sweep run's neutral view dataset by run_id. */
+export function fetchCollectiveXRun(
+  version: CollectiveXVersion,
+  runId: string,
+  signal?: AbortSignal,
+) {
+  return fetchJson<CollectiveXDataset>(
+    `/api/v1/collectivex/runs/${runId}?version=${version}`,
+    signal,
+  );
+}
+
+/**
+ * Admin deletion of an ingested run. Requires the dedicated CollectiveX admin
+ * Bearer secret (COLLECTIVEX_ADMIN_SECRET — deliberately not the CI-held
+ * INVALIDATE_SECRET); resolves false on 401 so callers can clear a stale
+ * stored token, throws on other failures.
+ */
+export async function deleteCollectiveXRun(runId: string, token: string): Promise<boolean> {
+  const response = await fetch(`/api/v1/collectivex/runs/${runId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.status === 401) return false;
+  if (!response.ok) throw new Error(`CollectiveX delete failed (${response.status}).`);
+  return true;
 }
 
 export interface FeedbackListRow {

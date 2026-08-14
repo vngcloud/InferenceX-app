@@ -5,6 +5,7 @@ import {
   normalizeFramework,
   normalizeSpecMethod,
   parseBool,
+  parseOptionalBool,
   parseNum,
   parseInt2,
   parseIslOsl,
@@ -80,6 +81,11 @@ describe('hwToGpuKey', () => {
 
   it('strips -cw suffix', () => {
     expect(hwToGpuKey('gb300-cw')).toBe('gb300');
+  });
+
+  it('strips -lat suffix for RTX PRO 6000 (latency-optimized PCIe SKU)', () => {
+    expect(hwToGpuKey('rtx6000pro-lat')).toBe('rtx6000pro');
+    expect(hwToGpuKey('rtx6000pro')).toBe('rtx6000pro');
   });
 
   it('strips runner index suffix before other suffixes', () => {
@@ -189,6 +195,16 @@ describe('resolveModelKey', () => {
     expect(resolveModelKey({ model: 'zai-org/GLM-5.2-FP8' })).toBe('glm5.2');
   });
 
+  it('resolves Kimi-K3 identifiers to the kimik3 key, not the K2 buckets', () => {
+    // K3 is a distinct architecture, so it must land in its own DB bucket.
+    // AMD AgentX sweeps emit the bare `kimik3` prefix; the MXFP4 checkpoint is
+    // published under the plain moonshotai path. GitHub Actions run 30298924344.
+    expect(resolveModelKey({ infmax_model_prefix: 'kimik3' })).toBe('kimik3');
+    expect(resolveModelKey({ infmax_model_prefix: 'kimik3-fp4' })).toBe('kimik3');
+    expect(resolveModelKey({ model_prefix: 'kimik3' })).toBe('kimik3');
+    expect(resolveModelKey({ model: 'moonshotai/Kimi-K3' })).toBe('kimik3');
+  });
+
   it('resolves point-release variants to their own DB key (faithful to submitted data)', () => {
     expect(resolveModelKey({ infmax_model_prefix: 'glm5.1' })).toBe('glm5.1');
     expect(resolveModelKey({ infmax_model_prefix: 'glm5.2' })).toBe('glm5.2');
@@ -238,8 +254,12 @@ describe('normalizeFramework', () => {
     });
   });
 
-  it('renames dynamo-trtllm to dynamo-trt and forces disagg=true (framework implies it)', () => {
+  it('renames dynamo-trtllm while preserving an explicit non-disagg value', () => {
     expect(normalizeFramework('dynamo-trtllm', false)).toEqual({
+      framework: 'dynamo-trt',
+      disagg: false,
+    });
+    expect(normalizeFramework('dynamo-trtllm', undefined)).toEqual({
       framework: 'dynamo-trt',
       disagg: true,
     });
@@ -261,13 +281,17 @@ describe('normalizeFramework', () => {
     });
   });
 
-  it('forces disagg=true for dynamo-* canonicals regardless of disaggField', () => {
+  it('honors explicit Dynamo disagg values and only infers true when absent', () => {
     expect(normalizeFramework('dynamo-trt', false)).toEqual({
       framework: 'dynamo-trt',
-      disagg: true,
+      disagg: false,
     });
     expect(normalizeFramework('dynamo-sglang', 'false')).toEqual({
       framework: 'dynamo-sglang',
+      disagg: false,
+    });
+    expect(normalizeFramework('dynamo-vllm', true)).toEqual({
+      framework: 'dynamo-vllm',
       disagg: true,
     });
     expect(normalizeFramework('dynamo-vllm', null)).toEqual({
@@ -329,6 +353,22 @@ describe('parseBool', () => {
     expect(parseBool(1)).toBe(false);
     expect(parseBool('1')).toBe(false);
     expect(parseBool('TRUE')).toBe(false);
+  });
+});
+
+describe('parseOptionalBool', () => {
+  it('preserves explicit true and false values', () => {
+    expect(parseOptionalBool(true)).toBe(true);
+    expect(parseOptionalBool('True')).toBe(true);
+    expect(parseOptionalBool(false)).toBe(false);
+    expect(parseOptionalBool('False')).toBe(false);
+  });
+
+  it('returns undefined for absent or unrecognized values', () => {
+    expect(parseOptionalBool(null)).toBeUndefined();
+    expect(parseOptionalBool(undefined)).toBeUndefined();
+    expect(parseOptionalBool('TRUE')).toBeUndefined();
+    expect(parseOptionalBool(1)).toBeUndefined();
   });
 });
 

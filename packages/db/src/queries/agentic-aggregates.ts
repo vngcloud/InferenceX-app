@@ -22,6 +22,7 @@ import { parser } from 'stream-json';
 import { pick } from 'stream-json/filters/pick.js';
 import { streamObject } from 'stream-json/streamers/stream-object.js';
 
+import { gunzipJsonWithinLimit } from '../etl/gzip-json-stream';
 import type { DbClient } from '../connection.js';
 import { computeDerivedFromBlob } from './derived-agentic-metrics';
 import {
@@ -315,11 +316,9 @@ export async function getAgenticAggregates(
           const oslPct = percentilesOf(osl);
           result[id].isl = islPct;
           result[id].osl = oslPct;
-          // Recompute the profile-derived fields too (same jsonl, no extra
-          // read) so the self-healed bundle is a faithful full recompute — not
-          // a carry-forward of stale derived numbers stamped with a new
-          // version. Server-derived fields are filled in Pass 2 (or stay null
-          // when the server blob is absent, which is the correct complete value).
+          // Recompute every profile-derived field from this same JSONL so the
+          // self-healed bundle is complete at the new version. Server-derived
+          // fields are filled in Pass 2 (or stay null without a server blob).
           const derived = computeDerivedFromBlob(jsonl);
           pendingById.set(id, {
             traceReplayId: Number(row.trace_replay_id),
@@ -329,9 +328,7 @@ export async function getAgenticAggregates(
               osl: oslPct,
               kvCacheUtil: null,
               prefixCacheHitRate: null,
-              normalizedSessionTimeS: derived.normalized_session_time_s,
-              p90PrefillTpsPerUser: derived.p90_prefill_tps_per_user,
-              normalizedE2e400: derived.normalized_e2e_400,
+              e2elPerOsl: derived.e2el_per_osl,
             },
           });
         } catch {
@@ -360,21 +357,13 @@ export async function getAgenticAggregates(
       if (!row.server_blob) continue;
       let parsed: { kvCacheUtil: number[]; prefixCacheHitRate: number[] } | null = null;
       try {
-        const json = gunzipSync(row.server_blob).toString('utf8');
-        parsed = extractServerMetricSamples(json);
-      } catch (error) {
-        // ERR_STRING_TOO_LONG (>512 MB) hits on high-conc TP+EP rows whose
-        // server_metrics_json decompresses past Node's max string length.
-        // Stream-parse to extract just the metric subtrees we care about.
-        const code = error && (error as NodeJS.ErrnoException).code;
-        const msg = error instanceof Error ? error.message : String(error);
-        if (code === 'ERR_STRING_TOO_LONG' || msg.includes('longer than 0x1fffffe8')) {
-          try {
-            parsed = await streamExtractServerMetricSamples(row.server_blob);
-          } catch {
-            // stream fallback failed too — leave nulls
-          }
-        }
+        const json = gunzipJsonWithinLimit(row.server_blob);
+        parsed =
+          json === null
+            ? await streamExtractServerMetricSamples(row.server_blob)
+            : extractServerMetricSamples(json);
+      } catch {
+        // malformed blob or failed stream fallback — leave nulls
       }
       if (parsed) {
         const kvPct = percentilesOf(parsed.kvCacheUtil);
@@ -411,8 +400,6 @@ interface AggregateStatsRow {
   osl: MetricPercentiles | null;
   kvCacheUtil: MetricPercentiles | null;
   prefixCacheHitRate: MetricPercentiles | null;
-  normalizedSessionTimeS: number | null;
-  p90PrefillTpsPerUser: number | null;
 }
 
 /**
@@ -426,9 +413,7 @@ interface FullAggregateStats {
   osl: MetricPercentiles | null;
   kvCacheUtil: MetricPercentiles | null;
   prefixCacheHitRate: MetricPercentiles | null;
-  normalizedSessionTimeS: number | null;
-  p90PrefillTpsPerUser: number | null;
-  normalizedE2e400: MetricPercentiles | null;
+  e2elPerOsl: MetricPercentiles | null;
 }
 
 function blankAggregate(id: number): AgenticAggregate {

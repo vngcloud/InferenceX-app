@@ -64,7 +64,7 @@ function tooltipConfig(overrides: Partial<TooltipConfig> = {}): TooltipConfig {
     data: pt(),
     isPinned: false,
     xLabel: 'E2E Latency (ms)',
-    yLabel: 'Throughput per GPU',
+    yLabel: 'Throughput per Chip',
     selectedYAxisMetric: 'y_tpPerGpu',
     hardwareConfig: mockHardwareConfig,
     ...overrides,
@@ -189,7 +189,7 @@ describe('generateTooltipContent', () => {
     const html = generateTooltipContent(tooltipConfig());
     expect(html).toContain('2025-06-15');
     expect(html).toContain('E2E Latency (ms)');
-    expect(html).toContain('Throughput per GPU');
+    expect(html).toContain('Throughput per Chip');
   });
 
   it('includes image field when present', () => {
@@ -217,7 +217,7 @@ describe('generateTooltipContent', () => {
         data: pt({ outputTputPerGpu: { y: 500, roof: false } }),
       }),
     );
-    expect(html).toContain('Output Token Throughput per GPU');
+    expect(html).toContain('Output Token Throughput per Chip');
   });
 
   it('omits output throughput when metric is not y_tpPerGpu', () => {
@@ -227,7 +227,7 @@ describe('generateTooltipContent', () => {
         data: pt({ outputTputPerGpu: { y: 500, roof: false } }),
       }),
     );
-    expect(html).not.toContain('Output Token Throughput per GPU');
+    expect(html).not.toContain('Output Token Throughput per Chip');
   });
 
   it('includes input throughput when metric is y_tpPerGpu and field exists', () => {
@@ -237,7 +237,7 @@ describe('generateTooltipContent', () => {
         data: pt({ inputTputPerGpu: { y: 200, roof: false } }),
       }),
     );
-    expect(html).toContain('Input Token Throughput per GPU');
+    expect(html).toContain('Input Token Throughput per Chip');
   });
 
   it('includes precision in uppercase', () => {
@@ -314,7 +314,7 @@ describe('generateTooltipContent', () => {
       }),
     );
     expect(html).toContain('<strong>KV Transfer Engine:</strong> NIXL');
-    expect(html).toContain('<strong>GPU Cache Hit Rate:</strong> 87.5%');
+    expect(html).toContain('<strong>Chip Cache Hit Rate:</strong> 87.5%');
   });
 
   it('hides stale CPU cache hits when offload is disabled', () => {
@@ -331,7 +331,7 @@ describe('generateTooltipContent', () => {
     );
 
     expect(html).not.toContain('CPU Cache Hit Rate');
-    expect(html).toContain('<strong>GPU Cache Hit Rate:</strong> 80.0%');
+    expect(html).toContain('<strong>Chip Cache Hit Rate:</strong> 80.0%');
     expect(html).toContain('<strong>Theoretical Cache Hit Rate:</strong> 90.0%');
   });
 
@@ -401,28 +401,10 @@ describe('generateTooltipContent', () => {
     expect(html).toContain('user-select: none');
   });
 
-  it('shows "Track Over Time" button when pinned and not tracked', () => {
-    const html = generateTooltipContent(tooltipConfig({ isPinned: true, isTracked: false }));
-    expect(html).toContain('data-action="track-over-time"');
-    expect(html).toContain('Track Over Time');
-    expect(html).not.toContain('Untrack Over Time');
-  });
-
-  it('shows "Untrack Over Time" button when pinned and already tracked', () => {
-    const html = generateTooltipContent(tooltipConfig({ isPinned: true, isTracked: true }));
-    expect(html).toContain('data-action="track-over-time"');
-    expect(html).toContain('Untrack Over Time');
-  });
-
-  it('does not show Track Over Time button when not pinned', () => {
-    const html = generateTooltipContent(tooltipConfig({ isPinned: false }));
+  it('does not include the removed Track Over Time action when pinned', () => {
+    const html = generateTooltipContent(tooltipConfig({ isPinned: true }));
     expect(html).not.toContain('data-action="track-over-time"');
     expect(html).not.toContain('Track Over Time');
-  });
-
-  it('defaults isTracked to false when not provided', () => {
-    const html = generateTooltipContent(tooltipConfig({ isPinned: true }));
-    expect(html).toContain('Track Over Time');
     expect(html).not.toContain('Untrack Over Time');
   });
 });
@@ -491,6 +473,23 @@ describe('generateOverlayTooltipContent', () => {
     expect(html).toContain('<strong>CPU Cache Hit Rate:</strong> 42.0%');
   });
 
+  it('shows point-level speculative decoding for mixed agentic overlays', () => {
+    const mtp = generateOverlayTooltipContent(
+      overlayConfig({
+        data: pt({ benchmark_type: 'agentic_traces', spec_decoding: 'mtp' }),
+      }),
+    );
+    const standardZh = generateOverlayTooltipContent(
+      overlayConfig({
+        data: pt({ benchmark_type: 'agentic_traces', spec_decoding: 'none' }),
+        locale: 'zh',
+      }),
+    );
+
+    expect(mtp).toContain('<strong>Speculative Decoding:</strong> MTP');
+    expect(standardZh).toContain('<strong>投机解码:</strong> 关闭');
+  });
+
   it('hides stale CPU cache hits for unofficial overlays without offload', () => {
     const html = generateOverlayTooltipContent(
       overlayConfig({
@@ -512,16 +511,16 @@ describe('generateOverlayTooltipContent', () => {
 // generateGPUGraphTooltipContent
 // ===========================================================================
 describe('generateGPUGraphTooltipContent', () => {
-  it('includes "GPU Config:" label', () => {
+  it('includes "Chip Config:" label', () => {
     const html = generateGPUGraphTooltipContent(tooltipConfig());
-    expect(html).toContain('GPU Config:');
+    expect(html).toContain('Chip Config:');
   });
 
   it('includes date and axis values', () => {
     const html = generateGPUGraphTooltipContent(tooltipConfig());
     expect(html).toContain('2025-06-15');
     expect(html).toContain('E2E Latency (ms)');
-    expect(html).toContain('Throughput per GPU');
+    expect(html).toContain('Throughput per Chip');
   });
 
   it('shows input/output throughput when metric is y_tpPerGpu', () => {
@@ -534,8 +533,8 @@ describe('generateGPUGraphTooltipContent', () => {
         }),
       }),
     );
-    expect(html).toContain('Input Token Throughput per GPU');
-    expect(html).toContain('Output Token Throughput per GPU');
+    expect(html).toContain('Input Token Throughput per Chip');
+    expect(html).toContain('Output Token Throughput per Chip');
   });
 
   it('omits throughput fields when metric is not y_tpPerGpu', () => {
@@ -548,8 +547,8 @@ describe('generateGPUGraphTooltipContent', () => {
         }),
       }),
     );
-    expect(html).not.toContain('Input Token Throughput per GPU');
-    expect(html).not.toContain('Output Token Throughput per GPU');
+    expect(html).not.toContain('Input Token Throughput per Chip');
+    expect(html).not.toContain('Output Token Throughput per Chip');
   });
 
   it('includes precision in uppercase', () => {

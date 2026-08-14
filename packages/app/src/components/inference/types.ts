@@ -80,6 +80,8 @@ export interface WorkerPower {
  * @property {number} p99_e2el - 99th percentile of End-to-End Latency.
  */
 export interface AggDataEntry {
+  /** Metric keys present in the source row before missing values are normalized to zero. */
+  rawMetricKeys?: string[];
   /** Stable per-point id from benchmark_results — for trace_replay lookups. */
   id?: number;
   hw: string;
@@ -168,14 +170,25 @@ export interface AggDataEntry {
   num_decode_gpu: number;
   spec_decoding: string;
   ep?: number;
+  /**
+   * Pipeline parallelism (decode-side, mirroring how `ep` mirrors decode_ep).
+   * Sourced from the metrics JSONB (`decode_pp`) — the configs table has no
+   * pp columns — so it's only present on rows whose artifacts emitted it
+   * (2026-07+). Undefined ⇒ treated as pp=1 everywhere (no label suffix).
+   */
+  pp?: number;
   dp_attention?: boolean | string;
   is_multinode?: boolean;
   prefill_tp?: number;
   prefill_ep?: number;
+  /** Prefill-side pipeline parallelism — see {@link AggDataEntry.pp}. */
+  prefill_pp?: number;
   prefill_dp_attention?: boolean | string;
   prefill_num_workers?: number;
   decode_tp?: number;
   decode_ep?: number;
+  /** Decode-side pipeline parallelism — see {@link AggDataEntry.pp}. */
+  decode_pp?: number;
   decode_dp_attention?: boolean | string;
   decode_num_workers?: number;
   image?: string;
@@ -245,16 +258,14 @@ export interface InferenceData extends Partial<Omit<AggDataEntry, AggDataConflic
   y: number;
   hidden?: boolean;
   /**
-   * Whether this point sits on the (e2e_latency, y-metric) Pareto frontier.
-   * Set by useChartData when `selectedXAxisMode !== 'e2e'`. The TTFT /
-   * interactivity / session-time / prefill-tps charts use this flag to
-   * restrict their roofline computation to e2e-Pareto winners — vendors
-   * can't benchmark-hack TTFT by tanking decode (or vice versa) and still
-   * appear on the frontier line — while keeping every point visible as
-   * scatter so the user can see where dominated configs actually sit.
-   * Undefined when the chart is in e2e mode (no remapping needed).
+   * Whether this point sits on the canonical
+   * (E2E Normalized Interactivity, y-metric) Pareto frontier. Every agentic
+   * x-axis reuses this exact winner set, so E2E latency, Interactivity, and
+   * TTFT cannot introduce a locally-optimal point or remove a north-star
+   * winner. Undefined for fixed-sequence data and y metrics without a
+   * declared Pareto direction.
    */
-  isOnE2eFrontier?: boolean;
+  isOnNormalizedInteractivityFrontier?: boolean;
 
   // Overridden fields with narrower types
   hwKey: string;
@@ -304,6 +315,18 @@ export interface InferenceData extends Partial<Omit<AggDataEntry, AggDataConflic
   measuredJPerOutputToken?: { y: number; roof: boolean };
   measuredJPerTotalToken?: { y: number; roof: boolean };
   measuredJPerInputToken?: { y: number; roof: boolean };
+}
+
+/** Why a chart-ready point was intentionally excluded from the visible plot. */
+export type ChartClipReason = 'cost' | 'latency';
+
+/**
+ * A filtered point retained only so the chart can explain that its Pareto
+ * curve continues beyond an intentional display limit.
+ */
+export interface ClippedInferenceData {
+  point: InferenceData;
+  reasons: ChartClipReason[];
 }
 
 /**
@@ -483,6 +506,7 @@ export interface RenderableGraph {
   sequence: string;
   chartDefinition: ChartDefinition;
   data: InferenceData[];
+  clippedData?: ClippedInferenceData[];
 }
 /**
  * Props for the {@link ScatterGraph} component.
@@ -499,6 +523,8 @@ export interface RenderableGraph {
 export interface OverlayData {
   /** The data points to overlay */
   data: InferenceData[];
+  /** Overlay points hidden by the same display limits as official data. */
+  clippedData?: ClippedInferenceData[];
   /** Hardware configuration for the overlay data (may have different hardware types) */
   hardwareConfig: HardwareConfig;
   /** Fallback label — branch of the first loaded run. Used when {@link getRunForRow} is absent
@@ -518,6 +544,7 @@ export interface ScatterGraphProps {
   chartId: string;
   modelLabel: string;
   data: InferenceData[];
+  clippedData?: ClippedInferenceData[];
   xLabel: string;
   yLabel: string;
   chartDefinition: ChartDefinition;
@@ -663,13 +690,13 @@ export interface RunInfo {
   changelog?: ChangelogMetadata;
 }
 
-/** Aggregation mode for the quick filters: aggregated vs disaggregated serving. */
-export type DisaggMode = 'agg' | 'disagg';
+/** Deployment mode for quick filters. Multinode aggregate is not disaggregated serving. */
+export type DeploymentMode = 'single-node' | 'multi-node' | 'disagg';
 /** Speculative-decoding mode for the quick filters: MTP vs standard token prediction. */
 export type SpecMode = 'mtp' | 'stp';
 
 /**
- * Coarse vendor / framework / aggregation / spec-decoding filters applied to the
+ * Coarse vendor / framework / deployment / spec-decoding filters applied to the
  * chart point set. Empty array within a category = no constraint. Framework
  * values are engine-family keys ('vllm' | 'sglang' | 'trt' | 'atom'). See
  * `utils/quickFilters.ts`.
@@ -677,14 +704,14 @@ export type SpecMode = 'mtp' | 'stp';
 export interface QuickFilters {
   vendors: string[];
   frameworks: string[];
-  disagg: DisaggMode[];
+  deployment: DeploymentMode[];
   spec: SpecMode[];
 }
 
 /**
  * The quick-filter values that actually have data for the current model /
  * sequence / precision. Drives which pills are shown (frameworks) or disabled
- * (vendor / agg / spec). Same shape as {@link QuickFilters}.
+ * (vendor / deployment / spec). Same shape as {@link QuickFilters}.
  */
 export type AvailableQuickFilters = QuickFilters;
 
@@ -716,6 +743,9 @@ export interface InferenceChartContextType {
   toggleHwType: (hw: string) => void;
   removeHwType: (hw: string) => void;
   selectAllHwTypes: () => void;
+  /** Whether clean dashboard loads automatically keep the best configuration per physical SKU. */
+  bestPerSku: boolean;
+  setBestPerSku: (enabled: boolean) => void;
   /** Resolve automatic official + `overlay:` hardware selections under the active scope rule. */
   resolveComparisonSelection: (
     proposed: Set<string>,
@@ -752,30 +782,23 @@ export interface InferenceChartContextType {
    * at a time, picked by the big buttons above the chart.
    * - 'ttft'          → e2e chartType with x-axis forced to p90_ttft
    * - 'e2e'           → e2e chartType with the chart-config default x-axis (median_e2el / p90_e2el)
-   * - 'normalized-e2e'→ agentic-only; x = per-request E2E normalized to 400 output tokens
    * - 'interactivity' → interactivity chartType (x = median_intvty / p90_intvty)
-   * - 'session-time'  → agentic-only; x = mean-normalized session time (live-computed from trace blobs)
-   * - 'prefill-tps'   → agentic-only; x = mean of P90 prefill TPS/user per session
+   * - 'e2e-normalized-interactivity'      → agentic-only; x = slow-tail per-request OSL / E2E latency
+   *                     in tok/s/user (live-computed from trace blobs)
    */
-  selectedXAxisMode:
-    | 'ttft'
-    | 'e2e'
-    | 'normalized-e2e'
-    | 'interactivity'
-    | 'session-time'
-    | 'prefill-tps';
+  selectedXAxisMode: 'ttft' | 'e2e' | 'interactivity' | 'e2e-normalized-interactivity';
   setSelectedXAxisMode: (
-    mode: 'ttft' | 'e2e' | 'normalized-e2e' | 'interactivity' | 'session-time' | 'prefill-tps',
+    mode: 'ttft' | 'e2e' | 'interactivity' | 'e2e-normalized-interactivity',
   ) => void;
   scaleType: 'auto' | 'linear' | 'log';
   setScaleType: (type: 'auto' | 'linear' | 'log') => void;
-  /** Coarse vendor / framework / agg-disagg / mtp-stp filters applied to the chart point set. */
+  /** Coarse vendor / framework / deployment / mtp-stp filters applied to the chart point set. */
   quickFilters: QuickFilters;
   /** Quick-filter values that have data for the current model (drives pill enable/disable). */
   availableQuickFilters: AvailableQuickFilters;
   setQuickFilterVendors: (vendors: string[]) => void;
   setQuickFilterFrameworks: (frameworks: string[]) => void;
-  setQuickFilterDisagg: (modes: DisaggMode[]) => void;
+  setQuickFilterDeployment: (modes: DeploymentMode[]) => void;
   setQuickFilterSpec: (modes: SpecMode[]) => void;
   setIsLegendExpanded: (metric: boolean) => void;
   isLegendExpanded: boolean;
@@ -803,6 +826,8 @@ export interface InferenceChartContextType {
   selectedDates: string[];
   /** Accepts a value or a state-updater fn (for safe rapid successive adds). */
   setSelectedDates: (dates: string[] | ((prev: string[]) => string[])) => void;
+  /** Internal date-to-run normalization; preserves an Overview exact-pair scope. */
+  setSelectedDatesFromRunExpansion: (dates: string[] | ((prev: string[]) => string[])) => void;
   selectedDateRange: { startDate: string; endDate: string };
   setSelectedDateRange: (dateRange: { startDate: string; endDate: string }) => void;
   userCosts: Record<string, number | undefined> | null;
@@ -820,10 +845,6 @@ export interface InferenceChartContextType {
   availableModels: string[];
   userPowers: Record<string, number | undefined> | null;
   setUserPowers: (userPowers: Record<string, number | undefined> | null) => void;
-  trackedConfigs: TrackedConfig[];
-  addTrackedConfig: (point: InferenceData, chartType: string) => void;
-  removeTrackedConfig: (id: string) => void;
-  clearTrackedConfigs: () => void;
   setHwFilter: (filter: string[] | null) => void;
   activePresetId: string | null;
   setActivePresetId: (id: string | null) => void;
@@ -846,29 +867,6 @@ export interface CalculateUserCostsResponse {
 export type UserCostInputs = Record<string, string | undefined>;
 
 export type HardwareConfig = Record<string, HardwareEntry>;
-
-/**
- * Represents a tracked configuration for the "Performance Over Time" drill-down feature.
- * A user double-clicks a scatter chart data point to track that specific config across dates.
- */
-export interface TrackedConfig {
-  /** Unique identifier built from the config fields */
-  id: string;
-  hwKey: string;
-  precision: string;
-  tp: number;
-  conc: number;
-  /** Display label e.g. "B200 (TRTLLM) — TP4 conc=8 FP4" */
-  label: string;
-  /** Assigned color from d3.schemeTableau10 */
-  color: string;
-  /** The chart type this config was tracked from (e2e or interactivity) */
-  chartType: string;
-  /** Disaggregated inference fields for advanced matching */
-  disagg?: boolean;
-  num_prefill_gpu?: number;
-  num_decode_gpu?: number;
-}
 
 /**
  * Represents a single data point on a trend line (one date's metric value).

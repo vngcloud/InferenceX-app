@@ -5,7 +5,7 @@
  *   - supplemental-bmk.json    (extra benchmark results)
  *
  * Usage:
- *   pnpm --filter *inferencex-db db:ingest:supplemental
+ *   bun run --cwd packages/db db:ingest:supplemental
  */
 
 import fs from 'fs';
@@ -98,7 +98,7 @@ async function ingestSupplementalEvals(
       skipped++; // oxlint-disable-line no-useless-assignment -- used after loop
       continue;
     }
-    const { framework, disagg } = normalizeFramework(entry.framework, false);
+    const { framework, disagg } = normalizeFramework(entry.framework, undefined);
     const specMethod = normalizeSpecMethod(entry.spec_decoding);
     const dpAttn = parseBool(entry.dp_attention);
 
@@ -245,11 +245,11 @@ async function ingestSupplementalBmk(
 
       const { framework, disagg: frameworkDisagg } = normalizeFramework(
         entry.framework,
-        entry.disagg ?? false,
+        entry.disagg,
       );
       const specMethod = normalizeSpecMethod(entry.spec_decoding);
       const dpAttn = parseBool(entry.dp_attention);
-      const disagg = entry.disagg ?? frameworkDisagg;
+      const disagg = frameworkDisagg || (entry.decode_num_workers ?? 0) > 0;
 
       const configId = await getOrCreateConfig({
         hardware: hw,
@@ -311,7 +311,10 @@ async function ingestSupplementalBmk(
       const modelKey = resolveModelKey({ model: entry.model, infmax_model_prefix: undefined });
       const hw = hwToGpuKey(entry.hw);
       if (!modelKey || !hw) continue;
-      const { framework, disagg } = normalizeFramework(entry.framework, entry.disagg ?? false);
+      const { framework, disagg: frameworkDisagg } = normalizeFramework(
+        entry.framework,
+        entry.disagg,
+      );
       const specMethod = normalizeSpecMethod(entry.spec_decoding);
       availRows.push({
         model: modelKey,
@@ -321,7 +324,7 @@ async function ingestSupplementalBmk(
         hardware: hw,
         framework,
         specMethod,
-        disagg,
+        disagg: frameworkDisagg || (entry.decode_num_workers ?? 0) > 0,
         benchmarkType: 'single_turn',
       });
     }
@@ -357,7 +360,7 @@ async function main(): Promise<void> {
   await refreshLatestBenchmarks(sql);
 
   console.log('\n=== db:ingest:supplemental complete ===');
-  console.log('  Invalidate API cache: pnpm admin:cache:invalidate');
+  console.log('  Invalidate API cache: bun run admin:cache:invalidate');
 }
 
 main()

@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { Card } from '@/components/ui/card';
 import { FAQ_ITEMS_ZH } from '@/components/about/faq-data-zh';
+import { AgentXFaq } from '@/components/about/agentx-faq';
 import { JsonLd } from '@/components/json-ld';
 import { zhAlternates, ZH_OG_LOCALE, ZH_LANG_TAG } from '@/lib/i18n';
 import { GITHUB_OWNER, GITHUB_REPO, SITE_URL } from '@semianalysisai/inferencex-constants';
@@ -81,6 +82,8 @@ export default function AboutPageZh() {
           </Card>
         </section>
 
+        <AgentXFaq locale="zh" />
+
         <section id="reproducibility" className="scroll-mt-24">
           <Card>
             <h2 className="text-lg font-semibold mb-2">可复现性</h2>
@@ -115,7 +118,7 @@ export default function AboutPageZh() {
                   3
                 </span>
                 <div>
-                  <strong className="text-foreground">上传产物。</strong> 请求延迟、token 计数、GPU
+                  <strong className="text-foreground">上传产物。</strong> 请求延迟、token 计数、Chip
                   功耗遥测数据和评估样本均附加到运行页面。GitHub Actions 保留这些产物 90
                   天，同时每周发布完整基准测试数据库的快照作为公开的 GitHub
                   Release，以实现更长期的可审计性。

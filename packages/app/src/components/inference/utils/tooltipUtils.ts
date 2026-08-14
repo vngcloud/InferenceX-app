@@ -1,4 +1,5 @@
 import { formatNumber, getDisplayLabel } from '@/lib/utils';
+import { specMethodDisplayLabel } from '@/lib/compare-variant-slug';
 import { isPersistedBenchmarkId } from '@/lib/benchmark-id';
 import type { Locale } from '@/lib/i18n';
 import { isKvOffloadEnabled } from '@/lib/kv-offload';
@@ -24,8 +25,6 @@ export interface TooltipConfig {
   selectedYAxisMetric: string;
   /** Hardware configuration for looking up labels */
   hardwareConfig: HardwareConfig;
-  /** Whether this config is already being tracked */
-  isTracked?: boolean;
   /** URL to the GitHub Actions workflow run */
   runUrl?: string;
   /**
@@ -62,17 +61,23 @@ const asBool = (v: boolean | string | undefined): boolean | undefined =>
  */
 export const getPointLabel = (d: InferenceData): string =>
   parallelismLabel({
-    tp: d.tp,
+    // InferenceData.tp is the TOTAL GPU count (createChartDataPoint folds pp
+    // into it for aggregated rows) — the label wants the actual TP width, so
+    // prefer the raw decode_tp and keep d.tp only as a legacy fallback.
+    tp: d.decode_tp ?? d.tp,
     ep: d.ep,
+    pp: d.pp,
     dpAttention: asBool(d.dp_attention),
     disagg: d.disagg,
     isMultinode: d.is_multinode,
     prefillTp: d.prefill_tp,
     prefillEp: d.prefill_ep,
+    prefillPp: d.prefill_pp,
     prefillDpAttention: asBool(d.prefill_dp_attention),
     prefillNumWorkers: d.prefill_num_workers,
     decodeTp: d.decode_tp,
     decodeEp: d.decode_ep,
+    decodePp: d.decode_pp,
     decodeDpAttention: asBool(d.decode_dp_attention),
     decodeNumWorkers: d.decode_num_workers,
   });
@@ -105,7 +110,7 @@ const CACHE_STRINGS = {
     offloadBackend: 'KV Offload Engine',
     transferEngine: 'KV Transfer Engine',
     router: 'Router',
-    gpuHitRate: 'GPU Cache Hit Rate',
+    gpuHitRate: 'Chip Cache Hit Rate',
     cpuHitRate: 'CPU Cache Hit Rate',
     theoreticalHitRate: 'Theoretical Cache Hit Rate',
     legacyEnabled: 'Enabled (legacy data)',
@@ -116,7 +121,7 @@ const CACHE_STRINGS = {
     offloadBackend: 'KV 卸载引擎',
     transferEngine: 'KV 传输引擎',
     router: '路由器',
-    gpuHitRate: 'GPU Cache 命中率',
+    gpuHitRate: 'Chip Cache 命中率',
     cpuHitRate: 'CPU Cache 命中率',
     theoreticalHitRate: '理论 Cache 命中率',
     legacyEnabled: '已启用（旧版数据）',
@@ -166,10 +171,25 @@ const generateCacheMetadataHTML = (d: InferenceData, locale: Locale): string => 
  * Agentic-only request success and token totals. Cache metadata is rendered
  * separately because fixed-sequence rows can carry it too.
  */
-const generateAgenticHTML = (d: InferenceData): string => {
+const AGENTIC_STRINGS = {
+  en: { speculativeDecoding: 'Speculative Decoding', off: 'Off' },
+  zh: { speculativeDecoding: '投机解码', off: '关闭' },
+} as const;
+
+const generateAgenticHTML = (d: InferenceData, locale: Locale): string => {
   if (d.benchmark_type !== 'agentic_traces') return '';
 
+  const t = AGENTIC_STRINGS[locale];
   const parts: string[] = [];
+  const specMethod = d.spec_decoding ?? 'none';
+  parts.push(
+    tooltipLine(
+      t.speculativeDecoding,
+      specMethod === 'none' || specMethod === ''
+        ? t.off
+        : specMethodDisplayLabel(d.model, specMethod),
+    ),
+  );
 
   if (d.num_requests_total !== undefined && d.num_requests_successful !== undefined) {
     const successPct =
@@ -221,40 +241,82 @@ const imageTooltipLine = (image: string) =>
         <strong>Image:</strong> <span style="display: inline-block; vertical-align: top; overflow-wrap: anywhere;">${shortenSha(image.trim()).replace(/\s+/u, '<br />')}</span>
       </div>`;
 
+const PARALLELISM_STRINGS = {
+  en: {
+    strategy: 'Parallelism Strategy',
+    deployment: 'Deployment',
+    singleNode: 'Single-node aggregate',
+    multiNode: 'Multi-node aggregate',
+    disaggregated: 'Disaggregated',
+    gpuCount: (n: number) => `${n} Chip${n > 1 ? 's' : ''}`,
+    prefill: 'Prefill',
+    decode: 'Decode',
+    gpusUnit: 'Chips',
+    tensorParallelism: 'Tensor Parallelism',
+    expertParallelism: 'Expert Parallelism',
+    pipelineParallelism: 'Pipeline Parallelism',
+    dpAttention: 'DP Attention',
+  },
+  zh: {
+    strategy: '并行策略',
+    deployment: '部署模式',
+    singleNode: '单节点聚合',
+    multiNode: '多节点聚合',
+    disaggregated: '分离式',
+    gpuCount: (n: number) => `${n} 个 Chip`,
+    prefill: '预填充',
+    decode: '解码',
+    gpusUnit: '个 Chip',
+    tensorParallelism: '张量并行 (TP)',
+    expertParallelism: '专家并行 (EP)',
+    pipelineParallelism: '流水线并行 (PP)',
+    dpAttention: 'DP Attention',
+  },
+} as const;
+
 /**
  * Generates HTML for the parallelism configuration section of a tooltip.
  * Falls back to GPU count for old data without parallelism fields.
+ * Pipeline parallelism is only rendered when > 1 (pp of 0/1 means "no PP",
+ * matching the point-label rule in {@link parallelismLabel}).
  */
-const generateParallelismHTML = (d: InferenceData): string => {
+const generateParallelismHTML = (d: InferenceData, locale: Locale = 'en'): string => {
+  const t = PARALLELISM_STRINGS[locale];
+  const deployment = d.disagg ? t.disaggregated : d.is_multinode ? t.multiNode : t.singleNode;
   if (
     (d.ep === null || d.ep === undefined) &&
     (d.prefill_ep === null || d.prefill_ep === undefined)
   ) {
-    return tooltipLine('Parallelism Strategy', `${d.tp} GPU${d.tp > 1 ? 's' : ''}`);
+    return tooltipLine(t.deployment, deployment) + tooltipLine(t.strategy, t.gpuCount(d.tp));
   }
 
   if (d.is_multinode && d.disagg) {
     const ptp = d.prefill_tp ?? d.tp;
     const pep = d.prefill_ep ?? d.ep ?? 0;
+    const ppp = d.prefill_pp ?? d.pp ?? 1;
     const pdpa = d.prefill_dp_attention ?? d.dp_attention ?? false;
     const dtp = d.decode_tp ?? d.tp;
     const dep = d.decode_ep ?? d.ep ?? 0;
+    const dpp = d.decode_pp ?? d.pp ?? 1;
     const ddpa = d.decode_dp_attention ?? d.dp_attention ?? false;
     const pw = d.prefill_num_workers ?? 1;
     const dw = d.decode_num_workers ?? 1;
     return `
+      ${tooltipLine(t.deployment, deployment)}
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Prefill:</strong> ${d.num_prefill_gpu ?? '?'} GPUs, TP: ${ptp}, EP: ${pep}, DPA: ${pdpa ? 'True' : 'False'}, Workers: ${pw}
+        <strong>${t.prefill}:</strong> ${d.num_prefill_gpu ?? '?'} ${t.gpusUnit}, TP: ${ptp}, ${ppp > 1 ? `PP: ${ppp}, ` : ''}EP: ${pep}, DPA: ${pdpa ? 'True' : 'False'}, Workers: ${pw}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Decode:</strong> ${d.num_decode_gpu ?? '?'} GPUs, TP: ${dtp}, EP: ${dep}, DPA: ${ddpa ? 'True' : 'False'}, Workers: ${dw}
+        <strong>${t.decode}:</strong> ${d.num_decode_gpu ?? '?'} ${t.gpusUnit}, TP: ${dtp}, ${dpp > 1 ? `PP: ${dpp}, ` : ''}EP: ${dep}, DPA: ${ddpa ? 'True' : 'False'}, Workers: ${dw}
       </div>`;
   }
 
   return `
-    ${tooltipLine('Tensor Parallelism', d.tp)}
-    ${d.ep !== null && d.ep !== undefined ? tooltipLine('Expert Parallelism', d.ep) : ''}
-    ${tooltipLine('DP Attention', d.dp_attention ? 'True' : 'False')}`;
+    ${tooltipLine(t.deployment, deployment)}
+    ${tooltipLine(t.tensorParallelism, d.decode_tp ?? d.tp)}
+    ${d.pp !== null && d.pp !== undefined && d.pp > 1 ? tooltipLine(t.pipelineParallelism, d.pp) : ''}
+    ${d.ep !== null && d.ep !== undefined ? tooltipLine(t.expertParallelism, d.ep) : ''}
+    ${tooltipLine(t.dpAttention, d.dp_attention ? 'True' : 'False')}`;
 };
 
 /**
@@ -301,7 +363,7 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per GPU:</strong> ${fmt(d['inputTputPerGpu'].y)}
+            <strong>Input Token Throughput per Chip:</strong> ${fmt(d['inputTputPerGpu'].y)}
           </div>`
           : ''
       }
@@ -309,12 +371,12 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per GPU:</strong> ${fmt(d['outputTputPerGpu'].y)}
+            <strong>Output Token Throughput per Chip:</strong> ${fmt(d['outputTputPerGpu'].y)}
           </div>`
           : ''
       }
-      ${tooltipLine('Total GPUs', d.tp)}
-      ${generateParallelismHTML(d)}
+      ${tooltipLine('Total Chips', d.tp)}
+      ${generateParallelismHTML(d, locale)}
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
@@ -322,18 +384,9 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
       ${generateCacheMetadataHTML(d, locale)}
-      ${generateAgenticHTML(d)}
+      ${generateAgenticHTML(d, locale)}
       ${runLinkHTML(runUrl)}
       ${viewChartsButtonHTML(isPinned, Boolean(hasTrace), d.id)}
-      ${
-        isPinned
-          ? `<button data-action="track-over-time" style="
-              margin-top: 8px; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 500;
-              border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
-              background: var(--accent); color: var(--accent-foreground);
-            ">${config.isTracked ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:-1px;margin-right:4px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Untrack Over Time' : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:-1px;margin-right:4px;"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>Track Over Time'}</button>`
-          : ''
-      }
     </div>
   `;
 };
@@ -373,8 +426,8 @@ export const generateOverlayTooltipContent = (config: OverlayTooltipConfig): str
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>${yLabel}:</strong> ${fmt(d.y)}
       </div>
-      ${tooltipLine('Total GPUs', d.tp)}
-      ${generateParallelismHTML(d)}
+      ${tooltipLine('Total Chips', d.tp)}
+      ${generateParallelismHTML(d, locale)}
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
@@ -382,7 +435,7 @@ export const generateOverlayTooltipContent = (config: OverlayTooltipConfig): str
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
       ${generateCacheMetadataHTML(d, locale)}
-      ${generateAgenticHTML(d)}
+      ${generateAgenticHTML(d, locale)}
     </div>
   `;
 };
@@ -414,7 +467,7 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
         <strong>Date:</strong> ${d.date}${d.actualDate && d.actualDate !== d.date ? ` <span style="opacity: 0.7">(data from ${d.actualDate})</span>` : ''}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>GPU Config:</strong> ${hardwareConfig[d.hwKey] ? getDisplayLabel(hardwareConfig[d.hwKey]) : d.hwKey}
+        <strong>Chip Config:</strong> ${hardwareConfig[d.hwKey] ? getDisplayLabel(hardwareConfig[d.hwKey]) : d.hwKey}
       </div>
       ${
         d?.image
@@ -432,7 +485,7 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per GPU:</strong> ${fmt(d['inputTputPerGpu'].y)}
+            <strong>Input Token Throughput per Chip:</strong> ${fmt(d['inputTputPerGpu'].y)}
           </div>`
           : ''
       }
@@ -440,12 +493,12 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
           <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per GPU:</strong> ${fmt(d['outputTputPerGpu'].y)}
+            <strong>Output Token Throughput per Chip:</strong> ${fmt(d['outputTputPerGpu'].y)}
           </div>`
           : ''
       }
-      ${tooltipLine('Total GPUs', d.tp)}
-      ${generateParallelismHTML(d)}
+      ${tooltipLine('Total Chips', d.tp)}
+      ${generateParallelismHTML(d, locale)}
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
         <strong>Concurrency:</strong> ${d.conc}
       </div>
@@ -453,7 +506,7 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
         <strong>Precision:</strong> ${d.precision.toUpperCase()}
       </div>
       ${generateCacheMetadataHTML(d, locale)}
-      ${generateAgenticHTML(d)}
+      ${generateAgenticHTML(d, locale)}
       ${runLinkHTML(runUrl)}
       ${viewChartsButtonHTML(isPinned, Boolean(hasTrace), d.id)}
     </div>

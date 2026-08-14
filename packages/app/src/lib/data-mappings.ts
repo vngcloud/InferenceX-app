@@ -1,4 +1,4 @@
-import type { ExclusionSpec } from './exclusion';
+import type { ExclusionConflictPolicy, ExclusionSpec } from './exclusion';
 
 export enum Model {
   Llama3_3_70B = 'Llama-3.3-70B-Instruct-FP8',
@@ -8,6 +8,7 @@ export enum Model {
   GptOss = 'gpt-oss-120b',
   Qwen3_5 = 'Qwen-3.5-397B-A17B',
   Kimi_K2_5 = 'Kimi-K2.5',
+  Kimi_K3 = 'Kimi-K3',
   MiniMax_M2_5 = 'MiniMax-M2.5',
   MiniMax_M3 = 'MiniMax-M3',
   GLM_5 = 'GLM-5',
@@ -59,22 +60,27 @@ interface ModelConfig {
  * be active together because their acceptance-rate forcing implementations
  * differ. ATOM and SGLang share the upstream ROCm MTP path, so they form one
  * comparability group; vLLM is its own group.
+ *
+ * Scoped to `hardware` for the same reason the STP rule below is: the guard
+ * exists to stop two engines being read off one SKU's curve, not to stop a
+ * chart holding two SKUs. B200 vLLM MTP next to B300 SGLang MTP compares
+ * hardware, which is the point of the chart.
  */
 const MTP_ENGINE_EXCLUSION: ExclusionSpec[] = [
   {
     suffix: '_mtp',
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
     groupAliases: { atom: 'sglang' },
+    scope: 'hardware',
   },
 ];
 
 /**
- * AgentX STP exclusion: unsuffixed standard-token configs for the same hardware
- * SKU can't mix engine families. Different hardware may use different engines
- * on one graph. Fixed-sequence STP comparisons remain available; this rule is
- * attached only to the Agentic Traces sequence.
+ * STP exclusion: unsuffixed standard-token configs for the same hardware SKU
+ * can't mix engine families, because each engine tunes its serving path
+ * differently. Different hardware may use different engines on one graph.
  */
-const AGENTIC_STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
   {
     suffix: null,
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
@@ -82,6 +88,29 @@ const AGENTIC_STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
     scope: 'hardware',
   },
 ];
+
+/**
+ * Engine families guarded on the 8K/1K and Agentic Traces charts. vLLM and
+ * SGLang tune their runs against engine-specific serving paths, so their
+ * numbers aren't directly comparable on one SKU — for standard-token and MTP
+ * configs alike. The resulting matrix, per SKU:
+ *
+ *   vLLM ↔ SGLang           blocked  (standard-token and MTP)
+ *   TRTLLM ↔ vLLM           allowed
+ *   TRTLLM ↔ SGLang         allowed
+ *   TRTLLM ↔ ATOM           allowed
+ *   ATOM ↔ vLLM or SGLang   allowed
+ *
+ * Every engine outside this list is comparable with everything: TRTLLM, ATOM,
+ * and Mooncake ATOMesh stay freely selectable next to either guarded engine and
+ * next to each other. Because the list is matched before `groupAliases`, ATOM
+ * escapes even though the MTP rule folds it into SGLang's comparability group.
+ *
+ * Both scenarios share the list. AgentX guarded every engine family while the
+ * agentic benchmark was new; that blocked TRTLLM against vLLM, SGLang, and ATOM
+ * on the same SKU, which the pairs above now allow.
+ */
+const GUARDED_ENGINE_FAMILIES = ['vllm', 'sglang'] as const;
 
 // Total parameter counts appended to each label so users can compare model
 // scale at a glance in the dropdown. For Llama and gpt-oss the count is
@@ -94,14 +123,27 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     category: 'default',
     exclusion: MTP_ENGINE_EXCLUSION,
   },
+  [Model.Kimi_K3]: {
+    // K3 is a separate 2.8T KDA/MLA-hybrid architecture, not a K2 point release,
+    // so it stays out of the K2.5/2.6/2.7-Code grouping below.
+    label: 'Kimi K3 2.8T',
+    prefix: 'kimik3',
+    category: 'default',
+  },
   [Model.Kimi_K2_5]: {
     // K2.5, K2.6, and K2.7-Code share an architecture, so the dropdown surfaces
     // all versions joined with a slash — matches the GLM5/5.1 pattern. The
     // hyphenated `Model.Kimi_K2_5` enum value stays as-is for internal
     // routing / DB key mapping.
+    //
+    // Fully retired after 2026-08-06 per MODELS.md: agentic coding was
+    // deprecated first, then Single-turn 8k1k — its last active scenario — so
+    // no scenario remains. Kimi-K3 (launched 2026-07-27) takes the cluster
+    // time. Historical rows stay queryable; the model just leaves the active
+    // groups in the selector.
     label: 'Kimi K2.5/2.6/2.7-Code 1T',
     prefix: 'kimik2.5',
-    category: 'default',
+    category: 'deprecated',
   },
   [Model.MiniMax_M3]: {
     label: 'MiniMax M3 428B',
@@ -228,37 +270,69 @@ export function sequenceKind(seq: Sequence): ScenarioKind {
 
 interface SequenceConfig {
   label: string;
+  labelZh: string;
   compact: string;
   category: CategoryTag;
   kind: ScenarioKind;
   exclusion?: ExclusionSpec[];
+  /**
+   * How this scenario resolves a selection that spans several comparability
+   * groups. `clear-all` (the default) deselects every conflicting group so the
+   * user opts into one; `keep-sticky` keeps a single group so the chart still
+   * renders data on load.
+   */
+  exclusionPolicy?: ExclusionConflictPolicy;
+  /**
+   * Comparability group preferred when `keep-sticky` has to choose and the
+   * user has no prior selection to honor. Without it the tie-break is
+   * alphabetical, which would silently land on a different engine.
+   */
+  defaultExclusionGroup?: string;
+  /**
+   * The only engine families guarded on this scenario, narrowing EVERY rule in
+   * scope — the model's variant specs as well as this sequence's own. Families
+   * outside the list are comparable with everything here. Omit to let each spec
+   * decide (by default: every family participates).
+   */
+  exclusionFamilies?: readonly string[];
 }
 
 const SEQUENCE_CONFIG: Record<Sequence, SequenceConfig> = {
   [Sequence.OneK_OneK]: {
     label: '1K / 1K',
+    labelZh: '1K / 1K',
     compact: '1k1k',
     category: 'deprecated',
     kind: 'fixed-seq',
   },
   [Sequence.OneK_EightK]: {
     label: '1K / 8K',
+    labelZh: '1K / 8K',
     compact: '1k8k',
     category: 'deprecated',
     kind: 'fixed-seq',
   },
   [Sequence.EightK_OneK]: {
     label: '8K / 1K',
+    labelZh: '8K / 1K',
     compact: '8k1k',
     category: 'default',
     kind: 'fixed-seq',
+    exclusion: STP_ENGINE_EXCLUSION,
+    exclusionPolicy: 'keep-sticky',
+    defaultExclusionGroup: 'vllm',
+    exclusionFamilies: GUARDED_ENGINE_FAMILIES,
   },
   [Sequence.AgenticTraces]: {
     label: 'Agentic Traces',
+    labelZh: '智能体轨迹',
     compact: 'agentic',
     category: 'default',
     kind: 'agentic',
-    exclusion: AGENTIC_STP_ENGINE_EXCLUSION,
+    exclusion: STP_ENGINE_EXCLUSION,
+    exclusionPolicy: 'keep-sticky',
+    defaultExclusionGroup: 'vllm',
+    exclusionFamilies: GUARDED_ENGINE_FAMILIES,
   },
 };
 
@@ -268,6 +342,33 @@ export function getSequenceExclusion(
 ): ExclusionSpec[] {
   if (!sequence) return [];
   return SEQUENCE_CONFIG[sequence as Sequence]?.exclusion ?? [];
+}
+
+/** Multi-group conflict policy for a sequence. Defaults to `clear-all`. */
+export function getSequenceExclusionPolicy(
+  sequence: Sequence | string | null | undefined,
+): ExclusionConflictPolicy {
+  if (!sequence) return 'clear-all';
+  return SEQUENCE_CONFIG[sequence as Sequence]?.exclusionPolicy ?? 'clear-all';
+}
+
+/** Preferred comparability group for a sequence, or null when unconfigured. */
+export function getSequenceDefaultExclusionGroup(
+  sequence: Sequence | string | null | undefined,
+): string | null {
+  if (!sequence) return null;
+  return SEQUENCE_CONFIG[sequence as Sequence]?.defaultExclusionGroup ?? null;
+}
+
+/**
+ * The only engine families guarded on a sequence, or null when the sequence
+ * doesn't narrow its rules.
+ */
+export function getSequenceExclusionFamilies(
+  sequence: Sequence | string | null | undefined,
+): readonly string[] | null {
+  if (!sequence) return null;
+  return SEQUENCE_CONFIG[sequence as Sequence]?.exclusionFamilies ?? null;
 }
 
 export const SEQUENCE_OPTIONS = Object.keys(SEQUENCE_CONFIG) as Sequence[];
@@ -308,8 +409,10 @@ export function getSequenceCategory(sequence: Sequence): CategoryTag {
   return SEQUENCE_CONFIG[sequence]?.category ?? 'default';
 }
 
-export function getSequenceLabel(sequence: Sequence): string {
-  return SEQUENCE_CONFIG[sequence]?.label ?? sequence;
+export function getSequenceLabel(sequence: Sequence, locale: 'en' | 'zh' = 'en'): string {
+  const config = SEQUENCE_CONFIG[sequence];
+  if (!config) return sequence;
+  return locale === 'zh' ? config.labelZh : config.label;
 }
 
 const SEQUENCE_PREFIX_MAPPING: Record<string, Sequence> = Object.fromEntries(

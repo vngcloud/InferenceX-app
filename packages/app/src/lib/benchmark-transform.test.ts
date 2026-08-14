@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
+import { getPointLabel } from '@/components/inference/utils/tooltipUtils';
 import type { BenchmarkRow } from '@/lib/api';
+import { dedupeAgenticHistoryRuns } from '@/lib/benchmark-run-selection';
 
 import {
   mergeRunScopedRows,
@@ -88,12 +90,36 @@ describe('rowToAggDataEntry', () => {
     expect(entry.median_ttft).toBe(0.15);
     expect(entry.p99_e2el).toBe(3.1);
     expect(entry.median_intvty).toBe(12.5);
+    expect(entry.rawMetricKeys).toContain('median_ttft');
+  });
+
+  it('prefers full-response AgentX ITL and interactivity for artifact overlays', () => {
+    const entry = rowToAggDataEntry(
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        metrics: {
+          median_itl: 0.000003,
+          median_intvty: 333_333,
+          median_full_response_itl: 0.005,
+          median_full_response_intvty: 200,
+          std_full_response_itl: 0.001,
+          std_full_response_intvty: 20,
+        },
+      }),
+    );
+
+    expect(entry.median_itl).toBe(0.005);
+    expect(entry.median_tpot).toBe(0.005);
+    expect(entry.median_intvty).toBe(200);
+    expect(entry.std_itl).toBe(0.001);
+    expect(entry.std_intvty).toBe(20);
   });
 
   it('defaults missing metrics to 0', () => {
     const entry = rowToAggDataEntry(makeRow({ metrics: {} }));
     expect(entry.tput_per_gpu).toBe(0);
     expect(entry.median_ttft).toBe(0);
+    expect(entry.rawMetricKeys).toEqual([]);
   });
 
   it('maps disagg and GPU count fields', () => {
@@ -110,9 +136,57 @@ describe('rowToAggDataEntry', () => {
     expect(entry.spec_decoding).toBe('mtp');
   });
 
-  it('maps decode_tp to tp', () => {
+  it('maps aggregate decode_tp to tp when the decode-shaped side is populated', () => {
     const entry = rowToAggDataEntry(makeRow({ decode_tp: 4 }));
     expect(entry.tp).toBe(4);
+  });
+
+  it('uses one populated prefill-shaped topology for non-disaggregated multinode serving', () => {
+    const base = makeRow();
+    const entry = rowToAggDataEntry(
+      makeRow({
+        framework: 'dynamo-vllm',
+        disagg: false,
+        is_multinode: true,
+        prefill_tp: 8,
+        prefill_ep: 1,
+        prefill_dp_attention: false,
+        prefill_num_workers: 1,
+        decode_tp: 0,
+        decode_ep: 0,
+        decode_dp_attention: false,
+        decode_num_workers: 0,
+        num_prefill_gpu: 16,
+        num_decode_gpu: 0,
+        metrics: { ...base.metrics, prefill_pp: 2, decode_pp: 1 },
+      }),
+    );
+
+    expect(entry.disagg).toBe(false);
+    expect(entry.is_multinode).toBe(true);
+    expect(entry.tp).toBe(8);
+    expect(entry.ep).toBe(1);
+    expect(entry.pp).toBe(2);
+    expect(entry.decode_tp).toBe(8);
+    expect(entry.decode_ep).toBe(1);
+    expect(entry.decode_pp).toBe(2);
+  });
+
+  it('surfaces pipeline parallelism from the metrics JSONB', () => {
+    const base = makeRow();
+    const entry = rowToAggDataEntry(
+      makeRow({ metrics: { ...base.metrics, prefill_pp: 2, decode_pp: 2 } }),
+    );
+    expect(entry.pp).toBe(2);
+    expect(entry.prefill_pp).toBe(2);
+    expect(entry.decode_pp).toBe(2);
+  });
+
+  it('leaves pp undefined for rows predating the field', () => {
+    const entry = rowToAggDataEntry(makeRow());
+    expect(entry.pp).toBeUndefined();
+    expect(entry.prefill_pp).toBeUndefined();
+    expect(entry.decode_pp).toBeUndefined();
   });
 
   it('maps image field', () => {
@@ -332,6 +406,27 @@ describe('transformBenchmarkRows', () => {
     expect(hwKeys.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('folds pp into the total GPU count and the point label (overlay path)', () => {
+    // This is the same pipeline `?unofficialrun=` overlays run through
+    // (buildChartData → transformBenchmarkRows), so it exercises the overlay
+    // rendering path for PP configs end to end.
+    const base = makeRow();
+    const rows = [makeRow({ metrics: { ...base.metrics, prefill_pp: 2, decode_pp: 2 } })];
+    const { chartData } = transformBenchmarkRows(rows);
+    const point = chartData.find((d) => d.length > 0)![0];
+    // tp8 × pp2 = 16 total GPUs
+    expect(point.tp).toBe(16);
+    expect(point.pp).toBe(2);
+    expect(getPointLabel(point)).toBe('TP8PP2');
+  });
+
+  it('keeps total GPU count and label unchanged when pp is absent', () => {
+    const { chartData } = transformBenchmarkRows([makeRow()]);
+    const point = chartData.find((d) => d.length > 0)![0];
+    expect(point.tp).toBe(8);
+    expect(getPointLabel(point)).toBe('TP8');
+  });
+
   it('labels M3 mtp configs with the "M3 EAGLE" suffix', () => {
     const rows = [
       makeRow({ model: 'minimaxm3', hardware: 'h100', framework: 'vllm', spec_method: 'mtp' }),
@@ -423,6 +518,7 @@ describe('rowToAggDataEntry — extended edge cases', () => {
   it('maps prefill parallelism fields', () => {
     const entry = rowToAggDataEntry(
       makeRow({
+        disagg: true,
         prefill_tp: 4,
         prefill_ep: 2,
         prefill_dp_attention: true,
@@ -551,7 +647,35 @@ describe('rowToAggDataEntry — extended edge cases', () => {
 // Additional edge-case tests for transformBenchmarkRows
 // ---------------------------------------------------------------------------
 
-describe('transformBenchmarkRows — disaggregated configs', () => {
+describe('transformBenchmarkRows — deployment topology', () => {
+  it('renders multinode aggregate TP8PP2 as 16 total GPUs without prefill/decode roles', () => {
+    const base = makeRow();
+    const { chartData } = transformBenchmarkRows([
+      makeRow({
+        framework: 'dynamo-vllm',
+        disagg: false,
+        is_multinode: true,
+        prefill_tp: 8,
+        prefill_ep: 1,
+        prefill_num_workers: 1,
+        decode_tp: 0,
+        decode_ep: 0,
+        decode_num_workers: 0,
+        num_prefill_gpu: 16,
+        num_decode_gpu: 0,
+        metrics: { ...base.metrics, prefill_pp: 2, decode_pp: 1 },
+      }),
+    ]);
+    const point = chartData.flat()[0];
+
+    expect(point.tp).toBe(16);
+    expect(point.decode_tp).toBe(8);
+    expect(point.pp).toBe(2);
+    expect(point.is_multinode).toBe(true);
+    expect(point.disagg).toBeUndefined();
+    expect(getPointLabel(point)).toContain('TP8PP2');
+  });
+
   it('uses sum of prefill + decode GPUs as tp for disaggregated configs', () => {
     const rows = [
       makeRow({
@@ -614,6 +738,89 @@ describe('transformBenchmarkRows — hardware key resolution', () => {
     const point = chartData.flat()[0];
     expect(point.hwKey).toBe('h200_trt_mtp');
     expect(hardwareConfig).toHaveProperty('h200_trt_mtp');
+  });
+
+  it('groups none, MTP, and EAGLE agentic points into one hardware series', () => {
+    const rows = [
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'none',
+      }),
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'mtp',
+      }),
+      makeRow({
+        benchmark_type: 'agentic_traces',
+        hardware: 'h200',
+        framework: 'trt',
+        spec_method: 'eagle',
+      }),
+    ];
+
+    const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
+    expect(Object.keys(hardwareConfig)).toEqual(['h200_trt']);
+    expect(chartData[0].map((point) => point.hwKey)).toEqual(['h200_trt', 'h200_trt', 'h200_trt']);
+    expect(chartData[0].map((point) => point.spec_decoding)).toEqual(['none', 'mtp', 'eagle']);
+  });
+
+  it('keeps one mixed-spec agentic series identity across comparison dates', () => {
+    const rows = dedupeAgenticHistoryRuns([
+      makeRow({
+        id: 1,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'none',
+        conc: 8,
+        date: '2026-06-01',
+        workflow_run_id: 30,
+        run_started_at: '2026-06-01T10:00:00Z',
+      }),
+      makeRow({
+        id: 2,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'mtp',
+        conc: 16,
+        date: '2026-06-01',
+        workflow_run_id: 30,
+        run_started_at: '2026-06-01T10:00:00Z',
+      }),
+      makeRow({
+        id: 3,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'eagle',
+        conc: 32,
+        date: '2026-06-02',
+        workflow_run_id: 31,
+        run_started_at: '2026-06-02T10:00:00Z',
+      }),
+      makeRow({
+        id: 4,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'none',
+        conc: 64,
+        date: '2026-06-02',
+        workflow_run_id: 31,
+        run_started_at: '2026-06-02T10:00:00Z',
+      }),
+    ]);
+
+    const { chartData, hardwareConfig } = transformBenchmarkRows(rows);
+    const pointsByDate = Object.groupBy(chartData[0], (point) => point.date);
+
+    expect(Object.keys(hardwareConfig)).toEqual(['h200_trt']);
+    expect(pointsByDate['2026-06-01']?.map((point) => point.spec_decoding)).toEqual([
+      'none',
+      'mtp',
+    ]);
+    expect(pointsByDate['2026-06-02']?.map((point) => point.spec_decoding)).toEqual([
+      'eagle',
+      'none',
+    ]);
+    expect(new Set(chartData[0].map((point) => point.hwKey))).toEqual(new Set(['h200_trt']));
   });
 
   it('handles AMD hardware with vllm framework', () => {

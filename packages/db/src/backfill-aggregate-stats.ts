@@ -14,7 +14,7 @@
  *     path uses, so behavior cannot drift.
  *
  * Usage:
- *   pnpm --filter @semianalysisai/inferencex-db db:backfill-aggregate-stats
+ *   bun run --cwd packages/db db:backfill-aggregate-stats
  *     [--limit N]   only process the first N candidate rows (useful for
  *                   smoke-tests on a fresh deploy)
  *     [--force]     recompute every row, even if version already matches
@@ -94,12 +94,16 @@ async function main(): Promise<void> {
       }
 
       let stats: AggregateStats;
-      if (row.aggregate_stats?.version === 3) {
+      // v3 onwards → current is a profile-only change (the server-derived
+      // fields haven't changed since v3), so skip re-reading the huge server
+      // blob and carry its KV/prefix distributions forward.
+      const storedVersion = row.aggregate_stats?.version;
+      if (storedVersion !== undefined && storedVersion >= 3 && storedVersion < STATS_VERSION) {
         const profileStats = await computeAggregateStats({
           profileBlob: row.profile_export_jsonl_gz,
           serverBlob: null,
         });
-        stats = mergeProfileStatsUpgrade(row.aggregate_stats, profileStats);
+        stats = mergeProfileStatsUpgrade(row.aggregate_stats!, profileStats);
       } else {
         const [serverRow] = await sql<{ server_metrics_json_gz: Buffer | null }[]>`
           select server_metrics_json_gz

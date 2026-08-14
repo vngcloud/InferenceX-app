@@ -142,17 +142,39 @@ export function findConfigChangeDates(
 }
 
 export const FAVORITE_PRESETS: FavoritePreset[] = [
-  // 0 — MiniMax M3 launch (all configs) — current day-0 featured model
+  // 0 — Kimi K3 launch (all configs) — current day-0 featured model
+  {
+    id: 'kimi-k3-launch',
+    title: 'Kimi K3 — First Look',
+    titleZh: 'Kimi K3 — 首发基准测试',
+    description:
+      'First benchmarks of Kimi K3 across every available chip. New configurations appear here as they come online.',
+    descriptionZh: '涵盖所有可用 Chip 的 Kimi K3 首批基准测试结果。新配置上线后将在此同步更新。',
+    tags: ['Kimi', 'K3', 'New'],
+    category: 'comparison',
+    wide: true,
+    config: {
+      model: Model.Kimi_K3,
+      sequence: Sequence.EightK_OneK,
+      precisions: ['fp4', 'fp8'],
+      yAxisMetric: 'y_tpPerGpu',
+      hwFilter: ['h100', 'h200', 'b200', 'b300', 'gb200', 'gb300', 'mi300x', 'mi325x', 'mi355x'],
+    },
+  },
+  // Hidden — previous MiniMax M3 launch preset (all configs), retired when Kimi K3 became
+  // the day-0 model. Retained so prior ?preset=minimax-m3-launch links (banner, modal,
+  // external shares) keep working.
   {
     id: 'minimax-m3-launch',
     title: 'MiniMax M3 — First Look',
     titleZh: 'MiniMax M3 — 首发基准测试',
     description:
-      'First benchmarks of MiniMax M3 across every available GPU. New configurations appear here as they come online.',
-    descriptionZh: '涵盖所有可用 GPU 的 MiniMax M3 首批基准测试结果。新配置上线后将在此同步更新。',
+      'First benchmarks of MiniMax M3 across every available chip. New configurations appear here as they come online.',
+    descriptionZh: '涵盖所有可用 Chip 的 MiniMax M3 首批基准测试结果。新配置上线后将在此同步更新。',
     tags: ['MiniMax', 'M3', 'New'],
     category: 'comparison',
     wide: true,
+    hidden: true,
     config: {
       model: Model.MiniMax_M3,
       sequence: Sequence.EightK_OneK,
@@ -168,7 +190,7 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
     id: 'dsv4-launch',
     title: 'DeepSeek V4 Pro — First Look',
     description:
-      'First benchmarks of DeepSeek V4 Pro across every available GPU. New configurations appear here as they come online.',
+      'First benchmarks of DeepSeek V4 Pro across every available chip. New configurations appear here as they come online.',
     tags: ['DeepSeek', 'V4-Pro', 'New'],
     category: 'comparison',
     wide: true,
@@ -187,7 +209,7 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
     id: 'dsv4-launch-nvidia',
     title: 'DeepSeek V4 Pro — NVIDIA First Look',
     description:
-      'First benchmarks of DeepSeek V4 Pro on NVIDIA GPUs. New configurations appear here as they come online.',
+      'First benchmarks of DeepSeek V4 Pro on NVIDIA chips. New configurations appear here as they come online.',
     tags: ['DeepSeek', 'V4-Pro', 'NVIDIA', 'New'],
     category: 'comparison',
     wide: true,
@@ -224,9 +246,9 @@ export const FAVORITE_PRESETS: FavoritePreset[] = [
     title: 'B200 vs H200 — Blackwell vs Hopper',
     titleZh: 'B200 vs H200 — Blackwell vs Hopper',
     description:
-      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM throughput per GPU on DeepSeek R1 (8k/1k) at FP8.',
+      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM throughput per chip on DeepSeek R1 (8k/1k) at FP8.',
     descriptionZh:
-      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM 每 GPU 吞吐量对比，基于 DeepSeek R1 (8k/1k)，FP8 精度。',
+      'Blackwell B200 vs Hopper H200 Dynamo TRTLLM 每 Chip 吞吐量对比，基于 DeepSeek R1 (8k/1k)，FP8 精度。',
     tags: ['DeepSeek', 'B200', 'H200', 'Dynamo', 'FP8'],
     category: 'comparison',
     config: {

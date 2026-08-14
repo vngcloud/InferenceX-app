@@ -25,51 +25,39 @@ function rec(
 }
 
 describe('computeDerivedFromBlob', () => {
-  it('returns nulls when no usable records', () => {
+  it('returns null when no usable records', () => {
     const out = computeDerivedFromBlob('');
-    expect(out.normalized_session_time_s).toBeNull();
-    expect(out.p90_prefill_tps_per_user).toBeNull();
-    expect(out.normalized_e2e_400).toBeNull();
+    expect(out.e2el_per_osl).toBeNull();
   });
 
-  it('normalizes each request to 400 output tokens before taking percentiles', () => {
+  it('computes per-request E2EL/OSL ratios pooled across sessions', () => {
+    // Ratios (s per output token): 1.0/50 = 0.02, 4.0/100 = 0.04.
     const jsonl = [
-      // Both requests have TTFT=2s and ITL=20ms, despite very different OSL/E2E.
+      rec('s1', 0, { isl: 100, osl: 50, ttft_ms: 500, latency_ms: 1000 }),
+      rec('s2', 0, { isl: 200, osl: 100, ttft_ms: 1000, latency_ms: 4000 }),
+    ].join('\n');
+
+    const out = computeDerivedFromBlob(jsonl);
+    expect(out.e2el_per_osl?.n).toBe(2);
+    expect(out.e2el_per_osl?.p50).toBeCloseTo(0.03, 8);
+    // p90 of [0.02, 0.04]: pos = 0.9 → 0.02 + 0.9 × 0.02 = 0.038.
+    expect(out.e2el_per_osl?.p90).toBeCloseTo(0.038, 8);
+    expect(out.e2el_per_osl?.p75).toBeCloseTo(0.035, 8);
+  });
+
+  it('OSL cancels out of the ratio when TTFT and ITL are identical', () => {
+    // Both requests: TTFT=2s, ITL=20ms — very different OSL/E2E, but the
+    // per-token ratio only differs through the TTFT amortization term
+    // (TTFT/OSL), which is the intended second-order OSL sensitivity.
+    const jsonl = [
       rec('s1', 0, { isl: 100, osl: 100, ttft_ms: 2000, latency_ms: 3980 }),
       rec('s2', 0, { isl: 100, osl: 1000, ttft_ms: 2000, latency_ms: 21_980 }),
     ].join('\n');
 
     const out = computeDerivedFromBlob(jsonl);
-    // 2s TTFT + 399 × 20ms ITL = 9.98s for both requests.
-    expect(out.normalized_e2e_400?.n).toBe(2);
-    expect(out.normalized_e2e_400?.p75).toBeCloseTo(9.98, 8);
-    expect(out.normalized_e2e_400?.p90).toBeCloseTo(9.98, 8);
-  });
-
-  it('rescales single-session time and computes P90 prefill', () => {
-    // One session, two turns. load = (100+50) + (200+50) = 400.
-    // Single session ⇒ mean_load = load_i ⇒ T̃ = T = (1000+2000) ms = 3.0 s.
-    const jsonl = [
-      rec('s1', 0, { isl: 100, osl: 50, ttft_ms: 500, latency_ms: 1000 }),
-      rec('s1', 1, { isl: 200, osl: 50, ttft_ms: 1000, latency_ms: 2000 }),
-    ].join('\n');
-    const out = computeDerivedFromBlob(jsonl);
-    expect(out.normalized_session_time_s).toBeCloseTo(3, 6);
-    // Prefill TPS per turn: 100/0.5=200, 200/1.0=200 → global P90 = 200.
-    expect(out.p90_prefill_tps_per_user).toBeCloseTo(200, 6);
-  });
-
-  it('rescales times across sessions with unequal load', () => {
-    // s1: 1 turn, load = 100, T = 1s
-    // s2: 1 turn, load = 300, T = 3s
-    // mean_load = 200; T̃_1 = 1 * 200/100 = 2; T̃_2 = 3 * 200/300 = 2
-    // Mean T̃ = 2.0
-    const jsonl = [
-      rec('s1', 0, { isl: 90, osl: 10, ttft_ms: 500, latency_ms: 1000 }),
-      rec('s2', 0, { isl: 270, osl: 30, ttft_ms: 500, latency_ms: 3000 }),
-    ].join('\n');
-    const out = computeDerivedFromBlob(jsonl);
-    expect(out.normalized_session_time_s).toBeCloseTo(2, 6);
+    expect(out.e2el_per_osl?.n).toBe(2);
+    // 3.98/100 = 0.0398 ≈ ITL + TTFT/OSL = 0.0198 + 0.02
+    expect(out.e2el_per_osl?.p50).toBeCloseTo((0.0398 + 0.02198) / 2, 8);
   });
 
   it('drops records missing required fields and skips non-profiling phase', () => {
@@ -96,63 +84,35 @@ describe('computeDerivedFromBlob', () => {
       }),
     ];
     const out = computeDerivedFromBlob(lines.join('\n'));
-    expect(out.normalized_session_time_s).toBeCloseTo(1, 6);
-    expect(out.p90_prefill_tps_per_user).toBeCloseTo(200, 6);
+    expect(out.e2el_per_osl?.n).toBe(1);
+    expect(out.e2el_per_osl?.p90).toBeCloseTo(0.02, 8);
   });
 
-  it('p90 across turns: 10-turn session picks the right rank', () => {
-    // Prefill rates 100..1000 (per turn isl/ttft); p90 of 10 values (linear) = 910.
-    const turns = Array.from({ length: 10 }, (_, i) =>
-      rec('s1', i, {
-        isl: (i + 1) * 100, // 100, 200, ..., 1000 tokens
-        osl: 10,
-        ttft_ms: 1000, // 1 second → rates: 100..1000 tps
-        latency_ms: 1500,
-      }),
-    );
-    const out = computeDerivedFromBlob(turns.join('\n'));
-    expect(out.p90_prefill_tps_per_user).toBeCloseTo(910, 6);
-  });
-
-  it('excludes osl=0 (cancelled/empty-output) turns from normalized E2E', () => {
-    // Two normal turns + one cancelled turn (osl=0, latency=30s, ttft=1s).
-    //
-    // The cancelled turn must be excluded because observedDecodeIntervals collapses
-    // to max(0-1,1)=1, making itlMs=(30000-1000)/1=29000ms and normalizedMs explode
-    // to ~11 572 s — roughly 386× the real scale. (Pre-fix behavior for reference;
-    // this number is intentionally not asserted below to avoid enshrining the bug.)
-    //
-    // Normal turn A: isl=100, osl=50, ttft=500ms, latency=1000ms
-    //   observedDecodeIntervals = max(49,1) = 49
-    //   itlMs = (1000-500)/49
-    //   normalizedMs = 500 + 399*(500/49)
-    //
-    // Normal turn B: isl=200, osl=100, ttft=1000ms, latency=3000ms
-    //   observedDecodeIntervals = max(99,1) = 99
-    //   itlMs = (3000-1000)/99
-    //   normalizedMs = 1000 + 399*(2000/99)
-    const normA = (500 + (399 * 500) / 49) / 1000; // seconds
-    const normB = (1000 + (399 * 2000) / 99) / 1000; // seconds
-
+  it('excludes osl=0 (cancelled/empty-output) turns from the ratio distribution', () => {
     const jsonl = [
       rec('s1', 0, { isl: 100, osl: 50, ttft_ms: 500, latency_ms: 1000 }),
-      rec('s1', 1, { isl: 200, osl: 100, ttft_ms: 1000, latency_ms: 3000 }),
-      // Cancelled / empty-output turn — osl=0 must be rejected by extractTurn.
+      // Cancelled / empty-output turn — osl=0 must be rejected by extractTurn
+      // (the ratio would divide by zero).
       rec('s2', 0, { isl: 150, osl: 0, ttft_ms: 1000, latency_ms: 30000 }),
     ].join('\n');
 
     const out = computeDerivedFromBlob(jsonl);
+    expect(out.e2el_per_osl?.n).toBe(1);
+    expect(out.e2el_per_osl?.p90).toBeCloseTo(0.02, 8);
+  });
 
-    // Only the 2 normal turns contribute; osl=0 record is silently excluded.
-    expect(out.normalized_e2e_400?.n).toBe(2);
-
-    // p90 of [normA, normB] sorted ascending (normA < normB):
-    // pos = 1*0.9 = 0.9; result = normA + (normB - normA)*0.9
-    const expectedP90 = normA + (normB - normA) * 0.9;
-    expect(out.normalized_e2e_400?.p90).toBeCloseTo(expectedP90, 6);
-
-    // Sanity: p90 should be single-digit seconds, not thousands.
-    expect(out.normalized_e2e_400!.p90).toBeLessThan(20);
+  it('p90 across turns: 10-turn population picks the right rank', () => {
+    // Ratios 0.01..0.10 s/tok; p90 of 10 values (linear) = 0.091.
+    const turns = Array.from({ length: 10 }, (_, i) =>
+      rec('s1', i, {
+        isl: 100,
+        osl: 100,
+        ttft_ms: 100,
+        latency_ms: (i + 1) * 1000, // 1s..10s → ratios 0.01..0.10
+      }),
+    );
+    const out = computeDerivedFromBlob(turns.join('\n'));
+    expect(out.e2el_per_osl?.p90).toBeCloseTo(0.091, 8);
   });
 });
 
@@ -172,9 +132,10 @@ function mockSql(queue: unknown[][]): {
 
 describe('getDerivedAgenticMetrics write-back', () => {
   it('self-heals aggregate_stats from the profile blob, carrying server fields forward', async () => {
+    // Two turns with ratios 0.02 and 0.04 s/tok → p90 = 0.038, p75 = 0.035.
     const jsonl = [
       rec('s1', 0, { isl: 100, osl: 50, ttft_ms: 500, latency_ms: 1000 }),
-      rec('s1', 1, { isl: 200, osl: 50, ttft_ms: 1000, latency_ms: 2000 }),
+      rec('s1', 1, { isl: 200, osl: 100, ttft_ms: 1000, latency_ms: 4000 }),
     ].join('\n');
     const blob = gzipSync(Buffer.from(jsonl));
 
@@ -201,9 +162,9 @@ describe('getDerivedAgenticMetrics write-back', () => {
 
     const result = await getDerivedAgenticMetrics(sql, [7]);
 
-    // Response is the freshly recomputed value, not the stale 999s.
-    expect(result[7]?.normalized_session_time_s).toBeCloseTo(3, 6);
-    expect(result[7]?.p90_prefill_tps_per_user).toBeCloseTo(200, 6);
+    // Response is the freshly recomputed slow-tail inverse (tok/s/user).
+    expect(result[7]?.p90_e2e_norm_intvty).toBeCloseTo(1 / 0.038, 6);
+    expect(result[7]?.p75_e2e_norm_intvty).toBeCloseTo(1 / 0.035, 6);
 
     // 3 calls: stats read, blob read, write-back UPDATE.
     expect(calls).toHaveLength(3);
@@ -219,18 +180,47 @@ describe('getDerivedAgenticMetrics write-back', () => {
       isl: unknown;
       osl: unknown;
       kvCacheUtil: unknown;
-      normalizedSessionTimeS: number | null;
-      p90PrefillTpsPerUser: number | null;
+      e2elPerOsl: { p75: number; p90: number; n: number } | null;
     }
     const [written, traceReplayId] = calls[2]!.values as [WrittenStats, number];
     expect(traceReplayId).toBe(870);
     expect(written.version).toBe(STATS_VERSION);
-    expect(written.normalizedSessionTimeS).toBeCloseTo(3, 6);
-    expect(written.p90PrefillTpsPerUser).toBeCloseTo(200, 6);
+    expect(written.e2elPerOsl?.n).toBe(2);
+    expect(written.e2elPerOsl?.p90).toBeCloseTo(0.038, 8);
     expect(written.isl).not.toBeNull();
     expect(written.osl).not.toBeNull();
     // Server-derived field carried forward from the stale row (not re-read).
     expect(written.kvCacheUtil).toEqual(staleServerKv);
+    // Retired legacy fields must not survive the heal.
+    expect(written).not.toHaveProperty('normalizedSessionTimeS');
+    expect(written).not.toHaveProperty('p90PrefillTpsPerUser');
+    expect(written).not.toHaveProperty('normalizedE2e400');
+  });
+
+  it('does not stamp the bundle when there are no server fields to preserve', async () => {
+    // A row with null (or pre-v3) stats has no kvCacheUtil / prefixCacheHitRate
+    // for this route to carry forward, and it cannot recompute them — it never
+    // reads the server blob. Stamping the current version anyway would look
+    // complete downstream: the backfill's candidate query skips matching
+    // versions and agentic-aggregates takes the fast path, so those fields
+    // would stay null forever. The response is still served from the blob.
+    const jsonl = rec('s1', 0, { isl: 100, osl: 50, ttft_ms: 500, latency_ms: 1000 });
+    const blob = gzipSync(Buffer.from(jsonl));
+
+    const { sql, calls } = mockSql([
+      // fetchAggregateStatsRows — no stored bundle at all
+      [{ benchmark_result_id: 7, stats: null }],
+      // fallback profile-blob query
+      [{ benchmark_result_id: 7, trace_replay_id: 870, blob }],
+    ]);
+
+    const result = await getDerivedAgenticMetrics(sql, [7]);
+
+    // Caller still gets the freshly computed metric (1 / 0.02 s-per-token).
+    expect(result[7]?.p90_e2e_norm_intvty).toBeCloseTo(50, 6);
+    // Stats read + blob read only — no write-back UPDATE.
+    expect(calls).toHaveLength(2);
+    expect(calls.some((c) => c.text.includes('update agentic_trace_replay'))).toBe(false);
   });
 
   it('takes the fast path (no blob read, no write-back) when stats are current', async () => {
@@ -240,17 +230,34 @@ describe('getDerivedAgenticMetrics write-back', () => {
       osl: null,
       kvCacheUtil: null,
       prefixCacheHitRate: null,
-      normalizedSessionTimeS: 1.5,
-      p90PrefillTpsPerUser: 42,
-      normalizedE2e400: { mean: 1, p50: 1, p75: 1, p90: 2, p99: 3, n: 5 },
+      e2elPerOsl: { mean: 0.03, p50: 0.03, p75: 0.04, p90: 0.05, p99: 0.06, n: 5 },
     };
     const { sql, calls } = mockSql([[{ benchmark_result_id: 7, stats: currentStats }]]);
 
     const result = await getDerivedAgenticMetrics(sql, [7]);
 
-    expect(result[7]?.normalized_session_time_s).toBe(1.5);
-    expect(result[7]?.p90_normalized_e2e_400_s).toBe(2);
+    expect(result[7]?.p75_e2e_norm_intvty).toBeCloseTo(25, 6);
+    expect(result[7]?.p90_e2e_norm_intvty).toBeCloseTo(20, 6);
     // Only the stats read — no fallback blob query, no write-back.
     expect(calls).toHaveLength(1);
+  });
+
+  it('maps a missing ratio bundle to nulls on the fast path', async () => {
+    const currentStats = {
+      version: STATS_VERSION,
+      isl: null,
+      osl: null,
+      kvCacheUtil: null,
+      prefixCacheHitRate: null,
+      e2elPerOsl: null,
+    };
+    const { sql } = mockSql([
+      [{ benchmark_result_id: 7, stats: currentStats }],
+      // fallback blob query fires for no ids → but guard returns before; keep
+      // the queue empty-safe anyway.
+    ]);
+
+    const result = await getDerivedAgenticMetrics(sql, [7]);
+    expect(result[7]).toEqual({ id: 7, p75_e2e_norm_intvty: null, p90_e2e_norm_intvty: null });
   });
 });

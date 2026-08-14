@@ -338,11 +338,60 @@ describe('mapBenchmarkRow', () => {
       expect(result!.config.disagg).toBe(true);
     });
 
-    it('normalizes dynamo-trtllm to dynamo-trt and forces disagg=true (framework implies it)', () => {
+    it('normalizes legacy Dynamo rows without a disagg field to disagg=true', () => {
       const tracker = createSkipTracker();
       const result = mapBenchmarkRow(makeV1Row({ framework: 'dynamo-trtllm' }), tracker);
 
       expect(result!.config.framework).toBe('dynamo-trt');
+      expect(result!.config.disagg).toBe(true);
+    });
+
+    it('preserves explicit disagg=false for a multi-node Dynamo server', () => {
+      const tracker = createSkipTracker();
+      const result = mapBenchmarkRow(
+        makeV2Row({
+          framework: 'dynamo-vllm',
+          disagg: false,
+          is_multinode: true,
+          prefill_tp: 8,
+          prefill_ep: 1,
+          prefill_num_workers: 1,
+          num_prefill_gpu: 16,
+          prefill_pp: 2,
+          decode_tp: 0,
+          decode_ep: 0,
+          decode_num_workers: 0,
+          num_decode_gpu: 0,
+          decode_pp: 1,
+        }),
+        tracker,
+      );
+
+      expect(result!.config.framework).toBe('dynamo-vllm');
+      expect(result!.config.disagg).toBe(false);
+      expect(result!.config.isMultinode).toBe(true);
+      expect(result!.config.prefillTp).toBe(8);
+      expect(result!.config.decodeTp).toBe(8);
+      expect(result!.config.prefillEp).toBe(1);
+      expect(result!.config.decodeEp).toBe(1);
+      expect(result!.config.numPrefillGpu).toBe(16);
+      expect(result!.config.numDecodeGpu).toBe(16);
+      expect(result!.metrics.prefill_pp).toBe(2);
+      expect(result!.metrics.decode_pp).toBe(2);
+    });
+
+    it('keeps legacy disagg=false Dynamo artifacts disaggregated when decode workers exist', () => {
+      const tracker = createSkipTracker();
+      const result = mapBenchmarkRow(
+        makeV2Row({
+          framework: 'dynamo-vllm',
+          disagg: false,
+          prefill_num_workers: 1,
+          decode_num_workers: 1,
+        }),
+        tracker,
+      );
+
       expect(result!.config.disagg).toBe(true);
     });
   });
@@ -857,6 +906,36 @@ describe('mapBenchmarkRow — v3 agentic nested agg schema', () => {
     expect(m.p90_intvty).toBeCloseTo(6.00526, 2);
     // std is never inverted — passes through from the artifact
     expect(m.std_intvty).toBeCloseTo(24.77636, 6);
+  });
+
+  it('makes full-response ITL canonical when the aggregate provides it', () => {
+    const tracker = createSkipTracker();
+    const row = makeV3AgenticRow();
+    row.request_metrics.latency.itl.p99 = 0.2;
+    row.request_metrics.latency.intvty.p99 = 5;
+    row.request_metrics.latency.full_response_itl = {
+      mean: 0.005,
+      p50: 0.004,
+      p75: 0.006,
+      std: 0.001,
+    };
+    row.request_metrics.latency.full_response_intvty = {
+      mean: 200,
+      p50: 250,
+      p75: 166.666667,
+      std: 20,
+    };
+
+    const metrics = mapBenchmarkRow(row, tracker)!.metrics;
+
+    expect(metrics.median_full_response_itl).toBe(0.004);
+    expect(metrics.p75_full_response_itl).toBe(0.006);
+    expect(metrics.median_itl).toBe(0.004);
+    expect(metrics.p75_intvty).toBeCloseTo(1 / 0.006, 6);
+    expect(metrics.std_itl).toBe(0.001);
+    expect(metrics.std_intvty).toBe(20);
+    expect(metrics).not.toHaveProperty('p99_itl');
+    expect(metrics).not.toHaveProperty('p99_intvty');
   });
 
   it("maps kv_offloading 'none' to offload off and skips the empty backend", () => {
