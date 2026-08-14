@@ -3,18 +3,20 @@
 # Production image for the InferenceX Next.js dashboard.
 # Built by .github/workflows/deploy.yml on the self-hosted dashboard runner.
 #
-# Two stages so the runtime image doesn't carry pnpm's store / git / dev deps:
-#   builder — installs deps + runs `pnpm build`
+# Two stages so the runtime image doesn't carry bun's cache / git / dev deps:
+#   builder — installs deps + runs `bun run build`
 #   runtime — copies the workspace (with .next + node_modules) and runs
-#             `pnpm start`
+#             `bun run start`
 #
-# The whole pnpm workspace is shipped to runtime because `pnpm start` is
-# `pnpm --filter *app start`, which needs the lockfile and the
-# constants/db packages reachable from the symlinks under
-# packages/app/node_modules. Pruning that would save image size but
-# complicate the runtime, and the dashboard host has plenty of disk.
+# The whole bun workspace is shipped to runtime because `bun run start` is
+# `bun run --cwd packages/app start`, which needs the constants/db packages
+# reachable from the symlinks under packages/app/node_modules. Pruning that
+# would save image size but complicate the runtime, and the dashboard host
+# has plenty of disk.
+#
+# Base image tag matches package.json's `packageManager` (bun@1.3.14).
 
-FROM node:24-bookworm-slim AS builder
+FROM oven/bun:1.3.14-slim AS builder
 
 # git is required: the root package.json's `prepare` script runs
 # `is-ci || lefthook install`, and lefthook shells out to git. Setting
@@ -27,19 +29,18 @@ RUN apt-get update \
 
 ENV CI=true
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
 # Copy lockfile + workspace manifests first so dep install caches when only
 # source files change. node_modules layer is invalidated only by a
 # lockfile or package.json change.
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY bun.lock package.json ./
 COPY packages/app/package.json     packages/app/
 COPY packages/db/package.json      packages/db/
 COPY packages/constants/package.json packages/constants/
+COPY packages/mcp/package.json      packages/mcp/
 
-RUN pnpm install --frozen-lockfile
+RUN bun install --frozen-lockfile
 
 # Now copy the rest of the source and build.
 COPY . .
@@ -59,12 +60,12 @@ RUN --mount=type=secret,id=database_readonly_url \
     DATABASE_WRITE_URL="$(cat /run/secrets/database_write_url 2>/dev/null || echo postgresql://x:x@x:5432/x)" \
     DATABASE_DRIVER=postgres \
     DATABASE_SSL=false \
-    pnpm build
+    bun run build
 
 
-FROM node:24-bookworm-slim AS runtime
+FROM oven/bun:1.3.14-slim AS runtime
 
-# gh + unzip are used by `pnpm admin:db:ingest:run`, which shells out to
+# gh + unzip are used by `bun run admin:db:ingest:run`, which shells out to
 # `gh api` to list & download a workflow run's artifacts and then unzips
 # them. gh comes from the official GitHub apt repo; ca-certificates is
 # kept around because gh needs it for HTTPS to api.github.com at runtime.
@@ -81,13 +82,10 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-# CI=true again: `pnpm start` runs pnpm's dependency-status check, which can
-# invoke the root `prepare` script (`is-ci || lefthook install`). This stage
-# has no .git (COPY --from=builder doesn't bring it, and it's
-# .dockerignore'd besides), so without CI=true short-circuiting is-ci,
-# lefthook fails and crash-loops the container.
+# CI=true: `bun run start` can trigger the root `prepare` script
+# (`is-ci || lefthook install`). This stage has no .git (COPY --from=builder
+# doesn't bring it, and it's .dockerignore'd besides), so without CI=true
+# short-circuiting is-ci, lefthook fails and crash-loops the container.
 ENV CI=true
 
 WORKDIR /app
@@ -97,4 +95,4 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 EXPOSE 3000
-CMD ["pnpm", "start"]
+CMD ["bun", "run", "start"]

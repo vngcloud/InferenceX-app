@@ -1,5 +1,5 @@
-# Keep build context small — anything not needed to run `pnpm install` and
-# `pnpm build` belongs here. Source under packages/ is the only thing the
+# Keep build context small — anything not needed to run `bun install` and
+# `bun run build` belongs here. Source under packages/ is the only thing the
 # Dockerfile actually needs.
 
 .git
