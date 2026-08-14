@@ -57,7 +57,7 @@ jobs:
 
       - name: Run DB migrations (pre-build)
         # See deploy.yml's identical step for why this has to run before
-        # the build, and why it uses a throwaway node container instead
+        # the build, and why it uses a throwaway bun container instead
         # of the (not-yet-built) app image.
         run: |
           set -a
@@ -74,17 +74,17 @@ jobs:
             -e DATABASE_WRITE_URL="$db_url" \
             -e DATABASE_DRIVER=postgres \
             -e DATABASE_SSL=false \
-            node:24-bookworm-slim \
-            sh -c 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm --filter "*db" db:migrate --yes --no-ssl'
+            oven/bun:1.3.14-slim \
+            sh -c 'bun install --frozen-lockfile && bun run admin:db:migrate --yes --no-ssl'
 
       - name: Fix workspace ownership
         # Mirrors deploy.yml's identical step: the migration container above
         # runs as root and bind-mounts $GITHUB_WORKSPACE, leaving root-owned
-        # files (.pnpm-store/, node_modules/) that the next run's
-        # actions/checkout (unprivileged runner user) can't remove.
+        # files (node_modules/) that the next run's actions/checkout
+        # (unprivileged runner user) can't remove.
         if: always()
         run: |
-          docker run --rm -v "$GITHUB_WORKSPACE:/app" node:24-bookworm-slim \
+          docker run --rm -v "$GITHUB_WORKSPACE:/app" oven/bun:1.3.14-slim \
             chown -R "$(id -u):$(id -g)" /app
 
       - name: Build image
