@@ -169,6 +169,7 @@ export function normalizeFramework(
 const PRECISION_ALIASES: Record<string, string> = {
   nvfp4: 'fp4',
   mxfp4: 'fp4',
+  fp8block: 'fp8',
 };
 
 /**

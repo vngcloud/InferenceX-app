@@ -404,7 +404,7 @@ export const apiContractSourceDigests = [
   },
   {
     source: '../constants/src/models.ts',
-    sourceSha256: 'dca2b25f754adf90ac1bda31c5eb52503e3b3e8c72e684f10724c177c1317fac',
+    sourceSha256: '50b87ca89143ede642f7d6c86bbfa7e42ce780c90572e242550d028b68263e04',
     reviewArea: {
       en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
       zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
