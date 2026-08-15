@@ -148,6 +148,13 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
     label: 'Llama 3.3 70B',
     seoName: 'Llama 3.3 70B',
   },
+  {
+    slug: 'gemma-4-31b',
+    displayName: 'Gemma-4-31B',
+    dbKeys: ['gemma4'],
+    label: 'Gemma 4 31B',
+    seoName: 'Gemma 4 31B',
+  },
 ];
 
 /** Family-level and older-version slugs that 308 to the canonical slug above.

@@ -14,6 +14,7 @@ export enum Model {
   GLM_5 = 'GLM-5',
   GLM_5_2 = 'GLM-5.2',
   DeepSeek_V4_Pro = 'DeepSeek-V4-Pro',
+  Gemma4_31B = 'Gemma-4-31B',
 }
 
 export type CategoryTag = 'default' | 'experimental' | 'maintenance' | 'deprecated' | 'hidden';
@@ -173,6 +174,7 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
   },
   [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
   [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
+  [Model.Gemma4_31B]: { label: 'Gemma 4 31B', prefix: 'gemma4', category: 'default' },
 };
 
 function modelsByCategory(cat: CategoryTag): ReadonlySet<Model> {

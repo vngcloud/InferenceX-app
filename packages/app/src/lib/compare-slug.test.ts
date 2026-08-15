@@ -276,6 +276,7 @@ describe('compareModelSeoName', () => {
     'qwen-3-5': 'Qwen3.5',
     'gptoss-120b': 'gpt-oss-120b',
     'llama-3-3-70b': 'Llama 3.3 70B',
+    'gemma-4-31b': 'Gemma 4 31B',
   };
 
   it('returns the expected single-version name for every model', () => {
