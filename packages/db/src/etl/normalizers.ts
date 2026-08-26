@@ -49,6 +49,9 @@ const PREFIX_ALIASES: Record<string, string> = {
   // `kimik2.7-code` DB key; alias it so those rows resolve (and precision-suffixed
   // forms like `kimik2.7-fp4` fold in via PRECISION_SUFFIX stripping too).
   'kimik2.7': 'kimik2.7-code',
+  // Some Gemma-4-31B sweeps (run 32946716838) emit `gemma4fi` instead of the
+  // canonical `gemma4` DB key; same checkpoint (RedHatAI/gemma-4-31B-it-FP8-block).
+  gemma4fi: 'gemma4',
 };
 
 function resolvePrefixToKey(prefix: string): string | null {
