@@ -14,9 +14,16 @@
 # would save image size but complicate the runtime, and the dashboard host
 # has plenty of disk.
 #
-# Base image tag matches package.json's `packageManager` (bun@1.3.14).
+# Base image tag matches package.json's `packageManager` (bun@1.3.13).
+#
+# Pinned below 1.3.14: Bun 1.3.14 segfaults (SIGILL) during `next build`'s
+# "Collecting page data" phase on Next.js 16.3+ (oven-sh/bun#36866 — Bun
+# doesn't export `markAsUncloneable` from node:worker_threads even though its
+# docs claim support, which breaks undici 8.x's Next.js build workers). Bun
+# 1.3.13 builds this app cleanly. Bump past 1.3.14 only once that issue is
+# confirmed fixed upstream.
 
-FROM oven/bun:1.3.14-slim AS builder
+FROM oven/bun:1.3.13-slim AS builder
 
 # git is required: the root package.json's `prepare` script runs
 # `is-ci || lefthook install`, and lefthook shells out to git. Setting
@@ -63,7 +70,7 @@ RUN --mount=type=secret,id=database_readonly_url \
     bun run build
 
 
-FROM oven/bun:1.3.14-slim AS runtime
+FROM oven/bun:1.3.13-slim AS runtime
 
 # gh + unzip are used by `bun run admin:db:ingest:run`, which shells out to
 # `gh api` to list & download a workflow run's artifacts and then unzips
