@@ -4,40 +4,30 @@ import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import { FAQ_ITEMS_ZH } from '@/components/about/faq-data-zh';
 import { AgentXFaq } from '@/components/about/agentx-faq';
+import { buildFaqJsonLd, FaqList } from '@/components/about/faq';
+import { PromoVideo } from '@/components/about/promo-video';
 import { JsonLd } from '@/components/json-ld';
 import { zhAlternates, ZH_OG_LOCALE, ZH_LANG_TAG } from '@/lib/i18n';
 import { GITHUB_OWNER, GITHUB_REPO, SITE_URL } from '@semianalysisai/inferencex-constants';
 
-const faqJsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'FAQPage',
-  inLanguage: ZH_LANG_TAG,
-  mainEntity: FAQ_ITEMS_ZH.map((item) => ({
-    '@type': 'Question',
-    name: item.question,
-    acceptedAnswer: {
-      '@type': 'Answer',
-      text: [item.answer, item.link?.text, ...(item.list ?? [])].filter(Boolean).join(' '),
-    },
-  })),
-};
+const faqJsonLd = buildFaqJsonLd(FAQ_ITEMS_ZH, ZH_LANG_TAG);
+
+const ABOUT_DESCRIPTION =
+  'InferenceX 对比各类加速器与服务栈的智能体推理和固定序列 AI 推理性能。AgentX 是其长上下文多轮编码场景。';
 
 export const metadata: Metadata = {
   title: '关于',
-  description:
-    'InferenceX 是一个独立、厂商中立、可复现的基准测试平台，持续测试各类 AI 加速器上的推理软件性能。',
+  description: ABOUT_DESCRIPTION,
   alternates: zhAlternates('/about'),
   openGraph: {
     title: '关于 | InferenceX',
-    description:
-      'InferenceX 是一个独立、厂商中立、可复现的基准测试平台，持续测试各类 AI 加速器上的推理软件性能。',
+    description: ABOUT_DESCRIPTION,
     url: `${SITE_URL}/zh/about`,
     locale: ZH_OG_LOCALE,
   },
   twitter: {
     title: '关于 | InferenceX',
-    description:
-      'InferenceX 是一个独立、厂商中立、可复现的基准测试平台，持续测试各类 AI 加速器上的推理软件性能。',
+    description: ABOUT_DESCRIPTION,
   },
 };
 
@@ -47,9 +37,13 @@ export default function AboutPageZh() {
       <JsonLd data={faqJsonLd} />
       <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-6 lg:gap-4 pb-8">
         <section>
+          <PromoVideo />
+        </section>
+
+        <section>
           <Card>
             <h2 className="text-lg font-semibold mb-2">
-              开源持续推理基准测试——受万亿美元级吉瓦规模 Token 工厂运营者的信赖
+              开源持续智能体推理基准测试——受万亿美元级吉瓦规模 Token 工厂运营者的信赖
             </h2>
             <p className="text-muted-foreground mb-2">
               随着世界以指数级速度迈向
@@ -57,8 +51,8 @@ export default function AboutPageZh() {
             </p>
             <p className="text-muted-foreground mb-2">
               <strong>InferenceX&trade;</strong>（原名
-              InferenceMAX）是我们独立、厂商中立、可复现的基准测试平台，通过持续测试实际可用于 ML
-              社区的各类 AI 加速器上的推理软件来解决这些问题。
+              InferenceMAX）是我们独立、厂商中立、可复现的基准测试平台。它测试固定序列推理服务和
+              AgentX 长上下文多轮智能体编码工作负载，覆盖 ML 社区实际可用的各类 AI 加速器与服务栈。
             </p>
             <p className="text-muted-foreground">
               我们的开放数据与洞察已被 ML 社区广泛采用，包括万亿美元级 Token 工厂和 AI
@@ -66,16 +60,18 @@ export default function AboutPageZh() {
               NeoCloud。了解更多详情请阅读我们的文章：{' '}
               <Link
                 href="/blog/inferencemax-open-source-inference-benchmarking"
+                hrefLang="en"
                 className="text-brand hover:underline font-medium"
               >
-                InferenceX v1
+                InferenceX v1（英文文章）
               </Link>
               、{' '}
               <Link
                 href="/blog/inferencex-v2-nvidia-blackwell-vs-amd-vs-hopper"
+                hrefLang="en"
                 className="text-brand hover:underline font-medium"
               >
-                InferenceX v2
+                InferenceX v2（英文文章）
               </Link>
               。
             </p>
@@ -118,7 +114,7 @@ export default function AboutPageZh() {
                   3
                 </span>
                 <div>
-                  <strong className="text-foreground">上传产物。</strong> 请求延迟、token 计数、Chip
+                  <strong className="text-foreground">上传产物。</strong> 请求延迟、token 计数、芯片
                   功耗遥测数据和评估样本均附加到运行页面。GitHub Actions 保留这些产物 90
                   天，同时每周发布完整基准测试数据库的快照作为公开的 GitHub
                   Release，以实现更长期的可审计性。
@@ -173,45 +169,7 @@ export default function AboutPageZh() {
           </Card>
         </section>
 
-        <section>
-          <Card>
-            <h2 className="text-lg font-semibold mb-4">常见问题</h2>
-            <dl className="divide-y divide-border">
-              {FAQ_ITEMS_ZH.map((item) => (
-                <div key={item.question} className="py-4 first:pt-0 last:pb-0">
-                  <dt className="font-medium mb-1">{item.question}</dt>
-                  <dd className="text-muted-foreground text-sm">
-                    {item.answer && (
-                      <p>
-                        {item.answer}
-                        {item.link && (
-                          <>
-                            {' '}
-                            <a
-                              href={item.link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-brand hover:underline font-medium"
-                            >
-                              {item.link.text}
-                            </a>
-                          </>
-                        )}
-                      </p>
-                    )}
-                    {item.list && (
-                      <ul className="mt-1.5 ml-8 list-disc space-y-0.5">
-                        {item.list.map((li) => (
-                          <li key={li}>{li}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </Card>
-        </section>
+        <FaqList title="常见问题" items={FAQ_ITEMS_ZH} />
       </div>
     </main>
   );

@@ -46,18 +46,18 @@ describe('First-load navigation', () => {
     cy.visit('/', {
       onBeforeLoad(win) {
         win.localStorage.removeItem('inferencex-starred');
-        win.localStorage.removeItem('inferencex-star-modal-dismissed');
-        win.localStorage.removeItem('inferencex-kimi-k3-modal-dismissed');
-        win.localStorage.removeItem('inferencex-kimi-k3-banner-dismissed');
+        // Snoozed, not cleared: the star modal is the eligible landing nudge
+        // on first load, and its corner card would sit over the footer links
+        // these specs click.
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+        win.localStorage.removeItem('inferencex-openai-rubin-banner-dismissed');
       },
     });
 
-    // Banner (inline) and overlay modal coexist in independent slots.
-    cy.get('[data-testid="launch-modal"]').should('be.visible');
     cy.get('body').should('not.have.attr', 'data-scroll-locked');
   });
 
-  it('navigates to articles from the footer while the launch modal is visible', () => {
+  it('navigates to articles from the footer', () => {
     cy.get('[data-testid="footer-link-articles"]').scrollIntoView().click();
     cy.location('pathname').should('eq', '/blog');
   });
@@ -77,17 +77,50 @@ describe('First-load navigation', () => {
     cy.location('pathname').should('eq', '/compare');
   });
 
-  it('navigates to overview and the full dashboard from the landing CTAs', () => {
-    cy.get('[data-testid="landing-overview-link"]')
-      .should('have.attr', 'href', '/overview')
-      .click();
-    cy.location('pathname').should('eq', '/overview');
+  it('navigates to AgentX from the header with one click', () => {
+    cy.get('[data-testid="nav-link-agentx"]')
+      .should('have.attr', 'href', '/agentx')
+      .find('[data-nav-badge="agentx"]')
+      .should('be.visible')
+      .and('have.text', 'NEW');
+    cy.get('[data-testid="nav-link-agentx"]').click();
+    cy.location('pathname').should('eq', '/agentx');
+  });
 
-    cy.visit('/');
-    cy.get('[data-testid="landing-full-dashboard-link"]')
-      .should('have.attr', 'href', '/inference')
-      .click();
-    cy.location('pathname').should('eq', '/inference');
+  it('leads the landing page with the AgentX hero and its two CTAs', () => {
+    cy.get('[data-testid="compare-agentx-primary"]').within(() => {
+      // The hero owns /compare's h1; on the landing page it is a section heading.
+      cy.get('h2').should('have.text', 'Compare Realistic Agentic Inference Perf');
+      cy.get('h1').should('not.exist');
+      cy.get('[data-testid="compare-agentx-overview-link"]')
+        .should('contain.text', 'Overview')
+        .and('have.attr', 'href', '/overview');
+      cy.get('[data-testid="compare-agentx-dashboard-link"]')
+        .should('contain.text', 'Full dashboard')
+        .and('have.attr', 'href', '/inference/kimi-k3');
+      cy.get('[data-testid="compare-agentx-methodology-link"]').should('not.exist');
+      cy.get('[data-testid^="compare-agentx-model-"]').should('have.length', 6);
+      // Editorial order, not alphabetical — see FEATURED_AGENTX_MODEL_SLUGS.
+      cy.get('[data-testid^="compare-agentx-model-"]').then(($rows) => {
+        const slugs = [...$rows].map((row) =>
+          (row.dataset.testid ?? '').replace('compare-agentx-model-', ''),
+        );
+        expect(slugs).to.deep.equal([
+          'kimi-k3',
+          'deepseek-v4',
+          'glm-5-2',
+          'minimax-m3',
+          'qwen-3-5',
+          'qwen-3-8-flash-next',
+        ]);
+      });
+      // Every featured ledger row carries the NEW pill.
+      cy.get('[data-testid^="compare-agentx-model-"] [data-new-badge="agentx-ledger"]')
+        .should('have.length', 6)
+        .each(($badge) => expect($badge.text()).to.equal('NEW'));
+    });
+    cy.get('[data-testid="compare-agentx-overview-link"]').click();
+    cy.location('pathname').should('eq', '/overview');
   });
 
   it('navigates to submissions from the landing CTA', () => {

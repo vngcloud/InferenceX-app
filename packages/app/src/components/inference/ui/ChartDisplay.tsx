@@ -1,12 +1,22 @@
 'use client';
 import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants';
 import { track } from '@/lib/analytics';
-import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Check, ChevronDown, Table2 } from 'lucide-react';
+import { BarChart3, Table2 } from 'lucide-react';
 
-import chartDefinitions from '@/components/inference/inference-chart-config.json';
-import { useInference } from '@/components/inference/InferenceContext';
+import chartDefinitions, {
+  tokenMetricTypeForConfigKey,
+  type MetricKey,
+} from '@/components/inference/metric-registry';
+import { resolveXAxisKind } from '@/components/inference/axis-metric-explanations';
+import { resolveXAxisField } from '@/components/inference/utils/resolveXAxisField';
+import { applyTokenRevenuePricing, formatTokenPrice } from '@/components/inference/token-revenue';
+import {
+  useInferenceActions,
+  useInferenceData,
+  useInferenceDisplay,
+  useInferenceFilters,
+} from '@/components/inference/InferenceContext';
 import type {
   ChartDefinition,
   HardwareConfig,
@@ -23,24 +33,28 @@ import {
 } from '@/components/inference/utils/comparisonEntry';
 import { dataRunsForDate } from '@/components/inference/utils/runEnumeration';
 import { matchesQuickFilters } from '@/components/inference/utils/quickFilters';
-import { canonicalNormalizedFrontierIds } from '@/components/inference/utils/canonicalFrontier';
 import { bestSeriesPerSku } from '@/components/inference/utils/best-series-per-sku';
 import InferenceTable from '@/components/inference/ui/InferenceTable';
 import ScatterGraph from '@/components/inference/ui/ScatterGraph';
 import { Card } from '@/components/ui/card';
 import { ChartButtons } from '@/components/ui/chart-buttons';
+import { ShareButton } from '@/components/ui/share-button';
 import { type SegmentedToggleOption, SegmentedToggle } from '@/components/ui/segmented-toggle';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ChartShareActions, MetricAssumptionNotes } from '@/components/ui/chart-display-helpers';
+import { MetricAssumptionNotes } from '@/components/ui/chart-display-helpers';
 import { UnofficialDomainNotice } from '@/components/ui/unofficial-domain-notice';
+import { ModelLogo } from '@/components/ui/model-logo';
 import { metricLabel, metricTitle } from '@/lib/chart-utils';
 import { exportToCsv } from '@/lib/csv-export';
 import { inferenceChartToCsv } from '@/lib/csv-export-helpers';
 import { knownIssueCsvNote, matchKnownConfigIssues } from '@/lib/known-issues';
-import { cn, getDisplayLabel } from '@/lib/utils';
+import { getDisplayLabel, getFrameworkLabel } from '@/lib/utils';
+import { supportsChartTokenMetric } from '@/lib/supplemental-benchmarks';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useUnofficialRun } from '@/components/unofficial-run-provider';
+import {
+  useOverlayScopeReconciliation,
+  useUnofficialRun,
+} from '@/components/unofficial-run-provider';
 import {
   type Model,
   type Precision,
@@ -61,11 +75,16 @@ import {
   useDerivedAgenticMetrics,
   type DerivedAgenticMetric,
 } from '@/hooks/api/use-derived-agentic-metrics';
+import { useResidentSequenceLengths } from '@/hooks/api/use-resident-sequence-lengths';
 import { getHardwareConfig, hardwareKeyMatchesAnyBase } from '@/lib/constants';
 import { isPersistedBenchmarkId } from '@/lib/benchmark-id';
-import type { Locale } from '@/lib/i18n';
 import { useLocale } from '@/lib/use-locale';
 
+import { ATOM_FOOTNOTE_MARKER, AtomEngineFootnote } from '@/components/ui/atom-engine-footnote';
+import { AgenticOptimizationNote } from '@/components/inference/ui/AgenticOptimizationNote';
+import { OffloadHaloLegendKey } from '@/components/inference/ui/OffloadHaloLegendKey';
+
+import AxisMetricFooter from './AxisMetricFooter';
 import ChartControls from './ChartControls';
 import ComparisonChangelog from './ComparisonChangelog';
 import CustomCosts from './CustomCosts';
@@ -73,11 +92,8 @@ import CustomPowers from './CustomPowers';
 import GPUGraph from './GPUGraph';
 import ReplayLauncher, { type ReplayLauncherHandle } from '../replay/ReplayLauncher';
 
-const ModelArchitectureDiagram = dynamic(() => import('./ModelArchitectureDiagram'), {
-  ssr: false,
-  loading: () => <Skeleton className="h-40 w-full" />,
-});
 import WorkflowInfoDisplay from './WorkflowInfoDisplay';
+import { NormalizedInteractivityHelpLink } from './NormalizedInteractivityHelpLink';
 
 type InferenceViewMode = 'chart' | 'table';
 
@@ -85,42 +101,44 @@ const STRINGS = {
   en: {
     inferencePerformance: 'Inference Performance',
     inferencePerformanceDesc:
-      'Inference performance metrics across different models, hardware configurations, and serving parameters.',
+      'Agentic inference metrics from the AgentX scenario and fixed-sequence inference metrics across models, hardware configurations, and serving parameters.',
     chart: 'Chart',
     table: 'Table',
     sourceUnofficial: 'Source: UNOFFICIAL',
     sourceOfficial: 'Source: SemiAnalysis InferenceX™',
+    revenuePrices: (input: string, output: string) =>
+      `Input $${input}/M tok · Output $${output}/M tok`,
     updated: 'Updated:',
     e2eNormIntvtyDisclaimer:
       'E2E Normalized Interactivity requires persisted per-request traces, so unofficial-run overlays are unavailable for this experimental view.',
-    selectDateRange: 'Select a date range or add a run to view chip comparison',
+    completedSequenceLengths: (count: string) =>
+      `Completed requests across all resident points (n=${count})`,
     viewMode: 'View mode',
     vsTtft: (word: string) => `vs. ${word} Time To First Token`,
     vsE2eLatency: (pctl?: string) =>
       pctl ? `vs. ${pctl} End-to-end Latency` : 'vs. End-to-end Latency',
-    advancedXAxis: 'Advanced',
-    advancedXAxisWith: (label: string) => `Advanced: ${label}`,
   },
   zh: {
     inferencePerformance: '推理性能',
-    inferencePerformanceDesc: '不同模型、硬件配置和服务参数下的推理性能指标。',
+    inferencePerformanceDesc:
+      '不同模型、硬件配置和服务参数下，来自 AgentX 场景的智能体推理指标与固定序列推理指标。',
     chart: '图表',
     table: '表格',
     sourceUnofficial: '来源：非官方',
     sourceOfficial: '来源：SemiAnalysis InferenceX™',
+    revenuePrices: (input: string, output: string) =>
+      `输入 $${input}/百万 token · 输出 $${output}/百万 token`,
     updated: '更新时间：',
     e2eNormIntvtyDisclaimer:
       '端到端归一化交互性需要持久化的逐请求 trace 数据，因此该实验性视图不支持非官方运行覆盖。',
-    selectDateRange: '请选择日期范围或添加运行以查看 Chip 对比',
+    completedSequenceLengths: (count: string) => `当前所有数据点的已完成请求（n=${count}）`,
     viewMode: '视图模式',
     vsTtft: (word: string) => `vs. ${word === 'Median' ? '中位' : word} 首 token 延迟（TTFT）`,
     vsE2eLatency: (pctl?: string) => (pctl ? `vs. ${pctl} 端到端延迟` : 'vs. 端到端延迟'),
-    advancedXAxis: '高级',
-    advancedXAxisWith: (label: string) => `高级：${label}`,
   },
 } as const;
 
-// Translate the "vs. …" chart-heading suffix from inference-chart-config.json
+// Translate the "vs. …" chart-heading suffix from the metric registry
 // into Chinese. useChartData rewrites the heading with the selected percentile
 // for agentic sequences (e.g. "vs. P90 Interactivity"), so this matches the
 // pattern instead of a fixed string; unknown headings pass through unchanged.
@@ -151,103 +169,6 @@ const X_AXIS_MODE_BUTTONS: { value: XAxisMode; label: string; labelZh: string }[
   { value: 'e2e', label: 'E2E Latency', labelZh: '端到端延迟' },
   { value: 'ttft', label: 'TTFT', labelZh: 'TTFT' },
 ];
-
-/**
- * X-axis modes tucked behind the "Advanced" menu on agentic charts.
- *
- * AgentX headlines E2E Normalized Interactivity, so the three per-request
- * latency views are secondary there and would otherwise crowd the strip. They
- * stay flat top-level tabs on every other scenario: E2E Normalized
- * Interactivity is agentic-only, so collapsing them elsewhere would leave the
- * strip with nothing in it.
- */
-const ADVANCED_X_AXIS_MODES: readonly XAxisMode[] = ['interactivity', 'e2e', 'ttft'];
-
-const isAdvancedXAxisMode = (mode: XAxisMode): boolean => ADVANCED_X_AXIS_MODES.includes(mode);
-
-/**
- * "Advanced" x-axis picker for agentic charts. Styled to sit in the tab strip
- * beside the real tabs, but it is a menu button rather than a `TabsTrigger`:
- * Radix would otherwise treat it as a fifth tab stop and steal arrow-key
- * navigation from the modes inside it. The active mode's label is shown on the
- * trigger so the strip still says which metric the x-axis is plotting.
- */
-function AdvancedXAxisMenu({
-  selected,
-  onSelect,
-  locale,
-  labels,
-}: {
-  selected: XAxisMode;
-  onSelect: (mode: XAxisMode) => void;
-  locale: Locale;
-  labels: { advanced: string; advancedWith: (label: string) => string };
-}) {
-  const [open, setOpen] = useState(false);
-  const active = isAdvancedXAxisMode(selected);
-  const options = X_AXIS_MODE_BUTTONS.filter(({ value }) => isAdvancedXAxisMode(value));
-  const activeLabel = options.find(({ value }) => value === selected);
-  const activeText = activeLabel && (locale === 'zh' ? activeLabel.labelZh : activeLabel.label);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        data-testid="x-axis-mode-advanced"
-        data-state={active ? 'active' : 'inactive'}
-        // No aria-label: the accessible name comes from the visible text, so
-        // screen readers announce "Advanced: TTFT" rather than a bare
-        // "Advanced" that hides which metric the x-axis is plotting.
-        className={cn(
-          'relative inline-flex items-center justify-center gap-1.5',
-          'border-b-2 border-transparent px-4 py-2',
-          'text-sm font-semibold whitespace-nowrap',
-          'text-muted-foreground hover:border-muted-foreground/30',
-          'data-[state=active]:text-secondary dark:data-[state=active]:text-primary',
-          'data-[state=active]:border-secondary dark:data-[state=active]:border-primary',
-          'transition-colors duration-200',
-          'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring',
-          'min-w-[130px] sm:min-w-[140px] flex-1 sm:flex-initial cursor-pointer',
-        )}
-      >
-        {active && activeText ? labels.advancedWith(activeText) : labels.advanced}
-        <ChevronDown
-          className={cn('size-4 transition-transform', open && 'rotate-180')}
-          aria-hidden
-        />
-      </PopoverTrigger>
-      <PopoverContent align="center" className="w-52 p-1" data-testid="x-axis-mode-advanced-menu">
-        <ul className="flex flex-col">
-          {options.map(({ value, label, labelZh }) => {
-            const isActive = value === selected;
-            return (
-              <li key={value}>
-                <button
-                  type="button"
-                  data-testid={`x-axis-mode-${value}`}
-                  aria-current={isActive}
-                  onClick={() => {
-                    setOpen(false);
-                    onSelect(value);
-                  }}
-                  className={cn(
-                    'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm',
-                    'cursor-pointer transition-colors',
-                    isActive
-                      ? 'bg-accent text-secondary dark:text-primary font-medium'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                  )}
-                >
-                  {locale === 'zh' ? labelZh : label}
-                  {isActive && <Check className="size-4" aria-hidden />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </PopoverContent>
-    </Popover>
-  );
-}
 
 /** Presentation and data plumbing for trace-derived agentic x-axis modes. */
 interface DerivedXModeSpec {
@@ -286,41 +207,55 @@ const VIEW_MODE_OPTIONS: SegmentedToggleOption<InferenceViewMode>[] = [
   },
 ];
 
+export function formatTokenLength(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded < 1_000) return String(rounded);
+  if (rounded < 10_000) return `${(rounded / 1_000).toFixed(1).replace(/\.0$/u, '')}k`;
+  if (rounded < 1_000_000) return `${Math.round(rounded / 1_000)}k`;
+  return `${(rounded / 1_000_000).toFixed(2).replace(/\.0+$/u, '')}m`;
+}
+
 /**
  * Renders the inference chart cards, captions, and overlay controls for the current filtered
  * benchmark data.
+ *
+ * `embedded` renders the chart without the header section (title, description,
+ * share actions, and selector controls) — used by the `/model/[slug]` pages,
+ * which seed the model/scenario/metric via providers instead of user-facing
+ * selectors. The run-date changelog strip and the charts themselves remain.
  */
-export default function ChartDisplay() {
+export default function ChartDisplay({ embedded = false }: { embedded?: boolean } = {}) {
   const locale = useLocale();
   const t = STRINGS[locale];
+  const { graphs, loading, error, dateRangeAvailableDates } = useInferenceData();
   const {
-    graphs,
-    loading,
-    error,
-    workflowInfo,
-    selectedYAxisMetric,
-    selectedXAxisMetric,
-    selectedE2eXAxisMetric,
     selectedGPUs,
     selectedPrecisions,
     selectedDates,
-    setSelectedDates,
-    setSelectedDatesFromRunExpansion,
     selectedDateRange,
-    dateRangeAvailableDates,
     selectedModel,
     selectedSequence,
     selectedRunDate,
-    setIsLegendExpanded,
     activeHwTypes,
     bestPerSku,
     activeDates,
-    selectedPercentile,
     compareGpuPair,
-    selectedXAxisMode,
-    setSelectedXAxisMode,
     quickFilters,
-  } = useInference();
+  } = useInferenceFilters();
+  const {
+    selectedYAxisMetric,
+    selectedXAxisMetric,
+    selectedE2eXAxisMetric,
+    selectedPercentile,
+    selectedXAxisMode,
+    tokenRevenuePricing,
+  } = useInferenceDisplay();
+  const {
+    setSelectedDates,
+    setSelectedDatesFromRunExpansion,
+    setIsLegendExpanded,
+    setSelectedXAxisMode,
+  } = useInferenceActions();
   const selectedBenchmarkType: 'single_turn' | 'agentic_traces' =
     selectedSequence === Sequence.AgenticTraces ? 'agentic_traces' : 'single_turn';
   const workflowInfoBenchmarkType =
@@ -431,9 +366,7 @@ export default function ChartDisplay() {
     getOverlayData,
     isUnofficialRun,
     activeOverlayHwTypes,
-    setActiveOverlayHwTypes,
     localOfficialOverride,
-    setLocalOfficialOverride,
   } = useUnofficialRun();
 
   // Compute overlay data for each chart type — must match useChartData processing
@@ -470,17 +403,22 @@ export default function ChartDisplay() {
 
       const effectiveXMetric = chartType === 'e2e' ? selectedE2eXAxisMetric : selectedXAxisMetric;
       const isAgentic = sequenceKind(selectedSequence) === 'agentic';
+      const tokenType = tokenMetricTypeForConfigKey(selectedYAxisMetric);
+      const pricedData =
+        selectedYAxisMetric === 'y_tokenRevenuePerGpuHour'
+          ? applyTokenRevenuePricing(rawData.data, tokenRevenuePricing)
+          : rawData.data;
+      const capableData = pricedData.filter((point) =>
+        supportsChartTokenMetric(String(point.hwKey), point.date, tokenType),
+      );
       const processed = processOverlayChartDataWithClipping(
-        rawData.data,
+        capableData,
         chartType,
         selectedYAxisMetric,
         effectiveXMetric,
         {
           isAgentic,
           selectedPercentile,
-          // Unofficial rows lack persisted request traces, so they cannot be
-          // admitted to the normalized north-star frontier on any agentic axis.
-          restrictToNormalizedFrontier: isAgentic,
         },
       );
 
@@ -531,6 +469,7 @@ export default function ChartDisplay() {
     selectedE2eXAxisMetric,
     selectedPercentile,
     selectedXAxisMode,
+    tokenRevenuePricing,
     compareGpuPair,
   ]);
 
@@ -601,55 +540,49 @@ export default function ChartDisplay() {
   ]);
   const overlayRowsScopeKey = `${selectedModel}|${selectedSequence}|${selectedPrecisions.join(
     ',',
-  )}|${unofficialRunInfos.map((run) => run.url).join(',')}`;
-  const [appliedOverlayRowsScopeKey, setAppliedOverlayRowsScopeKey] = useState(overlayRowsScopeKey);
-  const overlayRowsScopeChanged =
-    isUnofficialRun && appliedOverlayRowsScopeKey !== overlayRowsScopeKey;
-  const selectedOfficialHwTypes = overlayRowsScopeChanged
-    ? officialScope
-    : isUnofficialRun
-      ? (localOfficialOverride ?? activeHwTypes)
-      : activeHwTypes;
-  // Preview tables follow the same policy as ScatterGraph: preserve every
-  // active engine family instead of applying the production comparison guard.
-  const scopedActiveOverlayHwTypes = useMemo(() => {
-    const activeScopedOverlayKeys = new Set(
-      [...activeOverlayHwTypes].filter((key) => overlayScope.has(key)),
-    );
-    return overlayRowsScopeChanged ? scopedBestSelections.overlay : activeScopedOverlayKeys;
-  }, [activeOverlayHwTypes, overlayScope, overlayRowsScopeChanged, scopedBestSelections.overlay]);
-  useEffect(() => {
-    const merged = new Set(activeOverlayHwTypes);
-    overlayScope.forEach((key) => merged.delete(key));
-    scopedActiveOverlayHwTypes.forEach((key) => merged.add(key));
-    let selectionChanged = merged.size !== activeOverlayHwTypes.size;
-    if (!selectionChanged) {
-      for (const key of merged) {
-        if (!activeOverlayHwTypes.has(key)) {
-          selectionChanged = true;
-          break;
-        }
-      }
-    }
-    if (selectionChanged) setActiveOverlayHwTypes(merged);
-    // A scope change can render once before its official graphs arrive. Do not
-    // persist that transient empty set as an intentional legend selection.
-    if (overlayRowsScopeChanged && (!loading || officialScope.size > 0)) {
-      setLocalOfficialOverride(scopedBestSelections.official);
-      setAppliedOverlayRowsScopeKey(overlayRowsScopeKey);
-    }
-  }, [
-    overlayRowsScopeChanged,
-    overlayRowsScopeKey,
-    activeOverlayHwTypes,
-    loading,
-    officialScope,
-    scopedBestSelections.official,
-    overlayScope,
-    scopedActiveOverlayHwTypes,
-    setActiveOverlayHwTypes,
-    setLocalOfficialOverride,
-  ]);
+  )}|${unofficialRunInfos.map((run) => run.url).join(',')}|official:${[...officialScope]
+    .toSorted()
+    .join(',')}|overlay:${[...overlayScope].toSorted().join(',')}`;
+  const selectedOfficialHwTypes = isUnofficialRun
+    ? (localOfficialOverride ?? activeHwTypes)
+    : activeHwTypes;
+  const scopedActiveOverlayHwTypes = useMemo(
+    () => new Set([...activeOverlayHwTypes].filter((key) => overlayScope.has(key))),
+    [activeOverlayHwTypes, overlayScope],
+  );
+  // Caption spec badges (TCO $/chip/hr, Power/Chip) should only quote chips
+  // that can actually appear on the plot: the active official legend selection
+  // plus any active unofficial-overlay selection.
+  const captionHwKeys = useMemo(
+    () => new Set([...selectedOfficialHwTypes, ...scopedActiveOverlayHwTypes]),
+    [selectedOfficialHwTypes, scopedActiveOverlayHwTypes],
+  );
+  const overlayScopeRegistration = useMemo(
+    () =>
+      isUnofficialRun
+        ? {
+            scopeKey: overlayRowsScopeKey,
+            officialHwTypes: officialScope,
+            overlayHwTypes: overlayScope,
+            bestOfficialHwTypes: scopedBestSelections.official,
+            bestOverlayHwTypes: scopedBestSelections.overlay,
+            bestPerSku,
+            ready: !loading || officialScope.size > 0,
+          }
+        : null,
+    [
+      isUnofficialRun,
+      overlayRowsScopeKey,
+      officialScope,
+      overlayScope,
+      scopedBestSelections,
+      bestPerSku,
+      loading,
+      activeOverlayHwTypes,
+      localOfficialOverride,
+    ],
+  );
+  useOverlayScopeReconciliation(overlayScopeRegistration);
 
   const visibleComparisonRows = useCallback(
     (officialRows: InferenceData[], overlay: OverlayData | null | undefined) => {
@@ -717,11 +650,38 @@ export default function ChartDisplay() {
   }, [effectiveGraphs, selectedXAxisMode]);
 
   const isAgenticSequence = sequenceKind(selectedSequence) === 'agentic';
+  const residentPointIds = useMemo(() => {
+    if (!isAgenticSequence) return [] as number[];
+    const ids = new Set<number>();
+    for (const graph of visibleGraphs) {
+      const points = [...graph.data, ...(graph.clippedData ?? []).map((entry) => entry.point)];
+      for (const point of points) {
+        if (
+          selectedPrecisions.includes(point.precision) &&
+          point.benchmark_type === 'agentic_traces' &&
+          isPersistedBenchmarkId(point.id)
+        ) {
+          ids.add(point.id);
+        }
+      }
+    }
+    return [...ids];
+  }, [isAgenticSequence, selectedPrecisions, visibleGraphs]);
+  // Unofficial-run artifacts are transformed in memory and do not have
+  // persisted aggregate_stats sketches. Suppress the subtitle in overlay mode
+  // rather than presenting official-only values as if they covered the overlay.
+  const residentSequenceLengthsQuery = useResidentSequenceLengths(
+    residentPointIds,
+    isAgenticSequence && !isUnofficialRun,
+  );
+  const residentSequenceLengths =
+    residentSequenceLengthsQuery.data?.coveredPoints ===
+    residentSequenceLengthsQuery.data?.requestedPoints
+      ? residentSequenceLengthsQuery.data
+      : null;
   const useDerivedXAxis = isAgenticSequence && isAgenticOnlyXAxisMode(selectedXAxisMode);
   const derivedTargetIds = useMemo(() => {
-    // Every agentic x-axis is classified by the normalized north-star
-    // frontier, so all modes need the persisted trace-derived metric.
-    if (!isAgenticSequence) return [] as number[];
+    if (!useDerivedXAxis) return [] as number[];
     const ids = new Set<number>();
     for (const graph of visibleGraphs) {
       const points = [...graph.data, ...(graph.clippedData ?? []).map((entry) => entry.point)];
@@ -732,11 +692,11 @@ export default function ChartDisplay() {
       }
     }
     return [...ids];
-  }, [isAgenticSequence, visibleGraphs]);
+  }, [useDerivedXAxis, visibleGraphs]);
   const derivedQuery = useDerivedAgenticMetrics(derivedTargetIds, isAgenticSequence);
   const derivedMetrics = derivedQuery.data;
-  const isCanonicalFrontierLoading =
-    isAgenticSequence &&
+  const isDerivedXAxisLoading =
+    useDerivedXAxis &&
     derivedTargetIds.length > 0 &&
     (derivedQuery.isPending || derivedQuery.isFetching) &&
     !derivedMetrics;
@@ -746,40 +706,25 @@ export default function ChartDisplay() {
     if (!isAgenticSequence) return visibleGraphs;
     if (!derivedMetrics) {
       // Legacy AgentX axes can still render transient/non-persisted rows, which
-      // have no ids to request. Persisted rows remain gated on their derived
-      // metrics so every displayed frontier can enforce canonical eligibility.
+      // have no ids to request.
       if (!derivedSpec && derivedTargetIds.length === 0) return visibleGraphs;
       return visibleGraphs.map((graph) => ({ ...graph, data: [], clippedData: [] }));
     }
     return visibleGraphs.map((graph) => {
       const rooflineKey = `${selectedYAxisMetric}_roofline` as keyof typeof graph.chartDefinition;
-      // The normalized axis is higher-is-better. Compute its true Pareto
-      // direction once, regardless of which x-axis is currently displayed.
       const configuredCorner = graph.chartDefinition[rooflineKey] as RooflineDirection | undefined;
-      const canonicalCorner =
+      const derivedCorner =
         graph.chartDefinition.chartType === 'e2e'
           ? derivedModeRoofline(configuredCorner, true)
           : configuredCorner;
-      const allPoints = [...graph.data, ...(graph.clippedData ?? []).map((entry) => entry.point)];
-      const canonicalIds = canonicalNormalizedFrontierIds(
-        allPoints,
-        derivedMetrics,
-        selectedPercentile,
-        canonicalCorner,
-      );
 
       const preparePoint = (point: InferenceData): InferenceData | null => {
         const pointId = isPersistedBenchmarkId(point.id) ? point.id : null;
-        const stamped = {
-          ...point,
-          isOnNormalizedInteractivityFrontier:
-            canonicalIds === null ? undefined : pointId !== null && canonicalIds.has(pointId),
-        };
-        if (!derivedSpec) return stamped;
+        if (!derivedSpec) return point;
         if (pointId === null) return null;
         const raw = derivedSpec.value(derivedMetrics[pointId], selectedPercentile);
         if (raw === null || raw === undefined || !Number.isFinite(raw)) return null;
-        return { ...stamped, x: derivedSpec.toX(raw) };
+        return { ...point, x: derivedSpec.toX(raw) };
       };
 
       const data = graph.data
@@ -800,7 +745,7 @@ export default function ChartDisplay() {
         ...graph.chartDefinition,
         x_label: xLabelFn(selectedPercentile.toUpperCase()),
         y_latency_limit: undefined,
-        ...(canonicalCorner ? { [rooflineKey]: canonicalCorner } : {}),
+        ...(derivedCorner ? { [rooflineKey]: derivedCorner } : {}),
       };
       return { ...graph, chartDefinition, data, clippedData };
     });
@@ -816,7 +761,7 @@ export default function ChartDisplay() {
   ]);
 
   const displayGraphs =
-    isFirstLoad || isCanonicalFrontierLoading
+    isFirstLoad || isDerivedXAxisLoading
       ? [
           <Card key="skeleton-0">
             <Skeleton className="h-7 w-2/4 mb-1" />
@@ -831,6 +776,62 @@ export default function ChartDisplay() {
               selectedDateRange.startDate && selectedDateRange.endDate && selectedGPUs.length > 0,
             );
             const replayAvailable = getViewMode(graphIndex) === 'chart' && !isTimelineMode;
+            // Which logical metric the x-axis plots right now. Classify off
+            // the field `resolveXAxisField` resolves for this chart's current
+            // state — the same resolver both chart pipelines plot with — so
+            // the footer always matches the drawn axis (e.g. an input metric
+            // without a `*_x` override keeps the natural interactivity x).
+            // Trace-derived agentic modes bypass that resolver, hence the flag.
+            const footerXAxisKind = resolveXAxisKind(graph.chartDefinition.chartType, {
+              xAxisField: resolveXAxisField(
+                graph.chartDefinition,
+                selectedYAxisMetric,
+                graph.chartDefinition.chartType === 'e2e'
+                  ? selectedE2eXAxisMetric
+                  : selectedXAxisMetric,
+                { isAgentic: isAgenticSequence, percentile: selectedPercentile },
+              ).xAxisField,
+              isDerivedNormalizedInteractivity: Boolean(derivedSpec),
+            });
+            // Notices for the axis-metric info footer: the KV-offload halo
+            // key, the agentic optimization note, and the ATOM engine
+            // footnote. Detected from the same data the chart plots —
+            // official points plus any loaded unofficial-run overlay for
+            // this chart type — so they moved out of the legend without
+            // changing when they appear.
+            // GPU/date comparison renders GPUGraph, which plots official
+            // points only — skip the unofficial overlay there so the footer
+            // can't advertise a halo or ATOM series that isn't on the chart.
+            const isGpuComparison =
+              selectedGPUs.length > 0 &&
+              ((selectedDateRange.startDate && selectedDateRange.endDate) ||
+                selectedDates.length > 0);
+            const footerOverlay = isGpuComparison
+              ? undefined
+              : selectUnofficialOverlayForMode(
+                  selectedXAxisMode,
+                  graph.chartDefinition.chartType,
+                  overlayDataByChartType,
+                );
+            const footerPoints = [
+              ...graph.data,
+              ...(footerOverlay?.data ?? []),
+              ...(footerOverlay?.clippedData ?? []).map((entry) => entry.point),
+            ];
+            const hasOffloadHalo = footerPoints.some((point) => point.offload_mode === 'on');
+            const hasAtomSeries = footerPoints.some(
+              (point) =>
+                point.framework !== undefined &&
+                getFrameworkLabel(point.framework).includes(ATOM_FOOTNOTE_MARKER),
+            );
+            const footerNotices =
+              hasOffloadHalo || isAgenticSequence || hasAtomSeries ? (
+                <>
+                  {hasOffloadHalo && <OffloadHaloLegendKey />}
+                  {isAgenticSequence && <AgenticOptimizationNote />}
+                  {hasAtomSeries && <AtomEngineFootnote />}
+                </>
+              ) : undefined;
             return (
               <section key={graphIndex} className="pt-8 md:pt-0">
                 <figure data-testid="chart-figure" className="relative rounded-lg">
@@ -844,13 +845,16 @@ export default function ChartDisplay() {
                           : 'interactivity'
                     }
                     leadingControls={
-                      <SegmentedToggle
-                        value={getViewMode(graphIndex)}
-                        options={viewModeOptions}
-                        onValueChange={(v) => handleViewModeChange(graphIndex, v)}
-                        ariaLabel={t.viewMode}
-                        testId={`inference-view-toggle-${graphIndex}`}
-                      />
+                      <>
+                        <SegmentedToggle
+                          value={getViewMode(graphIndex)}
+                          options={viewModeOptions}
+                          onValueChange={(v) => handleViewModeChange(graphIndex, v)}
+                          ariaLabel={t.viewMode}
+                          testId={`inference-view-toggle-${graphIndex}`}
+                        />
+                        {!embedded && <ShareButton className="h-7" />}
+                      </>
                     }
                     hideImageExport={getViewMode(graphIndex) === 'table'}
                     setIsLegendExpanded={setIsLegendExpanded}
@@ -904,7 +908,7 @@ export default function ChartDisplay() {
                       );
                     }}
                   />
-                  <Card>
+                  <Card data-coach-mark-root="">
                     {(() => {
                       const chartCaption = (
                         <>
@@ -964,12 +968,26 @@ export default function ChartDisplay() {
                             })()}
                           </h2>
                           <p className="text-sm text-muted-foreground mb-2">
+                            <ModelLogo model={graph.model as Model} className="mr-1.5" />
                             {getModelLabel(graph.model as Model)} •{' '}
                             {selectedPrecisions
                               .map((prec) => getPrecisionLabel(prec as Precision))
                               .join(', ')}{' '}
                             • {getSequenceLabel(graph.sequence as Sequence)} •{' '}
                             {isUnofficialRun ? t.sourceUnofficial : t.sourceOfficial}
+                            {selectedYAxisMetric === 'y_tokenRevenuePerGpuHour' &&
+                              tokenRevenuePricing && (
+                                <>
+                                  {' '}
+                                  •{' '}
+                                  <span data-testid="token-revenue-subtitle-prices">
+                                    {t.revenuePrices(
+                                      formatTokenPrice(tokenRevenuePricing.inputPerMillion),
+                                      formatTokenPrice(tokenRevenuePricing.outputPerMillion),
+                                    )}
+                                  </span>
+                                </>
+                              )}
                             {selectedRunDate && (
                               <>
                                 {' '}
@@ -986,7 +1004,32 @@ export default function ChartDisplay() {
                               </>
                             )}
                           </p>
-                          <MetricAssumptionNotes selectedYAxisMetric={selectedYAxisMetric} />
+                          {residentSequenceLengths && (
+                            <p
+                              className="mb-2 text-xs text-muted-foreground"
+                              data-testid="resident-sequence-lengths"
+                            >
+                              {t.completedSequenceLengths(
+                                residentSequenceLengths.isl.n.toLocaleString(
+                                  locale === 'zh' ? 'zh-CN' : 'en-US',
+                                ),
+                              )}{' '}
+                              · ISL p50 {formatTokenLength(residentSequenceLengths.isl.p50)} · p75{' '}
+                              {formatTokenLength(residentSequenceLengths.isl.p75)} · p90{' '}
+                              {formatTokenLength(residentSequenceLengths.isl.p90)} · p95{' '}
+                              {formatTokenLength(residentSequenceLengths.isl.p95)} · p99{' '}
+                              {formatTokenLength(residentSequenceLengths.isl.p99)} | OSL p50{' '}
+                              {formatTokenLength(residentSequenceLengths.osl.p50)} · p75{' '}
+                              {formatTokenLength(residentSequenceLengths.osl.p75)} · p90{' '}
+                              {formatTokenLength(residentSequenceLengths.osl.p90)} · p95{' '}
+                              {formatTokenLength(residentSequenceLengths.osl.p95)} · p99{' '}
+                              {formatTokenLength(residentSequenceLengths.osl.p99)}
+                            </p>
+                          )}
+                          <MetricAssumptionNotes
+                            selectedYAxisMetric={selectedYAxisMetric}
+                            activeHwKeys={captionHwKeys}
+                          />
                           {isUnofficialRun &&
                             selectedXAxisMode === 'e2e-normalized-interactivity' && (
                               <p className="mb-2 text-xs text-muted-foreground">
@@ -1036,9 +1079,7 @@ export default function ChartDisplay() {
                         );
                       }
 
-                      return selectedGPUs.length > 0 &&
-                        ((selectedDateRange.startDate && selectedDateRange.endDate) ||
-                          selectedDates.length > 0) ? (
+                      return isGpuComparison ? (
                         <GPUGraph
                           chartId={`chart-${graphIndex}`}
                           modelLabel={graph.model}
@@ -1068,18 +1109,16 @@ export default function ChartDisplay() {
                               ) ?? undefined
                             }
                           />
-                          {selectedGPUs.length > 0 &&
-                            (!selectedDateRange.startDate || !selectedDateRange.endDate) &&
-                            selectedDates.length === 0 && (
-                              <div className="absolute inset-0 flex items-center justify-center bg-background/60 backdrop-blur-[2px] rounded-lg z-10">
-                                <p className="text-sm font-medium text-muted-foreground bg-background/90 border border-border rounded-md px-4 py-2 shadow-sm">
-                                  {t.selectDateRange}
-                                </p>
-                              </div>
-                            )}
                         </div>
                       );
                     })()}
+                    <AxisMetricFooter
+                      chartId={`chart-${graphIndex}`}
+                      metricKey={selectedYAxisMetric.replace(/^y_/u, '') as MetricKey}
+                      xAxisKind={footerXAxisKind}
+                      xAxisLabel={graph.chartDefinition.x_label}
+                      notices={footerNotices}
+                    />
                     {replayAvailable && (
                       <ReplayLauncher
                         ref={(handle) => {
@@ -1102,16 +1141,26 @@ export default function ChartDisplay() {
       <section className="relative z-20">
         <Card>
           <div className="flex flex-col gap-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-lg font-semibold mb-2">{t.inferencePerformance}</h2>
-                <p className="text-muted-foreground text-sm mb-4">{t.inferencePerformanceDesc}</p>
-              </div>
-              <ChartShareActions />
-            </div>
-            <ChartControls />
-            <ModelArchitectureDiagram model={selectedModel} />
-            {selectedGPUs.length === 0 && <WorkflowInfoDisplay workflowInfo={workflowInfo} />}
+            {!embedded && (
+              <>
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold mb-2">{t.inferencePerformance}</h2>
+                    <p className="text-muted-foreground text-sm mb-4">
+                      {t.inferencePerformanceDesc}
+                    </p>
+                  </div>
+                  {/* The chart-row ShareButton lives in ChartButtons, which is desktop-only
+                      (`hidden md:flex`); keep a header Share on mobile so small screens
+                      don't lose the share entry point. */}
+                  <div className="md:hidden">
+                    <ShareButton />
+                  </div>
+                </div>
+                <ChartControls />
+              </>
+            )}
+            {selectedGPUs.length === 0 && <WorkflowInfoDisplay />}
             {selectedGPUs.length > 0 && (
               <ComparisonChangelog
                 changelogs={changelogs}
@@ -1119,6 +1168,7 @@ export default function ChartDisplay() {
                 selectedPrecisions={selectedPrecisions}
                 modelDbKeys={modelDbKeys}
                 selectedSequence={selectedSequence}
+                defaultExpanded={!embedded}
                 loading={changelogsLoading}
                 totalDatesQueried={totalDatesQueried}
                 selectedDates={selectedDates}
@@ -1141,7 +1191,8 @@ export default function ChartDisplay() {
         </Card>
       </section>
 
-      {selectedYAxisMetric === 'y_costUser' && (
+      {(selectedYAxisMetric === 'y_costUser' ||
+        selectedYAxisMetric === 'y_tokensPerDollarUser') && (
         <section>
           <CustomCosts loading={loading} />
         </section>
@@ -1151,16 +1202,7 @@ export default function ChartDisplay() {
           <CustomPowers loading={loading} />
         </section>
       )}
-      {/*
-        Manual activation: with Radix's default automatic mode, merely focusing
-        a trigger fires onValueChange. On agentic the strip renders a single tab
-        while the selected mode may live in the Advanced menu, so tabbing to
-        that lone trigger would silently snap the x-axis back to E2E Normalized
-        Interactivity. Manual activation also suits a control whose every change
-        redraws the chart — arrow keys move focus, Enter/Space commits.
-      */}
       <Tabs
-        activationMode="manual"
         value={selectedXAxisMode}
         onValueChange={(value) => {
           setSelectedXAxisMode(value as XAxisMode);
@@ -1173,32 +1215,41 @@ export default function ChartDisplay() {
           className="flex-wrap justify-center gap-x-1 gap-y-1.5 sm:gap-x-1.5"
         >
           {X_AXIS_MODE_BUTTONS.filter(({ value }) => {
-            // Before mount, render the flat strip so SSR and first client render match.
+            // Before mount, render all buttons so SSR and first client render match.
             if (!mounted) return true;
-            if (isAgenticOnlyXAxisMode(value)) return isAgenticSequence;
-            // On agentic these three move into the Advanced menu below.
-            return !(isAgenticSequence && isAdvancedXAxisMode(value));
-          }).map(({ value, label, labelZh }) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              data-testid={`x-axis-mode-${value}`}
-              className="min-w-[130px] sm:min-w-[140px] flex-1 sm:flex-initial justify-center"
-            >
-              {locale === 'zh' ? labelZh : label}
-            </TabsTrigger>
-          ))}
-          {mounted && isAgenticSequence && (
-            <AdvancedXAxisMenu
-              selected={selectedXAxisMode}
-              onSelect={(mode) => {
-                setSelectedXAxisMode(mode);
-                track('latency_x_axis_mode_selected', { mode });
-              }}
-              locale={locale}
-              labels={{ advanced: t.advancedXAxis, advancedWith: t.advancedXAxisWith }}
-            />
-          )}
+            return !isAgenticOnlyXAxisMode(value) || isAgenticSequence;
+          }).map(({ value, label, labelZh }) => {
+            const modeLabel = locale === 'zh' ? labelZh : label;
+            if (value !== 'e2e-normalized-interactivity') {
+              return (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  data-testid={`x-axis-mode-${value}`}
+                  className="min-w-[130px] sm:min-w-[140px] flex-1 sm:flex-initial justify-center"
+                >
+                  {modeLabel}
+                </TabsTrigger>
+              );
+            }
+
+            return (
+              <span
+                key={value}
+                role="presentation"
+                className="relative flex flex-1 sm:flex-initial"
+              >
+                <TabsTrigger
+                  value={value}
+                  data-testid={`x-axis-mode-${value}`}
+                  className="min-w-[130px] flex-1 justify-center pr-9 sm:min-w-[140px] sm:flex-initial"
+                >
+                  {modeLabel}
+                </TabsTrigger>
+                <NormalizedInteractivityHelpLink locale={locale} />
+              </span>
+            );
+          })}
         </TabsList>
       </Tabs>
       <div className="flex flex-col gap-4">{displayGraphs}</div>

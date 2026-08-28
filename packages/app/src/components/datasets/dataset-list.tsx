@@ -26,15 +26,15 @@ const STRINGS = {
   zh: {
     loading: '正在加载数据集…',
     error: '数据集加载失败。',
-    empty: '尚未导入数据集。',
-    conversations: '对话数',
-    medianReqConvo: '每对话中位请求数',
-    meanReqConvo: '每对话平均请求数',
-    mainTurns: '主轮次',
-    subagentGroups: 'Subagent 组',
-    cachedInput: '缓存输入',
-    totalInput: '总输入',
-    totalOutput: '总输出',
+    empty: '尚无已导入的数据集。',
+    conversations: '会话数',
+    medianReqConvo: '单会话请求数中位数',
+    meanReqConvo: '单会话平均请求数',
+    mainTurns: 'main agent 轮次',
+    subagentGroups: 'subagent 组',
+    cachedInput: 'cached input 占比',
+    totalInput: 'input token 总数',
+    totalOutput: 'output token 总数',
     viewDataset: '查看数据集 →',
   },
 } as const;
@@ -46,14 +46,14 @@ function DatasetCard({ d, locale }: { d: DatasetRecord; locale: 'en' | 'zh' }) {
   const prefix = locale === 'zh' ? '/zh' : '';
   return (
     <Link
-      href={`${prefix}/datasets/${d.slug}`}
+      href={`${prefix}/agentx/${d.slug}`}
       onClick={() => track('datasets_card_clicked', { slug: d.slug })}
       className="block transition-colors hover:[&_*]:border-primary/40"
     >
       <Card className="h-full p-4 transition-colors hover:border-primary/40">
         <div className="mb-1 flex items-baseline justify-between gap-2">
           <h3 className="text-base font-semibold text-foreground">{d.label}</h3>
-          <span className="rounded-full border border-border/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <span className="rounded-full border border-border/50 px-2 py-0.5 text-3xs uppercase tracking-wide text-muted-foreground">
             {d.variant}
           </span>
         </div>

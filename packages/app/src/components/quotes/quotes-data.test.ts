@@ -8,7 +8,13 @@ import { CAROUSEL_LABELS, CAROUSEL_ORGS, QUOTES } from './quotes-data';
  * supporter come off the carousel without being dropped from the site, so it is
  * asserted here rather than left implicit.
  */
-const OFF_CAROUSEL_ONLY = ['Together AI', 'Nebius', 'White House', 'UC San Diego'] as const;
+const OFF_CAROUSEL_ONLY = [
+  'Together AI',
+  'Nebius',
+  'White House',
+  'UC San Diego',
+  'TensorWave',
+] as const;
 
 describe('quote carousel membership', () => {
   it('keeps every carousel org backed by a real quote', () => {
@@ -20,6 +26,17 @@ describe('quote carousel membership', () => {
 
   it('lists each carousel org once', () => {
     expect(new Set(CAROUSEL_ORGS).size).toBe(CAROUSEL_ORGS.length);
+  });
+
+  it('features Mooncake in the landing carousel', () => {
+    expect(CAROUSEL_ORGS).toContain('Mooncake');
+  });
+
+  it('features AMD and NVIDIA in the landing carousel under CEO labels', () => {
+    expect(CAROUSEL_ORGS).toContain('AMD');
+    expect(CAROUSEL_ORGS).toContain('NVIDIA');
+    expect(CAROUSEL_LABELS['AMD']).toBe('AMD Lisa Su');
+    expect(CAROUSEL_LABELS['NVIDIA']).toBe('NVIDIA Jensen');
   });
 
   it.each(OFF_CAROUSEL_ONLY)('excludes %s from the carousel', (org) => {
@@ -35,6 +52,18 @@ describe('quote carousel membership', () => {
     // so only assert that active carousel orgs resolve to a non-empty label.
     for (const org of CAROUSEL_ORGS) {
       expect(CAROUSEL_LABELS[org] ?? org).not.toBe('');
+    }
+  });
+});
+
+describe('Chinese quote attribution', () => {
+  it('provides a Chinese role for every quote with an English role', () => {
+    for (const quote of QUOTES) {
+      if (!quote.title) continue;
+      expect(
+        Reflect.get(quote, 'titleZh'),
+        `${quote.name} has an English role but no Chinese role`,
+      ).toBeTruthy();
     }
   });
 });

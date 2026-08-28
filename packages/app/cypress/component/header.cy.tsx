@@ -4,6 +4,7 @@ import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.share
 
 import { Header } from '@/components/header/header';
 import { ThemeProvider } from '@/components/ui/theme-provider';
+import { createMockRouter } from '../support/mock-router';
 
 // Mounted outside the Next app shell; next-style-loader inserts the global
 // stylesheet before this anchor, so it must exist before the import below.
@@ -20,17 +21,6 @@ const queryClient = new QueryClient({
 const MIN_TOUCH_PX = 44;
 /** Tolerance for sub-pixel layout rounding. */
 const EPSILON = 0.5;
-
-function createMockRouter() {
-  return {
-    push: cy.stub(),
-    replace: cy.stub(),
-    refresh: cy.stub(),
-    back: cy.stub(),
-    forward: cy.stub(),
-    prefetch: cy.stub().resolves(),
-  };
-}
 
 function rectOf(selector: string) {
   return cy.get(selector).then(($el) => $el[0].getBoundingClientRect());
@@ -80,6 +70,20 @@ describe('Header', () => {
     cy.wrap(mockRouter.push).should('have.been.calledTwice');
   });
 
+  it('retains resilient locale navigation outside Overview', () => {
+    cy.clock();
+    mountHeader('/inference');
+    cy.get('[data-testid="language-toggle"]')
+      .invoke('attr', 'href')
+      .then((href) => {
+        expect(href).to.include('/zh/inference');
+        cy.get('[data-testid="language-toggle"]').click();
+        cy.wrap(mockRouter.push).should('have.been.calledOnceWith', href);
+        cy.tick(250);
+        cy.wrap(mockRouter.push).should('have.been.calledTwice');
+      });
+  });
+
   it('makes a click on the tab already showing a no-op', () => {
     mountHeader('/overview');
     cy.get('[data-testid="nav-link-overview"]').click();
@@ -104,10 +108,50 @@ describe('Header', () => {
     cy.get('[data-testid="nav-link-compare"]').should('have.attr', 'href', '/compare');
   });
 
+  it('shows AgentX as a top-level nav link and highlights AgentX child pages', () => {
+    cy.get('[data-testid="nav-link-agentx"]')
+      .should('be.visible')
+      .and('have.attr', 'href', '/agentx')
+      .find('[data-nav-badge="agentx"]')
+      .should('have.text', 'NEW');
+
+    mountHeader('/agentx/claude-code-traces');
+    cy.get('[data-testid="nav-link-agentx"]').should('have.class', 'text-brand');
+  });
+
+  it('keeps AgentX in the Chinese navigation tree', () => {
+    mountHeader('/zh/agentx');
+    cy.get('[data-testid="nav-link-agentx"]')
+      .should('be.visible')
+      .and('contain.text', 'AgentX')
+      .and('have.attr', 'href', '/zh/agentx')
+      .and('have.class', 'text-brand');
+    cy.get('[data-testid="nav-link-agentx"]')
+      .find('[data-nav-badge="agentx"]')
+      .should('have.text', '新');
+  });
+
+  it('orders the nav with Home first and AgentX second', () => {
+    const expected = [
+      'Home',
+      'AgentX',
+      'Overview',
+      'Dashboard',
+      'Comparisons',
+      'Articles',
+      'About',
+    ];
+    cy.get('[data-testid^="nav-link-"]').then(($links) => {
+      // Strip the NEW badge so the comparison is against the label alone.
+      const labels = [...$links].map((link) => (link.textContent ?? '').replace('NEW', '').trim());
+      expect(labels).to.deep.equal(expected);
+    });
+  });
+
   it('keeps footer destinations out of the primary nav', () => {
     cy.get('[data-testid="nav-link-supporters"]').should('not.exist');
-    cy.get('[data-testid="nav-link-datasets"]').should('not.exist');
-    cy.get('[data-testid="nav-link-blog"]').should('not.exist');
+    // Telemetry moved to the footer; Articles took its place in the nav.
+    cy.get('[data-testid="nav-link-telemetry"]').should('not.exist');
   });
 
   it('shows the GitHub stars button linking to the correct repo', () => {
@@ -133,9 +177,14 @@ describe('Header', () => {
       cy.contains('a', 'Overview').should('be.visible').and('have.attr', 'href', '/overview');
       cy.contains('a', 'Dashboard').should('be.visible').and('have.attr', 'href', '/inference');
       cy.contains('a', 'Comparisons').should('be.visible').and('have.attr', 'href', '/compare');
+      cy.contains('a', 'AgentX')
+        .should('be.visible')
+        .and('have.attr', 'href', '/agentx')
+        .find('[data-nav-badge="agentx"]')
+        .should('have.text', 'NEW');
+      cy.contains('a', 'Articles').should('be.visible').and('have.attr', 'href', '/blog');
       cy.contains('a', 'Supporters').should('not.exist');
-      cy.contains('a', 'Datasets').should('not.exist');
-      cy.contains('a', 'Articles').should('not.exist');
+      cy.contains('a', 'Telemetry').should('not.exist');
     });
   });
 
@@ -147,6 +196,40 @@ describe('Header', () => {
     cy.wrap(mockRouter.push).should('have.been.calledOnceWith', '/overview');
     cy.tick(250);
     cy.wrap(mockRouter.push).should('have.been.calledTwice');
+  });
+
+  it('uses the hamburger without horizontal overflow from 1009 through 1024 CSS pixels', () => {
+    [1009, 1012, 1020, 1024].forEach((width) => {
+      cy.viewport(width, 720);
+      cy.get('[data-testid="nav-link-dashboard"]').should('not.be.visible');
+      cy.get('[data-testid="mobile-menu-toggle"]').should('be.visible');
+      cy.document().then((doc) => {
+        expect(doc.documentElement.scrollWidth, `${width}px document scrollWidth`).to.be.at.most(
+          doc.documentElement.clientWidth,
+        );
+      });
+      cy.get('[data-testid="header"]').then(($header) => {
+        const header = $header[0];
+        expect(header.scrollWidth, `${width}px header scrollWidth`).to.be.at.most(
+          header.clientWidth,
+        );
+      });
+    });
+  });
+
+  it('keeps every primary link inside the header at the xl desktop breakpoint', () => {
+    cy.viewport(1280, 720);
+    cy.get('[data-testid="header"]').then(($header) => {
+      const header = $header[0];
+      const bounds = header.getBoundingClientRect();
+      expect(header.scrollWidth, 'header scrollWidth').to.be.at.most(header.clientWidth);
+
+      cy.get('[data-testid^="nav-link-"]:visible').each(($link) => {
+        const rect = $link[0].getBoundingClientRect();
+        expect(rect.left, `${$link.text()} left edge`).to.be.at.least(bounds.left - EPSILON);
+        expect(rect.right, `${$link.text()} right edge`).to.be.at.most(bounds.right + EPSILON);
+      });
+    });
   });
 
   describe('at 320x700', () => {
@@ -204,10 +287,12 @@ describe('Header', () => {
       cy.get('[data-testid="mobile-menu-toggle"]').click();
       cy.get('[data-testid="mobile-menu"]').should('be.visible');
       cy.get('[data-testid="mobile-menu"]').within(() => {
-        ['Home', 'Overview', 'Dashboard', 'Comparisons', 'About'].forEach((label) => {
-          cy.contains('a', label).should('be.visible');
-        });
-        ['Supporters', 'Datasets', 'Articles'].forEach((label) => {
+        ['Home', 'Overview', 'Dashboard', 'Comparisons', 'Articles', 'AgentX', 'About'].forEach(
+          (label) => {
+            cy.contains('a', label).should('be.visible');
+          },
+        );
+        ['Supporters', 'Telemetry'].forEach((label) => {
           cy.contains('a', label).should('not.exist');
         });
       });

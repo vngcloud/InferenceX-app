@@ -308,15 +308,48 @@ describe('processOverlayChartData', () => {
     expect(result[0].x).toBe(0.5);
   });
 
-  it('applies cost limit filtering', () => {
+  it('keeps all unofficial-run tokens-per-dollar points without the former cost clamp', () => {
     const data = [
-      pt({ costh: { y: 0.5, roof: false }, median_intvty: 10 } as any),
-      pt({ costh: { y: 100, roof: false }, median_intvty: 20 } as any),
+      pt({ tokensPerDollarH: { y: 500_000, roof: false }, median_intvty: 10 } as any),
+      pt({ tokensPerDollarH: { y: 2_000_000, roof: false }, median_intvty: 20 } as any),
     ];
-    // interactivity chart config has y_cost_limit: 5
+    const result = processOverlayChartData(data, 'interactivity', 'y_tokensPerDollarH', null);
+    expect(result.map((point) => point.y)).toEqual([500_000, 2_000_000]);
+  });
+
+  it('keeps the existing unofficial-run cost-per-million metric independent', () => {
+    const data = [pt({ costh: { y: 0.5, roof: false }, median_intvty: 20 } as any)];
     const result = processOverlayChartData(data, 'interactivity', 'y_costh', null);
+
     expect(result).toHaveLength(1);
     expect(result[0].y).toBe(0.5);
+    expect(result[0].costh.y).toBe(0.5);
+  });
+
+  it('does not classify unofficial-run purchasing-power points as cost overflows', () => {
+    const visible = pt({
+      tokensPerDollarH: { y: 500_000, roof: false },
+      median_intvty: 10,
+      run_url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/123',
+    } as any);
+    const highValue = pt({
+      tokensPerDollarH: { y: 2_000_000, roof: false },
+      median_intvty: 20,
+      run_url: 'https://github.com/SemiAnalysisAI/InferenceX/actions/runs/123',
+    } as any);
+
+    const result = processOverlayChartDataWithClipping(
+      [visible, highValue],
+      'interactivity',
+      'y_tokensPerDollarH',
+      null,
+    );
+
+    expect(result.data).toEqual([
+      expect.objectContaining({ x: 10, y: 500_000, run_url: visible.run_url }),
+      expect.objectContaining({ x: 20, y: 2_000_000, run_url: highValue.run_url }),
+    ]);
+    expect(result.clippedData).toEqual([]);
   });
 
   it('retains clipped unofficial-run points for the overflow continuation path', () => {

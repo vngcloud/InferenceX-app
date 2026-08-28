@@ -1,3 +1,5 @@
+import { expandLegendAdvanced } from '../support/legend-advanced';
+
 const openReplayDialog = () => {
   cy.get('[data-testid="chart-figure"]')
     .first()
@@ -120,23 +122,32 @@ describe('Inference Replay', () => {
   it('re-renders the replay frame when a parent-chart toggle changes', () => {
     cy.get('body').then(($body) => {
       if ($body.find('[data-testid="replay-panel-chart-0"]').length === 0) return;
+      // The log-scale switch lives in the collapsed-by-default Advanced drawer,
+      // so expand it on the parent chart's legend (not the replay panel's).
+      cy.get('[data-testid="legend-advanced-toggle"]').then(($toggles) => {
+        const parentAdvanced = [...$toggles].find(
+          (toggle) => !toggle.closest('[data-testid^="replay-panel-chart-"]'),
+        );
+        if (!parentAdvanced) throw new Error('Parent chart Advanced toggle is missing');
+        if (parentAdvanced.getAttribute('aria-expanded') !== 'true') {
+          cy.wrap(parentAdvanced).click({ force: true });
+        }
+      });
       // Capture the SVG path data for the first roofline as a stable signature.
       cy.get('[data-testid="replay-panel-chart-0"] svg path.roofline-path')
         .first()
         .invoke('attr', 'd')
         .then((beforeD) => {
-          // Toggle the log-scale setting in the underlying inference context —
-          // the replay panel shares state with the parent chart, so the chart
-          // re-renders without us touching the replay UI.
-          cy.window().then((win) => {
-            const url = new URL(win.location.href);
-            const cur = url.searchParams.get('i_log') === '1';
-            url.searchParams.set('i_log', cur ? '0' : '1');
-            win.history.replaceState(null, '', url.toString());
-            // Dispatch a popstate so InferenceContext picks up the change.
-            win.dispatchEvent(new win.PopStateEvent('popstate'));
+          // Toggle the control on the parent chart rather than mutating the address
+          // bar. Dashboard URL state is intentionally snapshotted on load, so a
+          // synthetic popstate is not a supported control update.
+          cy.get('[data-testid="scatter-log-scale"]').then(($toggles) => {
+            const parentToggle = [...$toggles].find(
+              (toggle) => !toggle.closest('[data-testid^="replay-panel-chart-"]'),
+            );
+            if (!parentToggle) throw new Error('Parent chart log-scale toggle is missing');
+            cy.wrap(parentToggle).click({ force: true });
           });
-          cy.wait(400);
           cy.get('[data-testid="replay-panel-chart-0"] svg path.roofline-path')
             .first()
             .invoke('attr', 'd')
@@ -153,6 +164,7 @@ describe('Inference Replay', () => {
       // Enable line labels inside the replay panel (scoped — the parent chart
       // renders the same control behind the dialog).
       cy.get('[data-testid="replay-panel-chart-0"]').within(() => {
+        expandLegendAdvanced();
         cy.get('[data-testid="scatter-line-labels"]').then(($el) => {
           if ($el.attr('data-state') !== 'checked') cy.wrap($el).click();
         });

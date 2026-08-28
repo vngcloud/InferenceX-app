@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 
 import type { InferenceData } from '@/components/inference/types';
 
-import { interpolateMetricAtInteractivity } from './useInterpolatedTrendData';
+import type { BenchmarkRow } from '@/lib/api';
+
+import {
+  interpolateMetricAtInteractivity,
+  rowToLightweightPoint,
+  rowSupportsTrendMetric,
+  trendMetricDependencies,
+} from './useInterpolatedTrendData';
+import { SUPPLEMENTAL_BENCHMARK_ROWS } from '@/lib/supplemental-benchmarks';
 
 // ─── Factory ───
 
@@ -26,6 +34,97 @@ function makePoint(overrides: Partial<InferenceData> = {}): InferenceData {
     ...overrides,
   } as InferenceData;
 }
+
+function makeBenchmarkRow(overrides: Partial<BenchmarkRow> = {}): BenchmarkRow {
+  return {
+    id: 1,
+    hardware: 'h200',
+    framework: 'trt',
+    model: 'dsr1',
+    precision: 'fp8',
+    spec_method: 'none',
+    disagg: false,
+    is_multinode: false,
+    prefill_tp: 8,
+    prefill_ep: 1,
+    prefill_dp_attention: false,
+    prefill_num_workers: 0,
+    decode_tp: 8,
+    decode_ep: 1,
+    decode_dp_attention: false,
+    decode_num_workers: 0,
+    num_prefill_gpu: 8,
+    num_decode_gpu: 8,
+    benchmark_type: 'single_turn',
+    offload_mode: 'off',
+    isl: 1024,
+    osl: 1024,
+    conc: 64,
+    image: 'test',
+    metrics: {
+      tput_per_gpu: 400,
+      median_intvty: 20,
+    },
+    date: '2026-03-01',
+    run_url: null,
+    ...overrides,
+  };
+}
+
+describe('rowToLightweightPoint', () => {
+  it('preserves legacy output-throughput trends when the explicit field is absent', () => {
+    const point = rowToLightweightPoint(makeBenchmarkRow(), [
+      'outputTputPerGpu',
+      'costhOutput',
+      'outputTokensPerDollarH',
+    ]);
+
+    expect(point?.outputTputPerGpu?.y).toBe(400);
+    expect(point?.costhOutput?.y).toBeGreaterThan(0);
+    expect(point?.outputTokensPerDollarH?.y).toBeGreaterThan(0);
+  });
+
+  it('applies OpenRouter input and output prices to historical points', () => {
+    const point = rowToLightweightPoint(
+      makeBenchmarkRow({
+        metrics: {
+          tput_per_gpu: 400,
+          input_tput_per_gpu: 320,
+          output_tput_per_gpu: 80,
+          median_intvty: 20,
+        },
+      }),
+      ['tokenRevenuePerGpuHour'],
+      {
+        source: 'openrouter',
+        inputPerMillion: 1.122,
+        outputPerMillion: 3.366,
+        openRouterModelId: 'deepseek/deepseek-v4-pro-0813',
+      },
+    );
+
+    expect(point?.tokenRevenuePerGpuHour?.y).toBeCloseTo(2.261952, 10);
+  });
+});
+
+describe('rowSupportsTrendMetric', () => {
+  it('limits the July Vera Rubin snapshot to output-token trend metrics', () => {
+    const julyRubin = SUPPLEMENTAL_BENCHMARK_ROWS.find((row) => row.hardware === 'vr200')!;
+
+    expect(rowSupportsTrendMetric(julyRubin, 'y_outputTputPerGpu')).toBe(true);
+    expect(rowSupportsTrendMetric(julyRubin, 'y_tpPerGpu')).toBe(false);
+    expect(rowSupportsTrendMetric(julyRubin, 'y_inputTputPerGpu')).toBe(false);
+  });
+
+  it('leaves a future Vera Rubin snapshot unrestricted without capability metadata', () => {
+    const futureRubin = {
+      ...SUPPLEMENTAL_BENCHMARK_ROWS.find((row) => row.hardware === 'vr200')!,
+      date: '2026-09-01',
+    };
+
+    expect(rowSupportsTrendMetric(futureRubin, 'y_tpPerGpu')).toBe(true);
+  });
+});
 
 // ─── Tests ───
 
@@ -85,16 +184,84 @@ describe('interpolateMetricAtInteractivity', () => {
     expect(result!).toBeGreaterThanOrEqual(0);
   });
 
-  it('works with cost metrics (costh)', () => {
+  it('interpolates tokens per dollar as a throughput-proportional metric', () => {
     const points = [
-      makePoint({ x: 20, tpPerGpu: { y: 800, roof: false }, costh: { y: 1, roof: false } }),
-      makePoint({ x: 40, tpPerGpu: { y: 600, roof: false }, costh: { y: 1.5, roof: false } }),
-      makePoint({ x: 60, tpPerGpu: { y: 400, roof: false }, costh: { y: 2, roof: false } }),
+      makePoint({
+        x: 20,
+        tpPerGpu: { y: 800, roof: false },
+        tokensPerDollarH: { y: 800_000, roof: false },
+      }),
+      makePoint({
+        x: 40,
+        tpPerGpu: { y: 600, roof: false },
+        tokensPerDollarH: { y: 600_000, roof: false },
+      }),
+      makePoint({
+        x: 60,
+        tpPerGpu: { y: 400, roof: false },
+        tokensPerDollarH: { y: 400_000, roof: false },
+      }),
     ];
-    const result = interpolateMetricAtInteractivity(points, 30, 'costh');
-    expect(result).not.toBeNull();
-    expect(result!).toBeGreaterThan(0.9);
-    expect(result!).toBeLessThan(1.6);
+    const result = interpolateMetricAtInteractivity(points, 30, 'tokensPerDollarH');
+    expect(result).toBeCloseTo(700_000, 0);
+  });
+
+  it('uses the matching output-throughput Pareto knots for output tokens per dollar', () => {
+    const points = [
+      makePoint({
+        x: 20,
+        tpPerGpu: { y: 1000, roof: false },
+        outputTputPerGpu: { y: 100, roof: false },
+        outputTokensPerDollarH: { y: 100_000, roof: false },
+      }),
+      makePoint({
+        x: 40,
+        tpPerGpu: { y: 800, roof: false },
+        outputTputPerGpu: { y: 700, roof: false },
+        outputTokensPerDollarH: { y: 700_000, roof: false },
+      }),
+      makePoint({
+        x: 60,
+        tpPerGpu: { y: 900, roof: false },
+        outputTputPerGpu: { y: 500, roof: false },
+        outputTokensPerDollarH: { y: 500_000, roof: false },
+      }),
+    ];
+
+    // The total-throughput frontier drops x=40, while the output-throughput
+    // frontier keeps x=40 and drops x=20. The midpoint must follow the latter.
+    expect(interpolateMetricAtInteractivity(points, 50, 'outputTokensPerDollarH')).toBeCloseTo(
+      581_250,
+      0,
+    );
+  });
+
+  it('uses the matching input-throughput Pareto knots for input tokens per dollar', () => {
+    const points = [
+      makePoint({
+        x: 20,
+        tpPerGpu: { y: 1000, roof: false },
+        inputTputPerGpu: { y: 100, roof: false },
+        inputTokensPerDollarH: { y: 200_000, roof: false },
+      }),
+      makePoint({
+        x: 40,
+        tpPerGpu: { y: 800, roof: false },
+        inputTputPerGpu: { y: 700, roof: false },
+        inputTokensPerDollarH: { y: 1_400_000, roof: false },
+      }),
+      makePoint({
+        x: 60,
+        tpPerGpu: { y: 900, roof: false },
+        inputTputPerGpu: { y: 500, roof: false },
+        inputTokensPerDollarH: { y: 1_000_000, roof: false },
+      }),
+    ];
+
+    expect(interpolateMetricAtInteractivity(points, 50, 'inputTokensPerDollarH')).toBeCloseTo(
+      1_162_500,
+      0,
+    );
   });
 
   it('filters dominated points via Pareto front', () => {
@@ -156,6 +323,30 @@ describe('interpolateMetricAtInteractivity', () => {
     expect(result!).toBeLessThan(3.5);
   });
 
+  it.each([
+    'measuredJPerSuccessfulQuery',
+    'measuredWhPerSuccessfulQuery',
+    'measuredPowerPercentTdp',
+  ] as const)('interpolates the derived measured metric %s', (metricKey) => {
+    const points = [
+      makePoint({
+        x: 20,
+        tpPerGpu: { y: 800, roof: false },
+        [metricKey]: { y: 80, roof: false },
+      }),
+      makePoint({
+        x: 60,
+        tpPerGpu: { y: 400, roof: false },
+        [metricKey]: { y: 40, roof: false },
+      }),
+    ];
+
+    const result = interpolateMetricAtInteractivity(points, 40, metricKey);
+    expect(result).not.toBeNull();
+    expect(result!).toBeGreaterThan(40);
+    expect(result!).toBeLessThan(80);
+  });
+
   it('returns null when metric field is missing from data points', () => {
     const points = [
       makePoint({ x: 20, tpPerGpu: { y: 800, roof: false } }),
@@ -199,6 +390,25 @@ describe('interpolateMetricAtInteractivity', () => {
     expect(result!).toBeLessThan(700);
   });
 
+  it('keeps token revenue proportional to the interpolated total throughput', () => {
+    const points = [
+      makePoint({
+        x: 20,
+        tpPerGpu: { y: 800, roof: false },
+        tokenRevenuePerGpuHour: { y: 2.88, roof: false },
+      }),
+      makePoint({
+        x: 60,
+        tpPerGpu: { y: 400, roof: false },
+        tokenRevenuePerGpuHour: { y: 1.44, roof: false },
+      }),
+    ];
+
+    const throughput = interpolateMetricAtInteractivity(points, 40, 'tpPerGpu');
+    const revenue = interpolateMetricAtInteractivity(points, 40, 'tokenRevenuePerGpuHour');
+    expect(revenue).toBeCloseTo(throughput! * 0.0036, 10);
+  });
+
   it('returns exact boundary value at the lowest frontier x', () => {
     const points = [
       makePoint({ x: 10, tpPerGpu: { y: 1000, roof: false } }),
@@ -219,5 +429,19 @@ describe('interpolateMetricAtInteractivity', () => {
     const result = interpolateMetricAtInteractivity(points, 100, 'tpPerGpu');
     expect(result).not.toBeNull();
     expect(result!).toBeCloseTo(200, 0);
+  });
+});
+
+describe('trendMetricDependencies', () => {
+  it('selects only the metric and matching throughput needed by reciprocal formulas', () => {
+    expect(trendMetricDependencies('costhOutput')).toEqual([
+      'tpPerGpu',
+      'costhOutput',
+      'outputTputPerGpu',
+    ]);
+  });
+
+  it('does not route custom user metrics through benchmark-derived history fields', () => {
+    expect(trendMetricDependencies('costUser')).toEqual(['tpPerGpu']);
   });
 });

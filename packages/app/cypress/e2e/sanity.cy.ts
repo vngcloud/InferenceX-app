@@ -58,11 +58,78 @@ describe('Page Load & Navigation', () => {
       );
     });
   });
+
+  it('opens and preserves a direct link to an FAQ answer', () => {
+    cy.visit('/about#faq-normalized-interactivity', {
+      onBeforeLoad(win) {
+        cy.stub(win.navigator.clipboard, 'writeText').as('writeFaqLink').resolves();
+      },
+    });
+
+    cy.get('#faq-normalized-interactivity')
+      .should('be.visible')
+      .within(() => {
+        cy.contains(
+          'a[href="#faq-normalized-interactivity"]',
+          'What is the difference between E2E Normalized Interactivity and Interactivity?',
+        ).should('be.visible');
+        cy.contains('The normalized value penalizes slow TTFT').should('be.visible');
+        cy.get('[data-testid="faq-copy-link-faq-normalized-interactivity"]')
+          .should('be.visible')
+          .and('have.text', '')
+          .and('have.attr', 'title', 'Copy link')
+          .find('svg.lucide-link')
+          .should('be.visible');
+        cy.get('[data-testid="faq-copy-link-faq-normalized-interactivity"]')
+          .click()
+          .should('have.attr', 'title', 'Copied')
+          .find('svg.lucide-check')
+          .should('be.visible');
+      });
+    cy.get('@writeFaqLink').should(
+      'have.been.calledOnceWith',
+      `${Cypress.config('baseUrl')}/about#faq-normalized-interactivity`,
+    );
+    cy.location('hash').should('eq', '#faq-normalized-interactivity');
+  });
+
+  it('shows a copy-link button for every FAQ question', () => {
+    cy.visit('/about');
+
+    cy.get('[data-testid^="faq-copy-link-"]')
+      .should('have.length', 15)
+      .each(($button) => {
+        cy.wrap($button)
+          .should('be.visible')
+          .and('have.text', '')
+          .and('have.attr', 'title', 'Copy link')
+          .find('svg.lucide-link')
+          .should('be.visible');
+      });
+  });
 });
 
 // Toggle visibility, click behavior, and aria-label are covered by
 // cypress/component/mode-toggle.cy.tsx. Only the reload-persistence test
 // requires a full page load (true e2e concern).
+describe('Splash text', () => {
+  it('announces AgentX on the landing page in both light and dark mode', () => {
+    cy.visit('/', {
+      onBeforeLoad(win) {
+        win.localStorage.setItem('inferencex-star-modal-dismissed', String(Date.now()));
+        win.localStorage.setItem('theme', 'light');
+      },
+    });
+    cy.get('html').should('not.have.class', 'dark');
+    cy.get('[data-testid="splash-text"]').should('be.visible').and('have.text', 'AgentX is here!!');
+
+    // Same splash after switching themes — it is no longer minecraft-only.
+    cy.get('[data-testid="theme-toggle"]').click();
+    cy.get('html').should('have.class', 'dark');
+    cy.get('[data-testid="splash-text"]').should('be.visible').and('have.text', 'AgentX is here!!');
+  });
+});
+
 describe('Theme Toggle', () => {
   it('theme persists across page reload (localStorage)', () => {
     cy.window().then((win) => {

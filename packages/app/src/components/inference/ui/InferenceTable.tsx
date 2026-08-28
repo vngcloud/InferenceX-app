@@ -16,13 +16,15 @@ interface InferenceTableProps {
   selectedYAxisMetric: string;
 }
 
-/** Format a number for table display — picks sensible precision based on magnitude. */
-function fmt(value: number, decimals?: number): string {
-  if (decimals !== undefined) return value.toFixed(decimals);
-  if (Math.abs(value) >= 100) return value.toFixed(0);
-  if (Math.abs(value) >= 1) return value.toFixed(1);
-  if (Math.abs(value) >= 0.01) return value.toFixed(3);
-  return value.toFixed(4);
+/** Format a number for table display — picks sensible precision and groups thousands. */
+export function formatInferenceTableNumber(value: number, decimals?: number): string {
+  const fixedDecimals =
+    decimals ??
+    (Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 1 ? 1 : Math.abs(value) >= 0.01 ? 3 : 4);
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: fixedDecimals,
+    maximumFractionDigits: fixedDecimals,
+  }).format(value);
 }
 
 export default function InferenceTable({
@@ -70,36 +72,22 @@ export default function InferenceTable({
       {
         header: yLabel,
         align: 'right',
-        cell: (row) => fmt(yPath ? getNestedYValue(row, yPath) : row.y),
+        cell: (row) => formatInferenceTableNumber(yPath ? getNestedYValue(row, yPath) : row.y),
         sortValue: (row) => (yPath ? getNestedYValue(row, yPath) : row.y),
         className: 'tabular-nums',
       },
       {
         header: xLabel,
         align: 'right',
-        cell: (row) => fmt(row.x),
+        cell: (row) => formatInferenceTableNumber(row.x),
         sortValue: (row) => row.x,
         className: 'tabular-nums',
       },
       {
         header: 'Throughput/Chip (tok/s)',
         align: 'right',
-        cell: (row) => fmt(row.tput_per_gpu ?? 0, 1),
+        cell: (row) => formatInferenceTableNumber(row.tput_per_gpu ?? 0, 1),
         sortValue: (row) => row.tput_per_gpu ?? 0,
-        className: 'tabular-nums',
-      },
-      {
-        header: 'Median TTFT (ms)',
-        align: 'right',
-        cell: (row) => fmt((row.median_ttft ?? 0) * 1000, 0),
-        sortValue: (row) => row.median_ttft ?? 0,
-        className: 'tabular-nums',
-      },
-      {
-        header: 'Median Interactivity (tok/s)',
-        align: 'right',
-        cell: (row) => fmt(row.median_intvty ?? 0, 1),
-        sortValue: (row) => row.median_intvty ?? 0,
         className: 'tabular-nums',
       },
     ],

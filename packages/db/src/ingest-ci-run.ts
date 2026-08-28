@@ -35,9 +35,18 @@ import {
   fetchRunAttempt,
   listRunArtifacts,
 } from './lib/github-artifacts';
+import { pairServerLogArtifacts } from './lib/server-log-backfill';
 import { createAdminSql, refreshLatestBenchmarks } from './etl/db-utils';
-import { isBenchmarkPointPurged, isRunAttemptPurged } from './etl/run-overrides';
+import {
+  applyBenchmarkPointBackfill,
+  applyChangelogBackfills,
+  isBenchmarkPointPurged,
+  isRunAttemptPurged,
+  recordBackfilledPointIdentity,
+  validateRunBackfills,
+} from './etl/run-overrides';
 import { createSkipTracker } from './etl/skip-tracker';
+import { printIngestSummaryFooter } from './etl/ingest-summary';
 import { createConfigCache } from './etl/config-cache';
 import { createWorkflowRunServices } from './etl/workflow-run';
 import {
@@ -49,7 +58,7 @@ import {
   bulkIngestBenchmarkRows,
   bulkIngestRunStats,
   bulkUpsertAvailability,
-  insertServerLog,
+  insertServerLogFiles,
 } from './etl/benchmark-ingest';
 import { findUnlinkedTraceReplayIds, persistPreparedTraceReplay } from './etl/trace-replay-ingest';
 import {
@@ -58,6 +67,7 @@ import {
 } from './etl/trace-replay-worker-pool';
 import { AsyncSemaphore } from './etl/async-semaphore';
 import { discoverTraceReplayArtifacts } from './etl/trace-artifact-discovery';
+import { discoverServerLogArtifacts, readServerLogArtifact } from './etl/server-log-artifacts';
 import { datasetSlugFromBenchmarkRow } from './etl/dataset-provenance';
 import { mapAggEvalRow, mapEvalRow } from './etl/eval-mapper';
 import { ingestEvalRow } from './etl/eval-ingest';
@@ -67,6 +77,7 @@ import {
   type ChangelogEntry,
   parseChangelogEntries,
   ingestChangelogEntries,
+  hasAppendOnlyFlag,
   hasEvalsOnlyFlag,
 } from './etl/changelog-ingest';
 
@@ -137,7 +148,29 @@ if (isDownloadMode) {
   // most recent per logical name (see RUNNER_SUFFIX_RE in github-artifacts)
   // so a failed attempt's empty metrics can't overwrite the good one via
   // ON CONFLICT DO UPDATE.
-  const byLogical = dedupeArtifactsByLogicalName(listRunArtifacts(REPO, runIdStr));
+  const artifacts = listRunArtifacts(REPO, runIdStr);
+  const byLogical = dedupeArtifactsByLogicalName(artifacts);
+  // Server-log artifacts from eval and benchmark jobs can share a logical
+  // config but differ by runner suffix. Keep the exact server-log sibling for
+  // each selected bmk artifact instead of letting latest-created eval logs win.
+  for (const [key, artifact] of byLogical) {
+    if (
+      artifact.name.startsWith('server_logs_') ||
+      artifact.name.startsWith('multinode_server_logs_')
+    ) {
+      byLogical.delete(key);
+    }
+  }
+  const selectedBenchmarkNames = new Set(
+    [...byLogical.values()]
+      .filter((artifact) => artifact.name.startsWith('bmk_'))
+      .map((artifact) => artifact.name),
+  );
+  for (const pair of pairServerLogArtifacts(artifacts)) {
+    if (selectedBenchmarkNames.has(pair.benchmarks.name)) {
+      byLogical.set(`server-log:${pair.serverLogs.name}`, pair.serverLogs);
+    }
+  }
 
   for (const artifact of byLogical.values()) {
     console.log(`  ${artifact.name}`);
@@ -232,6 +265,7 @@ function findJsonFiles(dir: string): string[] {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  validateRunBackfills();
   const tracker = createSkipTracker();
   const configCache = createConfigCache(sql);
   const { getOrCreateConfig, preloadConfigs } = configCache;
@@ -289,6 +323,61 @@ async function main(): Promise<void> {
     ? workflowGhInfo.createdAt.split('T')[0]
     : new Date().toISOString().split('T')[0];
 
+  // Parse changelog metadata before creating the workflow row: append-only is a
+  // run-level curve-selection contract used by the latest-benchmark queries.
+  const changelogDir = path.join(artifactsDir, ARTIFACT_NAMES.changelog);
+  const changelogFiles = findJsonFiles(changelogDir);
+  const parsedChangelogs: {
+    baseRef: string;
+    headRef: string;
+    entries: ChangelogEntry[];
+  }[] = [];
+  for (const file of changelogFiles) {
+    const data = readJson(file) as Record<string, any> | null;
+    if (!data || typeof data !== 'object') continue;
+    const baseRef = String(data.base_ref ?? '');
+    const headRef = String(data.head_ref ?? '');
+    if (!baseRef || !headRef) continue;
+    const entries = parseChangelogEntries(data.entries);
+    if (entries.length > 0) parsedChangelogs.push({ baseRef, headRef, entries });
+  }
+  if (parsedChangelogs.length === 0) {
+    const headRef = workflowGhInfo?.headBranch ?? workflowGhInfo?.headSha ?? `run-${runIdStr}`;
+    // Prefer the workflow's display name: it describes the sweep, while the head
+    // commit message often describes an unrelated code change.
+    const fallbackDescription =
+      workflowGhInfo?.name?.trim() ||
+      workflowGhInfo?.headCommitMessage?.trim().split('\n')[0]?.trim() ||
+      `GitHub Actions run ${runIdStr}`;
+
+    parsedChangelogs.push({
+      baseRef: 'unknown',
+      headRef,
+      entries: [
+        {
+          configKeys: [],
+          description: fallbackDescription,
+          prLink: null,
+          evalsOnly: false,
+          appendOnly: false,
+        },
+      ],
+    });
+    console.log(
+      `  No changelog metadata artifact found; using fallback changelog: ${fallbackDescription}`,
+    );
+  }
+  const { changelogs, backfillIds: changelogBackfillIds } = applyChangelogBackfills(
+    runIdNum,
+    runAttemptNum,
+    parsedChangelogs,
+  );
+  for (const backfillId of changelogBackfillIds) {
+    console.log(`  Applied changelog backfill ${backfillId}`);
+  }
+  const appendOnly = hasAppendOnlyFlag(changelogs);
+  const evalsOnly = hasEvalsOnlyFlag(changelogs);
+
   const workflowRunId = await getOrCreateWorkflowRun({
     githubRunId: runId,
     runAttempt: runAttemptNum,
@@ -300,6 +389,7 @@ async function main(): Promise<void> {
     headSha: workflowGhInfo?.headSha,
     htmlUrl: reusedIngestMetadata?.sourceRunUrl,
     createdAt: workflowGhInfo?.createdAt || triggerGhInfo?.createdAt || new Date().toISOString(),
+    appendOnly,
     ghInfo: workflowGhInfo,
   });
   if (workflowRunId === null) {
@@ -337,49 +427,6 @@ async function main(): Promise<void> {
   const missingDatasets = new Set<string>();
 
   // ── Check for evals-only flag in changelog ────────────────────────────
-  const changelogDir = path.join(artifactsDir, ARTIFACT_NAMES.changelog);
-  const changelogFiles = findJsonFiles(changelogDir);
-  const parsedChangelogs: {
-    baseRef: string;
-    headRef: string;
-    entries: ChangelogEntry[];
-  }[] = [];
-  for (const file of changelogFiles) {
-    const data = readJson(file) as Record<string, any> | null;
-    if (!data || typeof data !== 'object') continue;
-    const baseRef = String(data.base_ref ?? '');
-    const headRef = String(data.head_ref ?? '');
-    if (!baseRef || !headRef) continue;
-    const entries = parseChangelogEntries(data.entries);
-    if (entries.length > 0) parsedChangelogs.push({ baseRef, headRef, entries });
-  }
-  if (parsedChangelogs.length === 0) {
-    const headRef = workflowGhInfo?.headBranch ?? workflowGhInfo?.headSha ?? `run-${runIdStr}`;
-    // Prefer the workflow's display name ("e2e Test - B300 DSv4 AgentX vLLM 1h
-    // + 10m warmup") — it describes the sweep; the head commit message usually
-    // describes an unrelated code change.
-    const fallbackDescription =
-      workflowGhInfo?.name?.trim() ||
-      workflowGhInfo?.headCommitMessage?.trim().split('\n')[0]?.trim() ||
-      `GitHub Actions run ${runIdStr}`;
-
-    parsedChangelogs.push({
-      baseRef: 'unknown',
-      headRef,
-      entries: [
-        {
-          configKeys: [],
-          description: fallbackDescription,
-          prLink: null,
-          evalsOnly: false,
-        },
-      ],
-    });
-    console.log(
-      `  No changelog metadata artifact found; using fallback changelog: ${fallbackDescription}`,
-    );
-  }
-  const evalsOnly = hasEvalsOnlyFlag(parsedChangelogs);
   if (evalsOnly) {
     console.log('\n  ⚠ evals-only run detected — skipping benchmark and stats ingest');
   }
@@ -401,23 +448,9 @@ async function main(): Promise<void> {
           .filter((d) => fs.statSync(d).isDirectory())
       : [];
 
-    const serverLogPaths = new Map<string, string>();
-    if (fs.existsSync(artifactsDir)) {
-      for (const d of fs.readdirSync(artifactsDir)) {
-        if (!d.startsWith('server_logs_')) continue;
-        // feat-agentx-v1.0 harness nests the log under `results/server.log`;
-        // older runs keep it at the artifact root. Check both.
-        const logPath = [
-          path.join(artifactsDir, d, 'server.log'),
-          path.join(artifactsDir, d, 'results', 'server.log'),
-        ].find((p) => fs.existsSync(p));
-        if (!logPath) continue;
-        const configKey = d.replace(/^server_logs_/u, '');
-        serverLogPaths.set(configKey, logPath);
-      }
-    }
-    if (serverLogPaths.size > 0) {
-      console.log(`  Found ${serverLogPaths.size} server log artifact(s)`);
+    const serverLogArtifacts = discoverServerLogArtifacts(artifactsDir);
+    if (serverLogArtifacts.size > 0) {
+      console.log(`  Found ${serverLogArtifacts.size} server log artifact(s)`);
     }
 
     // Sibling aiperf artifacts: each `bmk_agentic_<suffix>` is paired with an
@@ -442,6 +475,7 @@ async function main(): Promise<void> {
     }
 
     const allBmkFiles = [...bmkFiles, ...allBmkDirs.flatMap((d) => findJsonFiles(d))];
+    const seenPointIdentities = new Map<string, string>();
     console.log(`  Found ${allBmkFiles.length} benchmark JSON file(s)`);
 
     for (const [fileIndex, file] of allBmkFiles.entries()) {
@@ -480,28 +514,47 @@ async function main(): Promise<void> {
 
       const toInsert = [];
       for (const row of rows) {
+        let configId: number;
         try {
-          const configId = await getOrCreateConfig(row.config);
-          if (
-            isBenchmarkPointPurged(runIdNum, runAttemptNum, {
-              configId,
-              benchmarkType: row.benchmarkType,
-              isl: row.isl,
-              osl: row.osl,
-              conc: row.conc,
-              offloadMode: row.offloadMode,
-            })
-          ) {
-            console.log(
-              `    skipped purged benchmark point: config ${configId}, ${row.benchmarkType}, ` +
-                `isl ${row.isl}, osl ${row.osl}, conc ${row.conc}, offload ${row.offloadMode}`,
-            );
-            continue;
-          }
-          toInsert.push({ ...row, configId });
+          configId = await getOrCreateConfig(row.config);
         } catch (error: any) {
           tracker.recordDbError(`config for ${path.basename(file)}`, error);
+          continue;
         }
+        if (
+          isBenchmarkPointPurged(runIdNum, runAttemptNum, {
+            configId,
+            benchmarkType: row.benchmarkType,
+            isl: row.isl,
+            osl: row.osl,
+            conc: row.conc,
+            offloadMode: row.offloadMode,
+            recipeFingerprint: row.recipeFingerprint,
+          })
+        ) {
+          console.log(
+            `    skipped purged benchmark point: config ${configId}, ${row.benchmarkType}, ` +
+              `isl ${row.isl}, osl ${row.osl}, conc ${row.conc}, offload ${row.offloadMode}, ` +
+              `recipe ${row.recipeFingerprint ?? 'legacy'}`,
+          );
+          continue;
+        }
+        const applied = applyBenchmarkPointBackfill(runIdNum, runAttemptNum, {
+          ...row,
+          configId,
+        });
+        recordBackfilledPointIdentity(
+          seenPointIdentities,
+          applied.sourceIdentity,
+          applied.desiredIdentity,
+        );
+        if (applied.backfillId) {
+          console.log(
+            `    applied benchmark point backfill ${applied.backfillId}: ` +
+              `config ${configId}, conc ${row.conc}`,
+          );
+        }
+        toInsert.push(applied.point);
       }
       console.log(`    rows with resolved configs: ${toInsert.length}`);
 
@@ -544,20 +597,24 @@ async function main(): Promise<void> {
             // prefix), so fall back to the fully-stripped suffix — otherwise
             // agentic rows never get their server log (and KV-pool size) linked.
             const configKey = parentDir.replace(/^bmk_/u, '');
-            const logPath =
-              serverLogPaths.get(configKey) ??
-              serverLogPaths.get(stripBmkAndAgenticPrefix(parentDir));
-            if (logPath) {
+            const logArtifact =
+              serverLogArtifacts.get(configKey) ??
+              serverLogArtifacts.get(stripBmkAndAgenticPrefix(parentDir));
+            if (logArtifact) {
               try {
                 const serverLogStart = Date.now();
-                console.log(
-                  `    server_log ${path.basename(logPath)} (${formatBytes(fileSize(logPath))})`,
+                const logFiles = readServerLogArtifact(logArtifact);
+                const totalBytes = logFiles.reduce(
+                  (bytes, logFile) => bytes + Buffer.byteLength(logFile.logText, 'utf8'),
+                  0,
                 );
-                const serverLog = fs.readFileSync(logPath, 'utf8').replaceAll('\u0000', '');
-                await insertServerLog(sql, insertedIds, serverLog);
-                console.log(`    server_log linked (${elapsed(serverLogStart)})`);
+                console.log(
+                  `    server_logs ${logFiles.length} .log/.out file(s) (${formatBytes(totalBytes)})`,
+                );
+                await insertServerLogFiles(sql, insertedIds, logFiles);
+                console.log(`    server_logs linked (${elapsed(serverLogStart)})`);
               } catch (error: any) {
-                tracker.recordDbError(`server_log for ${configKey}`, error);
+                tracker.recordDbError(`server_logs for ${configKey}`, error);
               }
             }
           }
@@ -762,13 +819,8 @@ async function main(): Promise<void> {
       if (!mapped) continue;
 
       try {
-        const { outcome } = await ingestEvalRow(
-          sql,
-          getOrCreateConfig,
-          mapped,
-          workflowRunId,
-          date,
-        );
+        const configId = await getOrCreateConfig(mapped.config);
+        const { outcome } = await ingestEvalRow(sql, configId, mapped, workflowRunId, date);
         if (outcome === 'new') totalEvals++;
       } catch (error: any) {
         tracker.recordDbError('eval row', error);
@@ -828,9 +880,10 @@ async function main(): Promise<void> {
 
     for (const params of evalParamsList) {
       try {
+        const configId = await getOrCreateConfig(params.config);
         const { id: evalResultId } = await ingestEvalRow(
           sql,
-          getOrCreateConfig,
+          configId,
           params,
           workflowRunId,
           date,
@@ -857,7 +910,7 @@ async function main(): Promise<void> {
   // ── Ingest changelog (already parsed above for evals-only check) ─────
 
   console.log('\n--- Changelog ---');
-  for (const { baseRef, headRef, entries } of parsedChangelogs) {
+  for (const { baseRef, headRef, entries } of changelogs) {
     try {
       const written = await ingestChangelogEntries(
         sql,
@@ -893,53 +946,20 @@ async function main(): Promise<void> {
   console.log(`  Eval results:      ${totalEvals} new`);
   console.log(`  Eval samples:      ${totalSamples} new across ${totalSampleFiles} file(s)`);
   console.log(`  Changelog entries: ${totalChangelogs} written`);
-  console.log(`\n  DB totals:`);
-  console.log(`    configs           ${configCount.n}`);
-  console.log(`    benchmark_results ${resultCount.n}`);
-  console.log(`    run_stats         ${statsCount.n}`);
-  console.log(`    eval_results      ${evalCount.n}`);
-  console.log(`    eval_samples      ${sampleCount.n}`);
-  console.log(`    changelog_entries ${changelogCount.n}`);
+  printIngestSummaryFooter(
+    {
+      configs: configCount.n,
+      benchmarkResults: resultCount.n,
+      runStats: statsCount.n,
+      evalResults: evalCount.n,
+      evalSamples: sampleCount.n,
+      changelogEntries: changelogCount.n,
+    },
+    tracker,
+    { includeFailedRuns: true, includeUnmappedPrecisions: true },
+  );
 
-  const { skips, unmappedModels, unmappedHws, unmappedPrecisions } = tracker;
-  const totalSkips =
-    skips.badZip +
-    skips.unmappedModel +
-    skips.unmappedHw +
-    skips.noIslOsl +
-    skips.failedRun +
-    skips.dbError;
-  if (totalSkips > 0) {
-    console.log(`\n  Skipped: ${totalSkips} rows`);
-    const skipLines: [string, number][] = [
-      ['no isl/osl (old format)', skips.noIslOsl],
-      ['failed run (0 successful)', skips.failedRun],
-      ['unmapped model', skips.unmappedModel],
-      ['unmapped hw', skips.unmappedHw],
-      ['bad/empty zip', skips.badZip],
-      ['DB errors', skips.dbError],
-    ].filter(([, n]) => (n as number) > 0) as [string, number][];
-    const pad = Math.max(...skipLines.map(([label]) => label.length));
-    for (const [label, n] of skipLines) {
-      console.log(`    ${label.padEnd(pad)}: ${n}`);
-    }
-  }
-
-  if (unmappedModels.size > 0) {
-    console.log(`\n  Unmapped model values (add to MODEL_TO_KEY to ingest):`);
-    [...unmappedModels].slice(0, 20).forEach((v) => console.log(`    ${v}`));
-    if (unmappedModels.size > 20) console.log(`    ... and ${unmappedModels.size - 20} more`);
-  }
-
-  if (unmappedHws.size > 0) {
-    console.log(`\n  Unmapped hw values (add to hwToGpuKey to ingest):`);
-    [...unmappedHws].slice(0, 20).forEach((v) => console.log(`    ${v}`));
-  }
-
-  if (unmappedPrecisions.size > 0) {
-    console.log(`\n  Unmapped precision values (add to PRECISION_KEYS to ingest):`);
-    [...unmappedPrecisions].forEach((v) => console.log(`    ${v}`));
-  }
+  const { unmappedModels, unmappedHws, unmappedPrecisions } = tracker;
 
   // Write unmapped entities to file so CI workflow can send Slack notifications
   const unmappedOutPath = process.env.UNMAPPED_ENTITIES_OUTPUT;

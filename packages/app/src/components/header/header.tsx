@@ -7,30 +7,42 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
 
 import { ModeToggle } from '@/components/ui/mode-toggle';
+import { NewBadge } from '@/components/ui/new-badge';
 import { MinecraftToggles } from '@/components/minecraft/minecraft-toggles';
-import { CLIENT_SEARCH_CHANGE_EVENT, navigateInApp } from '@/lib/client-navigation';
+import { navigateInApp } from '@/lib/client-navigation';
+import { DASHBOARD_ROUTES } from '@/lib/dashboard-routes';
+import { useClientPathname } from '@/hooks/useClientPathname';
+import { useClientSearch } from '@/hooks/useClientSearch';
 import { hasZhSibling, isZhPathname, switchLocalePath, ZH_PREFIX, zhPath } from '@/lib/i18n';
-import { NAV_LABELS_ZH } from '@/lib/tab-meta-zh';
+import { NAV_LABELS_ZH, type HeaderNavHref } from '@/lib/tab-meta-zh';
 import { cn } from '@/lib/utils';
 
 import { GitHubStars } from './GithubStars';
 
-/** Dashboard tab paths that should highlight the "Dashboard" nav link. */
-const DASHBOARD_TABS = [
-  '/inference',
-  '/evaluation',
-  '/historical',
-  '/calculator',
-  '/reliability',
-  '/gpu-specs',
-  '/gpu-metrics',
-  '/collectivex',
-  '/submissions',
-  '/current-inferencex-image',
-];
+const DASHBOARD_TABS = DASHBOARD_ROUTES.map((route) => route.path);
 
-const NAV_LINKS = [
+interface NavLink {
+  href: HeaderNavHref;
+  label: string;
+  testId: string;
+  event: string;
+  badge?: {
+    en: string;
+    zh: string;
+  };
+}
+
+const NAV_LINKS: readonly NavLink[] = [
   { href: '/', label: 'Home', testId: 'nav-link-home', event: 'header_home_clicked' },
+  // AgentX sits directly after Home: it is the flagship benchmark, and the
+  // surface every entry below it ultimately explains.
+  {
+    href: '/agentx',
+    label: 'AgentX',
+    testId: 'nav-link-agentx',
+    event: 'header_agentx_clicked',
+    badge: { en: 'NEW', zh: '新' },
+  },
   {
     href: '/overview',
     label: 'Overview',
@@ -49,6 +61,12 @@ const NAV_LINKS = [
     testId: 'nav-link-compare',
     event: 'header_compare_clicked',
   },
+  {
+    href: '/blog',
+    label: 'Articles',
+    testId: 'nav-link-articles',
+    event: 'header_articles_clicked',
+  },
   { href: '/about', label: 'About', testId: 'nav-link-about', event: 'header_about_clicked' },
 ] as const;
 
@@ -61,7 +79,11 @@ function isActive(pathname: string, href: string): boolean {
       : pathname.slice(ZH_PREFIX.length)
     : pathname;
   if (href === '/') return enPathname === '/';
-  if (href === '/inference') return DASHBOARD_TABS.some((tab) => enPathname.startsWith(tab));
+  // Dashboard owns every tab path, including the telemetry catalog beneath
+  // `/inference`, which now lives in the footer rather than the primary nav.
+  if (href === '/inference') {
+    return DASHBOARD_TABS.some((tab) => enPathname.startsWith(tab));
+  }
   // Exact match or a child path under `<href>/...`. The bare `startsWith` would
   // light up `/compare` when the user is on `/compare-per-dollar/...` since the
   // latter starts with the literal string `/compare`.
@@ -81,47 +103,33 @@ function isCurrentPage(pathname: string, displayHref: string): boolean {
 
 /** EN ↔ 中文 switcher; maps the current page to its sibling in the other language. */
 function LanguageToggle({
-  pathname,
+  pathname: routerPathname,
   router,
 }: {
   pathname: string;
   router: ReturnType<typeof useRouter>;
 }) {
+  // The toggle maps the CURRENT address to its sibling, so it must see the
+  // live pathname — per-model dashboard routes rewrite the URL with
+  // replaceClientPathname on model switches, which usePathname ignores.
+  const pathname = useClientPathname(routerPathname);
   const isZh = isZhPathname(pathname);
   const target = switchLocalePath(pathname);
-  // The root layout is reused for search-only App Router transitions, so keep
-  // this persistent link synchronized with both browser history and the app's
-  // explicit soft-navigation signal.
-  const [search, setSearch] = useState('');
-  useEffect(() => {
-    const sync = (event: Event) => {
-      setSearch(
-        event instanceof CustomEvent && typeof event.detail === 'string'
-          ? event.detail
-          : window.location.search,
-      );
-    };
-    sync(new Event('initial'));
-    window.addEventListener('popstate', sync);
-    window.addEventListener(CLIENT_SEARCH_CHANGE_EVENT, sync);
-    return () => {
-      window.removeEventListener('popstate', sync);
-      window.removeEventListener(CLIENT_SEARCH_CHANGE_EVENT, sync);
-    };
-  }, [pathname]);
+  const search = useClientSearch();
+  const isOverview = isActive(pathname, '/overview');
   return (
     <Link
       href={target + search}
       // Only /overview rewrites this href per interaction, which would
       // re-prefetch its force-dynamic sibling on every selector commit.
       // Everywhere else the href is stable, so let Next prefetch it.
-      prefetch={isActive(pathname, '/overview') ? false : undefined}
+      prefetch={isOverview ? false : undefined}
       data-testid="language-toggle"
       hrefLang={isZh ? 'en' : 'zh-CN'}
       className="inline-flex items-center min-h-11 px-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors whitespace-nowrap"
       onClick={(event) => {
         track('header_language_toggled', { to: isZh ? 'en' : 'zh' });
-        navigateInApp(event, router, target + search);
+        if (!isOverview) navigateInApp(event, router, target + search);
       }}
     >
       {isZh ? 'EN' : '中文'}
@@ -142,9 +150,14 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
     ? NAV_LINKS.map((link) => ({
         ...link,
         label: NAV_LABELS_ZH[link.href] ?? link.label,
+        badgeLabel: link.badge?.zh,
         displayHref: hasZhSibling(link.href) ? zhPath(link.href) : link.href,
       }))
-    : NAV_LINKS.map((link) => ({ ...link, displayHref: link.href }));
+    : NAV_LINKS.map((link) => ({
+        ...link,
+        badgeLabel: link.badge?.en,
+        displayHref: link.href,
+      }));
 
   // Close menu on route change
   useEffect(() => {
@@ -202,15 +215,15 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
           </Link>
 
           {/* Desktop nav */}
-          <nav className="hidden lg:flex items-center gap-1">
-            {navLinks.map(({ href, displayHref, label, testId, event }) => (
+          <nav className="hidden items-center gap-1 xl:flex">
+            {navLinks.map(({ href, displayHref, label, badgeLabel, testId, event }) => (
               <Link
                 key={href}
                 data-testid={testId}
                 href={displayHref}
                 prefetch={isActive(pathname, href) ? false : undefined}
                 className={cn(
-                  'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                   isActive(pathname, href)
                     ? 'text-brand bg-brand/10'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted',
@@ -228,7 +241,12 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                   }
                 }}
               >
-                {label}
+                <span>{label}</span>
+                {badgeLabel && (
+                  <NewBadge data-nav-badge="agentx" data-new-badge="agentx-nav">
+                    {badgeLabel}
+                  </NewBadge>
+                )}
               </Link>
             ))}
           </nav>
@@ -247,7 +265,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
             <ModeToggle />
 
             {/* Mobile hamburger */}
-            <div ref={menuRef} className="relative lg:hidden">
+            <div ref={menuRef} className="relative xl:hidden">
               <button
                 type="button"
                 data-testid="mobile-menu-toggle"
@@ -276,7 +294,7 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                   data-testid="mobile-menu"
                   className="absolute right-0 top-full mt-2 z-50 flex flex-col rounded-lg border border-border bg-background p-1.5 shadow-lg min-w-40"
                 >
-                  {navLinks.map(({ href, displayHref, label, event }) => (
+                  {navLinks.map(({ href, displayHref, label, badgeLabel, event }) => (
                     <Link
                       key={href}
                       href={displayHref}
@@ -298,7 +316,16 @@ export const Header = ({ starCount }: { starCount?: number | null }) => {
                         }
                       }}
                     >
-                      {label}
+                      <span>{label}</span>
+                      {badgeLabel && (
+                        <NewBadge
+                          data-nav-badge="agentx"
+                          data-new-badge="agentx-nav"
+                          className="ml-1.5"
+                        >
+                          {badgeLabel}
+                        </NewBadge>
+                      )}
                     </Link>
                   ))}
                   <span className="flex items-center gap-2 px-3 sm:hidden">

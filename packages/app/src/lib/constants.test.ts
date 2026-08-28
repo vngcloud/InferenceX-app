@@ -128,6 +128,38 @@ describe('getHardwareConfig', () => {
     expect(config.gpu).toBe("NVIDIA 'Blackwell' GB200 Dynamo TRTLLM");
   });
 
+  it('labels the July Vera Rubin snapshot without the hosting provider', () => {
+    const config = getHardwareConfig('vr200_rubin-july');
+    expect(config.label).toBe('Vera Rubin');
+    expect(config.suffix).toBe('(July)');
+    expect(config.alwaysShowPrecision).toBe(true);
+    expect(getHardwareConfig('vr200_coreweave-vera-rubin').suffix).toBe('');
+  });
+
+  it('keeps the Teacup attribution in the Jalapeño display label', () => {
+    const config = getHardwareConfig('jalapeno_teacup');
+    expect(config.label).toBe('Jalapeño');
+    expect(config.suffix).toBe('(Teacup)');
+    expect(HW_REGISTRY.jalapeno.badgeLabel).toBe('Jalapeño (Teacup)');
+  });
+
+  it('uses the published Jalapeño and VR200 power and TCO assumptions', () => {
+    expect(getGpuSpecs('jalapeno_teacup')).toEqual({
+      tdp: 700,
+      power: 1.125,
+      costh: 1.47,
+      costn: 1.56,
+      costr: 1.79,
+    });
+    expect(getGpuSpecs('vr200_coreweave-vera-rubin')).toEqual({
+      tdp: 1800,
+      power: 3.3,
+      costh: 3.61,
+      costn: 3.61,
+      costr: 3.61,
+    });
+  });
+
   it('returns unknown config when base GPU is not recognised', () => {
     const config = getHardwareConfig('completelynew');
     expect(config.label).toBe('Unknown');
@@ -224,6 +256,7 @@ describe('getHardwareConfig', () => {
 describe('getGpuSpecs', () => {
   it('returns specs for a base GPU key', () => {
     const specs = getGpuSpecs('h100');
+    expect(specs.tdp).toBe(700);
     expect(specs.power).toBe(1.37);
     expect(specs.costh).toBe(1.17);
     expect(specs.costn).toBe(1.55);
@@ -244,6 +277,7 @@ describe('getGpuSpecs', () => {
   it('returns zero specs for unknown GPU', () => {
     const specs = getGpuSpecs('nonexistent');
     expect(specs.power).toBe(0);
+    expect(specs.tdp).toBe(0);
     expect(specs.costh).toBe(0);
     expect(specs.costn).toBe(0);
     expect(specs.costr).toBe(0);
@@ -253,6 +287,7 @@ describe('getGpuSpecs', () => {
     for (const [base, entry] of Object.entries(HW_REGISTRY)) {
       const result = getGpuSpecs(base);
       expect(result.power).toBe(entry.power);
+      expect(result.tdp).toBe(entry.tdp);
       expect(result.costh).toBe(entry.costh);
     }
   });

@@ -3,10 +3,17 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { track } from '@/lib/analytics';
+import { replaceRouterPathname } from '@/lib/client-navigation';
+import { AGENTX_NEW_MODEL_DISPLAY_NAMES } from '@/lib/compare-agentx';
+import { inferenceModelRouteForSelection } from '@/lib/inference-model-slug';
 import { useFeatureGate } from '@/lib/use-feature-gate';
-import { cn } from '@/lib/utils';
 
-import { useInference } from '@/components/inference/InferenceContext';
+import {
+  useInferenceActions,
+  useInferenceData,
+  useInferenceDisplay,
+  useInferenceFilters,
+} from '@/components/inference/InferenceContext';
 import {
   ModelSelector,
   ScenarioSelector,
@@ -25,11 +32,10 @@ import {
 } from '@/components/ui/select';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Button } from '@/components/ui/button';
-import chartDefinitions from '@/components/inference/inference-chart-config.json';
-import type { ChartDefinition, DeploymentMode, SpecMode } from '@/components/inference/types';
-import { resolveComparisonEntries } from '@/components/inference/utils/comparisonEntry';
-import { FRAMEWORK_FAMILIES } from '@/components/inference/utils/quickFilters';
+import { METRIC_CONTROL_GROUPS, METRIC_REGISTRY } from '@/components/inference/metric-registry';
+import { formatTokenPrice } from '@/components/inference/token-revenue';
+import { useOpenDropdown } from '@/hooks/useOpenDropdown';
+import { ModelArchitectureInfoLink } from './ModelArchitectureInfoLink';
 import { Sequence, type Model, type Percentile } from '@/lib/data-mappings';
 import { useLocale } from '@/lib/use-locale';
 
@@ -37,7 +43,7 @@ const STRINGS = {
   en: {
     yAxisMetric: 'Y-Axis Metric',
     yAxisMetricTooltip:
-      "The performance metric displayed on the chart's Y-axis. Options include throughput (tokens/sec), cost per million tokens, and custom user-defined values.",
+      "The performance metric displayed on the chart's Y-axis. Options include throughput, token revenue per GPU hour, cost per million tokens, tokens per $1 USD or ¥1 CNY, and custom user-defined values.",
     xAxisMetric: 'X-Axis Metric',
     xAxisMetricTooltip:
       "The latency metric displayed on the chart's X-axis: P90 Time To First Token.",
@@ -55,22 +61,21 @@ const STRINGS = {
     comparisonDateRangeTooltip:
       'Select the start and end dates for the historical comparison. The chart will show performance data for the selected chip configs across this time range.',
     dateRangePlaceholder: 'Select date range',
-    quickFilters: 'Quick Filters',
-    quickFiltersTooltip:
-      'Narrow the chart by chip vendor, serving framework, deployment mode (single-node, multi-node aggregate, or disaggregated), and speculative decoding. Selecting none in a group shows all.',
-    filterVendor: 'Vendor',
-    filterFramework: 'Framework',
-    filterDeployment: 'Deployment',
-    singleNode: 'Single-node',
-    multiNode: 'Multi-node',
-    disaggregated: 'Disaggregated',
-    filterSpecDecoding: 'Spec Decoding',
-    noData: 'No data for the current selection',
+    revenuePriceSource: 'Revenue Price Source',
+    revenuePriceSourceTooltip:
+      'Choose the token sale prices used for revenue. Normalized prices input and output at $1/M tok. OpenRouter reads the selected model’s current public input and output prices.',
+    normalizedPrice: 'Normalized ($1/M input + output)',
+    openRouterPrice: 'OpenRouter current pricing',
+    openRouterLoading: 'Loading OpenRouter pricing…',
+    openRouterUnavailable: 'OpenRouter pricing is unavailable for this model.',
+    openRouterSummary: (input: string, output: string) =>
+      `Input $${input}/M tok · Output $${output}/M tok`,
+    viewOpenRouter: 'View OpenRouter pricing',
   },
   zh: {
     yAxisMetric: 'Y 轴指标',
     yAxisMetricTooltip:
-      '图表 Y 轴显示的性能指标。包括吞吐量（token/秒）、每百万 token 成本以及自定义用户值。',
+      '图表 Y 轴显示的性能指标，包括吞吐量、每 GPU 小时 token 收入、每百万 token 成本、每 1 美元可购买的 token 数以及自定义值。',
     xAxisMetric: 'X 轴指标',
     xAxisMetricTooltip: '图表 X 轴显示的延迟指标：P90 Time To First Token。',
     xAxisScale: 'X 轴刻度',
@@ -79,128 +84,36 @@ const STRINGS = {
     scaleAuto: '自动',
     scaleLinear: '线性',
     scaleLog: '对数',
-    gpuConfig: 'Chip 配置',
+    gpuConfig: '芯片配置',
     gpuConfigTooltip:
-      '最多选择 4 个 Chip 配置以对比其历史性能趋势。可用于追踪软件更新对特定硬件的影响。',
-    gpuConfigPlaceholder: '选择 Chip 配置进行对比',
+      '最多选择 4 个芯片配置以对比其历史性能趋势。可用于追踪软件更新对特定硬件的影响。',
+    gpuConfigPlaceholder: '选择芯片配置进行对比',
     comparisonDateRange: '对比日期范围',
     comparisonDateRangeTooltip:
-      '选择历史对比的起止日期。图表将展示所选 Chip 配置在此时间范围内的性能数据。',
+      '选择历史对比的起止日期。图表将展示所选芯片配置在此时间范围内的性能数据。',
     dateRangePlaceholder: '选择日期范围',
-    quickFilters: '快捷筛选',
-    quickFiltersTooltip:
-      '按 Chip 厂商、推理框架、部署模式（单节点、多节点聚合或分离式）和投机解码筛选图表。某组不选则显示全部。',
-    filterVendor: '厂商',
-    filterFramework: '框架',
-    filterDeployment: '部署模式',
-    singleNode: '单节点',
-    multiNode: '多节点聚合',
-    disaggregated: '分离式',
-    filterSpecDecoding: '投机解码',
-    noData: '当前选择无可用数据',
+    revenuePriceSource: '收入计价来源',
+    revenuePriceSourceTooltip:
+      '选择计算 token 收入所用的售价。标准化模式将输入和输出 token 均按 $1/百万计价；OpenRouter 模式读取所选模型当前公开的输入和输出价格。',
+    normalizedPrice: '标准化（输入和输出均为 $1/百万）',
+    openRouterPrice: 'OpenRouter 当前价格',
+    openRouterLoading: '正在加载 OpenRouter 价格…',
+    openRouterUnavailable: 'OpenRouter 暂无该模型的价格。',
+    openRouterSummary: (input: string, output: string) =>
+      `输入 $${input}/百万 token · 输出 $${output}/百万 token`,
+    viewOpenRouter: '查看 OpenRouter 定价',
   },
 } as const;
 
-/**
- * Y-axis metric options from static chart config JSON — available immediately, no API wait.
- *
- * Groups marked `gated: true` are hidden unless the konami-code feature gate is unlocked
- * (see useFeatureGate). Use this for surfaces that are wired but whose underlying data
- * pipeline is in the rollout phase (e.g. measured-power telemetry waiting on a runner-
- * side aggregation PR to start populating the DB).
- */
-const METRIC_GROUPS: {
-  label: string;
-  labelZh: string;
-  metrics: string[];
-  gated?: boolean;
-}[] = [
-  {
-    label: 'Throughput',
-    labelZh: '吞吐量',
-    metrics: [
-      'y_tpPerGpu',
-      'y_inputTputPerGpu',
-      'y_outputTputPerGpu',
-      'y_tpPerMw',
-      'y_inputTputPerMw',
-      'y_outputTputPerMw',
-    ],
-  },
-  {
-    label: 'Cost per Million Total Tokens',
-    labelZh: '每百万总 token 成本',
-    metrics: ['y_costh', 'y_costn', 'y_costr'],
-  },
-  {
-    label: 'Cost per Million Output Tokens',
-    labelZh: '每百万输出 token 成本',
-    metrics: ['y_costhOutput', 'y_costnOutput', 'y_costrOutput'],
-  },
-  {
-    label: 'Cost per Million Input Tokens',
-    labelZh: '每百万输入 token 成本',
-    metrics: ['y_costhi', 'y_costni', 'y_costri'],
-  },
-  {
-    label: 'All-in Provisioned Energy per Token',
-    labelZh: '每 token 全电源配置能耗',
-    metrics: ['y_jTotal', 'y_jOutput', 'y_jInput'],
-  },
-  {
-    label: 'Measured Energy',
-    labelZh: '实测能耗',
-    metrics: [
-      'y_measuredPrefillAvgPower',
-      'y_measuredDecodeAvgPower',
-      'y_measuredAvgPower',
-      'y_measuredJPerInputToken',
-      'y_measuredJPerOutputToken',
-      'y_measuredJPerTotalToken',
-    ],
-  },
-  { label: 'Custom User Values', labelZh: '自定义值', metrics: ['y_costUser', 'y_powerUser'] },
-];
+const METRIC_GROUPS = METRIC_CONTROL_GROUPS;
 
-/** Map from metric key → human-readable title (e.g. "Token Throughput per GPU") */
-const METRIC_TITLE_MAP = (() => {
-  const chartDef = (chartDefinitions as ChartDefinition[])[0];
-  const map = new Map<string, string>();
-  for (const key of Object.keys(chartDef)) {
-    if (key.startsWith('y_') && key.endsWith('_title')) {
-      map.set(key.replace('_title', ''), chartDef[key as keyof ChartDefinition] as string);
-    }
-  }
-  return map;
-})();
+const METRIC_TITLE_MAP = new Map(
+  Object.entries(METRIC_REGISTRY).map(([key, metric]) => [`y_${key}`, metric.title]),
+);
 
-const METRIC_TITLE_ZH_MAP = (() => {
-  const chartDef = (chartDefinitions as ChartDefinition[])[0];
-  const map = new Map<string, string>();
-  for (const key of Object.keys(chartDef)) {
-    if (key.startsWith('y_') && key.endsWith('_titleZh')) {
-      const metricKey = key.replace('_titleZh', '');
-      map.set(metricKey, chartDef[key] as string);
-    }
-  }
-  return map;
-})();
-
-/** Quick-filter pill groups: vendor, deployment mode, spec-decoding method. */
-const QUICK_FILTER_VENDORS: { value: string; label: string }[] = [
-  { value: 'NVIDIA', label: 'NVIDIA' },
-  { value: 'AMD', label: 'AMD' },
-];
-const QUICK_FILTER_DEPLOYMENT: DeploymentMode[] = ['single-node', 'multi-node', 'disagg'];
-const QUICK_FILTER_SPEC: { value: SpecMode; label: string }[] = [
-  { value: 'mtp', label: 'MTP' },
-  { value: 'stp', label: 'STP' },
-];
-
-/** Toggle a value in/out of a quick-filter selection array. */
-function toggleValue<T extends string>(current: T[], value: T): T[] {
-  return current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
-}
+const METRIC_TITLE_ZH_MAP = new Map(
+  Object.entries(METRIC_REGISTRY).map(([key, metric]) => [`y_${key}`, metric.titleZh]),
+);
 
 interface ChartControlsProps {
   /** Hide GPU Config selector and related date pickers (used by Historical Trends tab) */
@@ -217,52 +130,45 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  const handleDropdownOpenChange = (dropdownKey: string) => (open: boolean) => {
-    if (open) {
-      setOpenDropdown(dropdownKey);
-      return;
-    }
-    setOpenDropdown((current) => (current === dropdownKey ? null : current));
-  };
+  const { openDropdown, handleDropdownOpenChange } = useOpenDropdown<string>();
 
+  const { selectedModel, selectedSequence, selectedPrecisions, selectedGPUs, selectedDateRange } =
+    useInferenceFilters();
   const {
-    selectedModel,
-    setSelectedModel,
-    selectedSequence,
-    setSelectedSequence,
-    selectedPrecisions,
-    setSelectedPrecisions,
-    selectedYAxisMetric,
-    setSelectedYAxisMetric,
-    selectedPercentile,
-    setSelectedPercentile,
     graphs,
-    selectedGPUs,
-    setSelectedGPUs,
     availableGPUs,
-    selectedDates,
-    selectedDateRange,
-    setSelectedDateRange,
     dateRangeAvailableDates,
     isCheckingAvailableDates,
     availablePrecisions,
     availableSequences,
     availableModels,
+  } = useInferenceData();
+  const {
+    selectedYAxisMetric,
+    tokenRevenuePriceSource,
+    tokenRevenuePricing,
+    openRouterModelId,
+    openRouterPricingLoading,
+    openRouterPricingError,
+    selectedPercentile,
     selectedXAxisMetric,
-    setSelectedXAxisMetric,
     scaleType,
+  } = useInferenceDisplay();
+  const {
+    setSelectedModel,
+    setSelectedSequence,
+    setSelectedPrecisions,
+    setSelectedYAxisMetric,
+    setTokenRevenuePriceSource,
+    setSelectedPercentile,
+    setSelectedGPUs,
+    setSelectedDateRange,
+    setSelectedXAxisMetric,
     setScaleType,
-    quickFilters,
-    availableQuickFilters,
-    setQuickFilterVendors,
-    setQuickFilterFrameworks,
-    setQuickFilterDeployment,
-    setQuickFilterSpec,
-  } = useInference();
+  } = useInferenceActions();
 
-  // Y-axis metric options — built from static chart config JSON (no API dependency).
-  // Hidden groups (Measured Energy) appear only after the ↑↑↓↓ feature gate unlocks.
+  // Y-axis options come from the canonical registry and need no API data.
+  // Gated groups appear only after the feature gate unlocks.
   const featureGateUnlocked = useFeatureGate();
   const visibleGroups = useMemo(
     () => METRIC_GROUPS.filter((g) => !g.gated || featureGateUnlocked),
@@ -308,6 +214,15 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
 
   const handleModelChange = (value: Model) => {
     setSelectedModel(value);
+    // A deliberate pick moves the URL onto the model's indexable subroute in
+    // place — no reload, RSC refetch, or scroll reset. Kept out of the model
+    // state effects on purpose: programmatic changes (back-nav restore,
+    // config load, auto-switch) must not rewrite the URL, and event handlers
+    // are immune to Strict Mode's double-invoked effects. `g_model` is
+    // dropped because the path now carries the model — a lingering share
+    // param would override it on the next snapshot read.
+    const target = inferenceModelRouteForSelection(window.location.pathname, value);
+    if (target !== null) replaceRouterPathname(target, ['g_model']);
     track('inference_model_selected', {
       model: value,
     });
@@ -363,28 +278,6 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
     });
   };
 
-  const handleQuickFilterToggle = (
-    category: 'vendor' | 'framework' | 'deployment' | 'spec',
-    value: string,
-  ) => {
-    const wasActive =
-      category === 'vendor'
-        ? quickFilters.vendors.includes(value)
-        : category === 'framework'
-          ? quickFilters.frameworks.includes(value)
-          : category === 'deployment'
-            ? quickFilters.deployment.includes(value as DeploymentMode)
-            : quickFilters.spec.includes(value as SpecMode);
-    if (category === 'vendor') setQuickFilterVendors(toggleValue(quickFilters.vendors, value));
-    else if (category === 'framework')
-      setQuickFilterFrameworks(toggleValue(quickFilters.frameworks, value));
-    else if (category === 'deployment')
-      setQuickFilterDeployment(toggleValue(quickFilters.deployment, value as DeploymentMode));
-    else setQuickFilterSpec(toggleValue(quickFilters.spec, value as SpecMode));
-    // `active` is the state *after* this toggle.
-    track('inference_quick_filter_toggled', { category, value, active: !wasActive });
-  };
-
   const isInputMetric = (() => {
     const chartDef = graphs[0]?.chartDefinition;
     if (!chartDef) return false;
@@ -401,70 +294,6 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
     });
   };
 
-  // Quick-filter pill groups. Each option carries an `available` flag (has data
-  // for the current model); the render disables unavailable options unless they
-  // are currently selected, so a selection can always be toggled back off. The
-  // Framework group is data-driven — only families present (or selected) are
-  // offered, so it's omitted entirely when none resolve (e.g. while data loads).
-  const fwSelected = quickFilters.frameworks;
-  const frameworkOptions = FRAMEWORK_FAMILIES.filter(
-    (f) => availableQuickFilters.frameworks.includes(f.key) || fwSelected.includes(f.key),
-  ).map((f) => ({
-    value: f.key,
-    label: f.label,
-    available: availableQuickFilters.frameworks.includes(f.key),
-  }));
-  const quickFilterGroups: {
-    key: 'vendor' | 'framework' | 'deployment' | 'spec';
-    label: string;
-    options: readonly { value: string; label: string; available: boolean }[];
-    selected: readonly string[];
-  }[] = [
-    {
-      key: 'vendor',
-      label: t.filterVendor,
-      options: QUICK_FILTER_VENDORS.map((o) => ({
-        ...o,
-        available: availableQuickFilters.vendors.includes(o.value),
-      })),
-      selected: quickFilters.vendors,
-    },
-    ...(frameworkOptions.length > 0
-      ? [
-          {
-            key: 'framework' as const,
-            label: t.filterFramework,
-            options: frameworkOptions,
-            selected: quickFilters.frameworks,
-          },
-        ]
-      : []),
-    {
-      key: 'deployment',
-      label: t.filterDeployment,
-      options: QUICK_FILTER_DEPLOYMENT.map((value) => ({
-        value,
-        label:
-          value === 'single-node'
-            ? t.singleNode
-            : value === 'multi-node'
-              ? t.multiNode
-              : t.disaggregated,
-        available: availableQuickFilters.deployment.includes(value),
-      })),
-      selected: quickFilters.deployment,
-    },
-    {
-      key: 'spec',
-      label: t.filterSpecDecoding,
-      options: QUICK_FILTER_SPEC.map((o) => ({
-        ...o,
-        available: availableQuickFilters.spec.includes(o.value),
-      })),
-      selected: quickFilters.spec,
-    },
-  ];
-
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex flex-col gap-4">
@@ -476,6 +305,8 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
             onOpenChange={handleDropdownOpenChange('model')}
             availableModels={availableModels}
             data-testid="model-selector"
+            trailing={<ModelArchitectureInfoLink model={selectedModel} locale={locale} />}
+            newModels={AGENTX_NEW_MODEL_DISPLAY_NAMES}
           />
           <ScenarioSelector
             value={selectedSequence}
@@ -521,10 +352,69 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
                 options: g.options,
               }))}
               searchPlaceholder={locale === 'zh' ? '搜索…' : undefined}
+              searchAriaLabel={locale === 'zh' ? '搜索指标选项' : undefined}
               noResultsLabel={locale === 'zh' ? '无结果' : undefined}
               clearSearchLabel={locale === 'zh' ? '清除搜索' : undefined}
             />
           </div>
+
+          {mounted && selectedYAxisMetric === 'y_tokenRevenuePerGpuHour' && (
+            <div className="flex flex-col space-y-1.5 lg:col-span-2">
+              <LabelWithTooltip
+                htmlFor="token-revenue-price-source"
+                label={t.revenuePriceSource}
+                tooltip={t.revenuePriceSourceTooltip}
+              />
+              <Select
+                value={tokenRevenuePriceSource}
+                onValueChange={(value) => {
+                  setTokenRevenuePriceSource(value as 'normalized' | 'openrouter');
+                  track('inference_token_revenue_price_source_selected', { source: value });
+                }}
+              >
+                <SelectTrigger
+                  id="token-revenue-price-source"
+                  data-testid="token-revenue-price-source"
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent portalled={false}>
+                  <SelectItem value="normalized">{t.normalizedPrice}</SelectItem>
+                  <SelectItem value="openrouter">{t.openRouterPrice}</SelectItem>
+                </SelectContent>
+              </Select>
+              {tokenRevenuePriceSource === 'openrouter' && (
+                <p data-testid="openrouter-price-summary" className="text-xs text-muted-foreground">
+                  {openRouterPricingLoading
+                    ? t.openRouterLoading
+                    : openRouterPricingError || !tokenRevenuePricing
+                      ? t.openRouterUnavailable
+                      : t.openRouterSummary(
+                          formatTokenPrice(tokenRevenuePricing.inputPerMillion),
+                          formatTokenPrice(tokenRevenuePricing.outputPerMillion),
+                        )}{' '}
+                  {openRouterModelId && (
+                    <a
+                      href={`https://openrouter.ai/${openRouterModelId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-2"
+                      data-testid="openrouter-pricing-link"
+                      onClick={() => {
+                        track('inference_openrouter_pricing_opened', {
+                          model: selectedModel,
+                          openRouterModelId,
+                        });
+                      }}
+                    >
+                      {t.viewOpenRouter}
+                    </a>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
 
           {graphs.some((g) => g.chartDefinition?.chartType === 'interactivity') &&
             isInputMetric &&
@@ -616,64 +506,10 @@ export default function ChartControls({ hideGpuComparison = false }: ChartContro
                 placeholder={t.dateRangePlaceholder}
                 availableDates={dateRangeAvailableDates}
                 isCheckingAvailableDates={isCheckingAvailableDates}
-                className={
-                  // Note (wenyao): a pinned run (`date~rID`) can only reach the chart through
-                  // selectedDates, never through a range, so demanding a range here raises a
-                  // false alarm on comparisons that are already complete.
-                  resolveComparisonEntries(selectedDates, selectedDateRange).length === 0
-                    ? 'border-red-500 ring-4 ring-red-500/40 animate-pulse'
-                    : ''
-                }
               />
             </div>
           )}
         </div>
-
-        {!hideGpuComparison && (
-          <div className="flex flex-col space-y-1.5" data-testid="quick-filters">
-            <LabelWithTooltip
-              htmlFor="quick-filters"
-              label={t.quickFilters}
-              tooltip={t.quickFiltersTooltip}
-            />
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              {quickFilterGroups.map((group) => (
-                <div key={group.key} className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">{group.label}:</span>
-                  <div className="flex flex-wrap gap-1">
-                    {group.options.map((option) => {
-                      const active = (group.selected as readonly string[]).includes(option.value);
-                      // Disable options with no data, but keep a selected one
-                      // clickable so it can always be toggled back off.
-                      const disabled = !option.available && !active;
-                      return (
-                        <Button
-                          key={option.value}
-                          type="button"
-                          size="sm"
-                          variant={active ? 'default' : 'outline'}
-                          aria-pressed={active}
-                          disabled={disabled}
-                          title={disabled ? t.noData : undefined}
-                          // Active pills use the brand color (blue in light, amber in dark)
-                          // rather than the amber primary fill.
-                          className={cn(
-                            'h-7 rounded-full px-3 text-xs',
-                            active && 'bg-brand hover:bg-brand/90',
-                          )}
-                          data-testid={`quick-filter-${group.key}-${option.value}`}
-                          onClick={() => handleQuickFilterToggle(group.key, option.value)}
-                        >
-                          {option.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </TooltipProvider>
   );

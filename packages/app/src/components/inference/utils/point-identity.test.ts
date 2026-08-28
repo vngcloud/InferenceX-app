@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { InferenceData } from '@/components/inference/types';
 
-import { scatterPointConfigId } from './point-identity';
+import { scatterPointConfigId, scatterPointJoinId } from './point-identity';
 
 const point = (overrides: Partial<InferenceData>): InferenceData =>
   ({
@@ -44,5 +44,44 @@ describe('scatterPointConfigId', () => {
     );
 
     expect(off).not.toBe(on);
+  });
+
+  it('keeps recipe variants at the same topology and concurrency distinct', () => {
+    const recipeA = scatterPointConfigId(
+      point({
+        recipe_fingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    );
+    const recipeB = scatterPointConfigId(
+      point({
+        recipe_fingerprint: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      }),
+    );
+
+    expect(recipeA).not.toBe(recipeB);
+    expect(recipeA).toContain(
+      '|recipe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    );
+  });
+
+  it('preserves the legacy key when no recipe fingerprint exists', () => {
+    expect(scatterPointConfigId(point({}))).not.toContain('|recipe-');
+  });
+
+  it('distinguishes otherwise-identical points when multiple dates render together', () => {
+    const may = point({ date: '2026-05-15' });
+    const june = point({ date: '2026-06-15' });
+    expect(scatterPointConfigId(may)).toBe(scatterPointConfigId(june));
+
+    expect(scatterPointJoinId(may, true)).not.toBe(scatterPointJoinId(june, true));
+    expect(scatterPointJoinId(may, true)).toBe(`${scatterPointConfigId(may)}|date-2026-05-15`);
+  });
+
+  it('preserves current-run and undated identities when dates need no disambiguation', () => {
+    const current = point({ date: '2026-06-15' });
+    const undated = point({ date: '' });
+
+    expect(scatterPointJoinId(current, false)).toBe(scatterPointConfigId(current));
+    expect(scatterPointJoinId(undated, true)).toBe(scatterPointConfigId(undated));
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import chartDefinitions from '@/components/inference/inference-chart-config.json';
+import chartDefinitions from '@/components/inference/metric-registry';
 import { dedupeAgenticHistoryRuns } from '@/lib/benchmark-run-selection';
 
 import type { InferenceData } from '@/components/inference/types';
@@ -15,6 +15,7 @@ import {
   filterByGPU,
   derivedModeRoofline,
   flipRooflineDirection,
+  supportsPointTokenMetric,
 } from './useChartData';
 
 interface DedupeInput {
@@ -29,6 +30,9 @@ interface DedupeInput {
   date: string;
   workflow_run_id?: number;
   run_started_at?: string | null;
+  curve_date?: string;
+  curve_workflow_run_id?: number;
+  curve_run_started_at?: string | null;
 }
 
 const drow = (over: Partial<DedupeInput> = {}): DedupeInput => ({
@@ -93,9 +97,24 @@ describe('dedupeRowsToLatestPerConfig', () => {
 
   it('dedupes mixed agentic spec methods as one curve', () => {
     const rows = [
-      drow({ id: 1, benchmark_type: 'agentic_traces', spec_method: 'none', date: '2026-06-01' }),
-      drow({ id: 2, benchmark_type: 'agentic_traces', spec_method: 'mtp', date: '2026-06-03' }),
-      drow({ id: 3, benchmark_type: 'agentic_traces', spec_method: 'eagle', date: '2026-06-03' }),
+      drow({
+        id: 1,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'none',
+        date: '2026-06-01',
+      }),
+      drow({
+        id: 2,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'mtp',
+        date: '2026-06-03',
+      }),
+      drow({
+        id: 3,
+        benchmark_type: 'agentic_traces',
+        spec_method: 'eagle',
+        date: '2026-06-03',
+      }),
     ];
 
     expect(dedupeRowsToLatestPerConfig(rows).map((r) => r.id)).toEqual([2, 3]);
@@ -103,8 +122,18 @@ describe('dedupeRowsToLatestPerConfig', () => {
 
   it('continues deduping fixed-sequence spec methods independently', () => {
     const rows = [
-      drow({ id: 1, benchmark_type: 'single_turn', spec_method: 'none', date: '2026-06-01' }),
-      drow({ id: 2, benchmark_type: 'single_turn', spec_method: 'mtp', date: '2026-06-03' }),
+      drow({
+        id: 1,
+        benchmark_type: 'single_turn',
+        spec_method: 'none',
+        date: '2026-06-01',
+      }),
+      drow({
+        id: 2,
+        benchmark_type: 'single_turn',
+        spec_method: 'mtp',
+        date: '2026-06-03',
+      }),
     ];
 
     expect(dedupeRowsToLatestPerConfig(rows).map((r) => r.id)).toEqual([1, 2]);
@@ -168,6 +197,52 @@ describe('dedupeRowsToLatestPerConfig', () => {
       'mtp',
       'eagle',
     ]);
+  });
+
+  it('keeps cross-day points carried into one append-only snapshot', () => {
+    const rows = [
+      drow({
+        id: 1,
+        date: '2026-06-01',
+        workflow_run_id: 10,
+        curve_date: '2026-06-03',
+        curve_workflow_run_id: 12,
+        curve_run_started_at: '2026-06-03T12:00:00Z',
+      }),
+      drow({
+        id: 2,
+        date: '2026-06-03',
+        workflow_run_id: 12,
+        curve_date: '2026-06-03',
+        curve_workflow_run_id: 12,
+        curve_run_started_at: '2026-06-03T12:00:00Z',
+      }),
+    ];
+
+    expect(dedupeRowsToLatestPerConfig(rows).map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it('keeps same-day agentic points carried from an earlier producer run', () => {
+    const rows = [
+      drow({
+        id: 1,
+        benchmark_type: 'agentic_traces',
+        workflow_run_id: 20,
+        run_started_at: '2026-06-03T10:00:00Z',
+        curve_workflow_run_id: 21,
+        curve_run_started_at: '2026-06-03T12:00:00Z',
+      }),
+      drow({
+        id: 2,
+        benchmark_type: 'agentic_traces',
+        workflow_run_id: 21,
+        run_started_at: '2026-06-03T12:00:00Z',
+        curve_workflow_run_id: 21,
+        curve_run_started_at: '2026-06-03T12:00:00Z',
+      }),
+    ];
+
+    expect(dedupeRowsToLatestPerConfig(rows).map((r) => r.id)).toEqual([1, 2]);
   });
 });
 
@@ -320,9 +395,19 @@ describe('filterByGPU', () => {
 describe('filterOverviewHistoryRows', () => {
   it('keeps only the serving envelope encoded by the Overview history link', () => {
     const rows = [
-      drow({ id: 1, hardware: 'mi355x', framework: 'sglang', precision: 'fp8' }),
+      drow({
+        id: 1,
+        hardware: 'mi355x',
+        framework: 'sglang',
+        precision: 'fp8',
+      }),
       drow({ id: 2, hardware: 'mi355x', framework: 'vllm', precision: 'fp4' }),
-      drow({ id: 3, hardware: 'mi355x', framework: 'sglang', precision: 'fp4' }),
+      drow({
+        id: 3,
+        hardware: 'mi355x',
+        framework: 'sglang',
+        precision: 'fp4',
+      }),
     ];
     const key = JSON.stringify(['qwen3.5', 'mi355x', 'vllm', 'none', 'fp4', false, false, 'off']);
 
@@ -409,8 +494,7 @@ describe('derived higher-is-better x-axis rooflines', () => {
   // The E2E Normalized Interactivity mode renders on the e2e chart definition (lower-x-is-better)
   // but its x-axis is higher-is-better, like interactivity. ChartDisplay
   // therefore mirrors each configured e2e corner horizontally rather than
-  // hardcoding one corner — hardcoding `upper_left` inverted the frontier for
-  // cost and joules metrics, whose good direction is a LOWER corner.
+  // hardcoding one corner.
   it('mirroring the e2e corner reproduces the interactivity corner for every y-metric', () => {
     const defs = chartDefinitions as Record<string, unknown>[];
     const e2e = defs.find((d) => d.chartType === 'e2e')!;
@@ -428,12 +512,13 @@ describe('derived higher-is-better x-axis rooflines', () => {
     }
   });
 
-  it('covers the cost metrics Bugbot flagged, not just throughput', () => {
+  it('keeps purchasing power on an upper corner and cost/joules on lower corners', () => {
     const defs = chartDefinitions as Record<string, unknown>[];
     const e2e = defs.find((d) => d.chartType === 'e2e')!;
-    // Throughput wants an upper corner, cost a lower one — a single hardcoded
-    // corner cannot serve both.
     expect(derivedModeRoofline(e2e.y_tpPerGpu_roofline as 'upper_right', true)).toBe('upper_left');
+    expect(derivedModeRoofline(e2e.y_tokensPerDollarH_roofline as 'upper_right', true)).toBe(
+      'upper_left',
+    );
     expect(derivedModeRoofline(e2e.y_costh_roofline as 'lower_left', true)).toBe('lower_right');
     expect(derivedModeRoofline(e2e.y_jTotal_roofline as 'lower_left', true)).toBe('lower_right');
   });
@@ -441,6 +526,58 @@ describe('derived higher-is-better x-axis rooflines', () => {
   it('leaves the corner alone for a lower-is-better derived metric', () => {
     expect(derivedModeRoofline('upper_right', false)).toBe('upper_right');
     expect(derivedModeRoofline(undefined, true)).toBeUndefined();
+  });
+
+  it('defines every purchasing-power metric as a separate upper-is-better option', () => {
+    const defs = chartDefinitions as Record<string, unknown>[];
+    const interactivity = defs.find((d) => d.chartType === 'interactivity')!;
+    const e2e = defs.find((d) => d.chartType === 'e2e')!;
+    const metrics = [
+      'y_tokensPerDollarH',
+      'y_tokensPerDollarN',
+      'y_tokensPerDollarR',
+      'y_outputTokensPerDollarH',
+      'y_outputTokensPerDollarN',
+      'y_outputTokensPerDollarR',
+      'y_inputTokensPerDollarH',
+      'y_inputTokensPerDollarN',
+      'y_inputTokensPerDollarR',
+      'y_tokensPerDollarUser',
+    ];
+
+    for (const metric of metrics) {
+      expect(interactivity[`${metric}_title`]).toContain('per $1');
+      expect(interactivity[`${metric}_titleZh`]).toContain('每 1 美元');
+      expect(interactivity[`${metric}_roofline`]).toBe('upper_left');
+      expect(e2e[`${metric}_roofline`]).toBe('upper_right');
+    }
+    expect(interactivity.y_cost_limit).toBe(5);
+    expect(e2e.y_cost_limit).toBe(5);
+  });
+
+  it('preserves every existing cost-per-million metric as a separate lower-is-better option', () => {
+    const defs = chartDefinitions as Record<string, unknown>[];
+    const interactivity = defs.find((d) => d.chartType === 'interactivity')!;
+    const e2e = defs.find((d) => d.chartType === 'e2e')!;
+    const metrics = [
+      'y_costh',
+      'y_costn',
+      'y_costr',
+      'y_costhOutput',
+      'y_costnOutput',
+      'y_costrOutput',
+      'y_costhi',
+      'y_costni',
+      'y_costri',
+      'y_costUser',
+    ];
+
+    for (const metric of metrics) {
+      expect(interactivity[`${metric}_title`]).toContain('Cost per Million');
+      expect(interactivity[`${metric}_titleZh`]).toContain('每百万');
+      expect(interactivity[`${metric}_roofline`]).toBe('lower_right');
+      expect(e2e[`${metric}_roofline`]).toBe('lower_left');
+    }
   });
 });
 
@@ -468,7 +605,9 @@ describe('applyScopeFilters', () => {
   // the user's legend selection with whatever set it is handed and never
   // re-widens, so a universe that shrinks when a Measured Energy axis is
   // picked deletes the telemetry-less configs for good.
-  const withTelemetry = scopePoint('b200_sglang', { measuredAvgPower: { y: 900, roof: false } });
+  const withTelemetry = scopePoint('b200_sglang', {
+    measuredAvgPower: { y: 900, roof: false },
+  });
   const withoutTelemetry = scopePoint('h200_vllm');
   const points = [withTelemetry, withoutTelemetry];
 
@@ -495,5 +634,27 @@ describe('applyScopeFilters', () => {
   it('still applies the two-GPU compare scope', () => {
     const scoped = applyScopeFilters(points, [], EMPTY_QUICK_FILTERS, ['h200', 'mi355x']);
     expect(scoped.map((p) => p.hwKey)).toEqual(['h200_vllm']);
+  });
+});
+
+describe('supportsPointTokenMetric', () => {
+  it('uses the source snapshot date when a curve is stamped with the selected display date', () => {
+    const julyRubin = scopePoint('vr200_rubin-july', {
+      date: '2026-08-22',
+      actualDate: '2026-07-01',
+    });
+
+    expect(supportsPointTokenMetric(julyRubin, 'output')).toBe(true);
+    expect(supportsPointTokenMetric(julyRubin, 'total')).toBe(false);
+    expect(supportsPointTokenMetric(julyRubin, 'input')).toBe(false);
+  });
+
+  it('does not restrict future Vera Rubin snapshots without capability metadata', () => {
+    const futureRubin = scopePoint('vr200_rubin-july', {
+      date: '2026-10-01',
+      actualDate: '2026-09-01',
+    });
+
+    expect(supportsPointTokenMetric(futureRubin, 'total')).toBe(true);
   });
 });

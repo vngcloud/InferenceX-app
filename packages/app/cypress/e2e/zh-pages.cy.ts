@@ -5,17 +5,13 @@ describe('Chinese (/zh) pages', () => {
     });
 
     it('renders the Chinese landing content', () => {
-      cy.contains('h2', '探索 InferenceX').should('exist');
-      cy.contains('快速对比').should('exist');
-    });
-
-    it('links to the Chinese overview and full dashboard', () => {
-      cy.get('[data-testid="landing-overview-link"]')
-        .should('have.attr', 'href', '/zh/overview')
-        .and('have.text', '总览');
-      cy.get('[data-testid="landing-full-dashboard-link"]')
-        .should('have.attr', 'href', '/zh/inference')
-        .and('have.text', '完整仪表板');
+      cy.get('[data-testid="intro-section"]').should('contain.text', '智能体推理基准测试');
+      cy.get('[data-testid="splash-text"]').should('have.text', 'AgentX 来了！！');
+      // Quick Comparisons is hidden behind SHOW_QUICK_COMPARISONS in
+      // landing-page.tsx; the card and its Chinese strings still exist in the
+      // source, so assert it is not rendered rather than dropping the check.
+      cy.get('[data-testid="landing-quick-comparisons"]').should('not.exist');
+      cy.contains('快速对比').should('not.exist');
     });
 
     it('sets hreflang alternates to the English homepage', () => {
@@ -27,14 +23,40 @@ describe('Chinese (/zh) pages', () => {
       cy.get('[data-testid="language-toggle"]').should('have.attr', 'href', '/');
     });
 
+    it('header links to the Chinese AgentX page', () => {
+      cy.get('[data-testid="nav-link-agentx"]')
+        .should('contain.text', 'AgentX')
+        .and('have.attr', 'href', '/zh/agentx');
+    });
+
+    it('renders the AgentX hero on the Chinese landing page', () => {
+      cy.get('[data-testid="compare-agentx-primary"]').within(() => {
+        cy.get('h2').should('have.text', '真实智能体工作负载下的推理性能对比');
+        cy.get('[data-testid="compare-agentx-overview-link"]')
+          .should('contain.text', '总览')
+          .and('have.attr', 'href', '/zh/overview');
+        cy.get('[data-testid="compare-agentx-methodology-link"]').should('not.exist');
+        // Ledger NEW pills localize to 新 on the Chinese landing page.
+        cy.get('[data-testid^="compare-agentx-model-"] [data-new-badge="agentx-ledger"]')
+          .should('have.length', 6)
+          .each(($badge) => expect($badge.text()).to.equal('新'));
+      });
+    });
+
     it('footer renders in Chinese with zh-internal links', () => {
-      cy.get('[data-testid="footer-brand-description"]').should('contain.text', '开源推理基准测试');
+      cy.get('[data-testid="footer-brand-description"]').should(
+        'contain.text',
+        'InferenceX 持续开展开源的 agentic 推理基准测试',
+      );
       cy.get('[data-testid="footer-link-supporters"]')
-        .should('contain.text', '支持者')
+        .should('contain.text', '业界评价')
         .and('have.attr', 'href', '/zh/quotes');
-      cy.get('[data-testid="footer-link-datasets"]')
-        .should('contain.text', '数据集')
-        .and('have.attr', 'href', '/zh/datasets');
+      cy.get('[data-testid="footer-link-agentx"]')
+        .should('contain.text', 'AgentX')
+        .and('have.attr', 'href', '/zh/agentx');
+      cy.get('[data-testid="footer-link-about"]')
+        .should('have.text', '关于 SemiAnalysis')
+        .and('have.attr', 'href', 'https://semianalysis.com/about/');
       cy.get('[data-testid="footer-link-articles"]')
         .should('contain.text', '文章')
         .and('have.attr', 'href', '/zh/blog');
@@ -43,9 +65,7 @@ describe('Chinese (/zh) pages', () => {
         'href',
         '/zh/land-acknowledgement',
       );
-      cy.get('[data-testid="footer-link-zh"]')
-        .should('contain.text', 'English')
-        .and('have.attr', 'href', '/');
+      cy.get('[data-testid="footer-link-zh"]').should('not.exist');
     });
   });
 
@@ -56,7 +76,8 @@ describe('Chinese (/zh) pages', () => {
 
     it('renders the Chinese SEO intro above the chart', () => {
       cy.get('[data-testid="zh-tab-intro"]').within(() => {
-        cy.contains('h1', 'AI 推理基准测试').should('exist');
+        cy.contains('h1', '智能体推理基准测试').should('exist');
+        cy.contains('长上下文、多轮').should('exist');
       });
     });
 
@@ -65,6 +86,28 @@ describe('Chinese (/zh) pages', () => {
         .should('contain.text', '准确率评估')
         .and('have.attr', 'href')
         .and('match', /^\/zh\/evaluation/u);
+    });
+  });
+
+  describe('zh FAQ', () => {
+    it('uses the same direct-link anchor as the English FAQ', () => {
+      cy.visit('/zh/about#faq-normalized-interactivity');
+
+      cy.get('#faq-normalized-interactivity')
+        .should('be.visible')
+        .within(() => {
+          cy.contains(
+            'a[href="#faq-normalized-interactivity"]',
+            '端到端归一化交互性与交互性有何区别？',
+          ).should('be.visible');
+          cy.contains('TTFT 越长，归一化指标越低').should('be.visible');
+          cy.get('[data-testid="faq-copy-link-faq-normalized-interactivity"]')
+            .should('be.visible')
+            .and('have.attr', 'title', '复制链接')
+            .find('svg.lucide-link')
+            .should('be.visible');
+        });
+      cy.location('hash').should('eq', '#faq-normalized-interactivity');
     });
   });
 

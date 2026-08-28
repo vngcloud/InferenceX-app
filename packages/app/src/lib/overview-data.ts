@@ -1,6 +1,5 @@
 import { resolveFrameworkPartLabel } from '@semianalysisai/inferencex-constants';
 
-import { restrictAgenticPointsToE2eFrontier } from './agentic-frontier';
 import type { BenchmarkRow } from './api';
 import { rowToAggDataEntry } from './benchmark-transform';
 import { buildAvailabilityHwKey } from './chart-utils';
@@ -16,6 +15,11 @@ import {
   type CategoryTag,
 } from './data-mappings';
 import { frameworkFamily } from './framework-family';
+import {
+  benchmarkCurveDate,
+  benchmarkCurveRunStartedAt,
+  benchmarkCurveWorkflowRunId,
+} from './benchmark-run-selection';
 import {
   computeTierReads,
   singleTurnInteractivity,
@@ -47,9 +51,29 @@ export type OverviewComparisonMode = 'hardware' | OverviewHistoryWindowKey;
 export const OVERVIEW_DEFAULT_COMPARISON_MODE: OverviewComparisonMode = 'hardware';
 export type OverviewModelScope = 'default' | 'all';
 export const OVERVIEW_DEFAULT_MODEL_SCOPE: OverviewModelScope = 'default';
+/** History mode only: `changed` narrows the matrix to rows that moved in the
+ *  window. It is opt-in — the default shows every row, because an unchanged row
+ *  still carries current cost the reader came to audit. Ignored in hardware
+ *  mode, where every row carries a comparison. */
+export type OverviewRowScope = 'changed' | 'all';
+export const OVERVIEW_DEFAULT_ROW_SCOPE: OverviewRowScope = 'all';
+/** Hardware mode only: `priced` drops rows that quote no platform at all, which
+ *  carry neither a cost nor a comparison and exist purely to say "not measured".
+ *  Deliberately not "rows without a delta against the reference": that would
+ *  delete rows pricing three chips just because the reference happens to miss
+ *  this scenario, and the count would swing with the chosen reference. */
+export type OverviewHardwareRowScope = 'priced' | 'all';
+export const OVERVIEW_DEFAULT_HARDWARE_ROW_SCOPE: OverviewHardwareRowScope = 'all';
 export type OverviewScenario = 'single_turn_8k1k' | 'agentx';
-/** Row order within a model: the single-turn workload first, AgentX below it. */
+/** Canonical scenario list. Its order decides headline selection on stat-led
+ *  surfaces (single-turn first), NOT matrix row order — the matrix groups
+ *  AgentX rows first via OVERVIEW_SCENARIO_ROW_ORDER below. */
 export const OVERVIEW_SCENARIOS = ['single_turn_8k1k', 'agentx'] as const;
+/** Matrix display order: the AgentX rows lead and the fixed-sequence 8K/1K
+ *  rows follow, so the workload the overview headlines is not buried under
+ *  legacy single-turn rows. Deliberately separate from OVERVIEW_SCENARIOS so
+ *  /run and /rankings keep quoting single-turn where it exists. */
+export const OVERVIEW_SCENARIO_ROW_ORDER = ['agentx', 'single_turn_8k1k'] as const;
 
 export function resolveOverviewEngineScope(
   raw: string | string[] | undefined,
@@ -85,9 +109,25 @@ export function resolveOverviewModelScope(
   return candidate === 'all' ? 'all' : OVERVIEW_DEFAULT_MODEL_SCOPE;
 }
 
+export function resolveOverviewRowScope(
+  raw: string | readonly string[] | undefined,
+): OverviewRowScope {
+  const candidate = Array.isArray(raw) ? raw[0] : raw;
+  return candidate === 'changed' ? 'changed' : OVERVIEW_DEFAULT_ROW_SCOPE;
+}
+
+export function resolveOverviewHardwareRowScope(
+  raw: string | readonly string[] | undefined,
+): OverviewHardwareRowScope {
+  const candidate = Array.isArray(raw) ? raw[0] : raw;
+  return candidate === 'priced' ? 'priced' : OVERVIEW_DEFAULT_HARDWARE_ROW_SCOPE;
+}
+
 // Note (wenyao): row order is a contract — defaults, then maintenance, then
 // deprecated, each in MODEL_CONFIG declaration order; the overview e2e asserts
-// inactive rows always sit below the default rows.
+// inactive rows always sit below the default rows. Within each category band
+// the matrix additionally groups AgentX rows above 8K/1K rows (see
+// sortOverviewSummaries), which never reorders across bands.
 export function overviewModelsForScope(scope: OverviewModelScope): Model[] {
   return scope === 'all'
     ? [...DEFAULT_MODELS, ...MAINTENANCE_MODELS, ...DEPRECATED_MODELS]
@@ -198,6 +238,15 @@ export interface OverviewPageData {
   comparisonMode: OverviewComparisonMode;
   referenceHardware: OverviewReferenceHardware;
   modelScope: OverviewModelScope;
+  rowScope: OverviewRowScope;
+  hardwareRowScope: OverviewHardwareRowScope;
+  /** Rows with no 30-day change, counted over the full matrix regardless of the
+   *  active scope, so the toggle can name the same number in both directions.
+   *  Zero outside history mode and whenever filtering would change nothing. */
+  unchangedRowCount: number;
+  /** Rows quoting no platform at all, counted the same way for hardware mode.
+   *  Zero outside hardware mode and whenever filtering would change nothing. */
+  emptyRowCount: number;
   historicalWindow: OverviewHistoricalWindow | null;
 }
 
@@ -241,7 +290,7 @@ export function overviewSnapshotDate(
           scenarios.includes(scenario)
         );
       })
-      .map((row) => row.date);
+      .map(benchmarkCurveDate);
   });
   return dates.length === 0 ? null : (dates.toSorted().at(-1) ?? null);
 }
@@ -293,7 +342,9 @@ export function overviewScenarioForModel(
     return 'single_turn_8k1k';
   }
   if (rows.some((row) => row.benchmark_type === 'agentic_traces')) return 'agentx';
-  return model === Model.Kimi_K3 || model === Model.GLM_5_2 ? 'agentx' : 'single_turn_8k1k';
+  return model === Model.Kimi_K3 || model === Model.GLM_5_2 || model === Model.Qwen3_8_Flash_Next
+    ? 'agentx'
+    : 'single_turn_8k1k';
 }
 
 /**
@@ -308,6 +359,7 @@ const OVERVIEW_MODEL_SCENARIOS: Partial<Record<Model, readonly OverviewScenario[
   [Model.Qwen3_5]: ['single_turn_8k1k', 'agentx'],
   [Model.Kimi_K3]: ['agentx'],
   [Model.GLM_5_2]: ['agentx'],
+  [Model.Qwen3_8_Flash_Next]: ['agentx'],
 };
 
 /** The scenarios this model gets a row for. Unlisted models keep the single
@@ -322,6 +374,24 @@ export function overviewScenariosForModel(
     : // Normalized through OVERVIEW_SCENARIOS so row order stays single-turn
       // first however an entry above happens to be written.
       OVERVIEW_SCENARIOS.filter((scenario) => curated.includes(scenario));
+}
+
+/**
+ * The single scenario a stat-led SEO surface quotes for a model: the first
+ * curated scenario that actually has rows, then the first curated scenario.
+ * Keeps /run and /rankings from headlining a workload the overview matrix
+ * does not show for the model (Kimi K3 and GLM 5.2 stay on AgentX even when
+ * single-turn rows exist).
+ */
+export function overviewHeadlineScenarioForModel(
+  model: Model,
+  rows: readonly BenchmarkRow[] = [],
+): OverviewScenario {
+  const scenarios = overviewScenariosForModel(model, rows);
+  return (
+    scenarios.find((scenario) => rows.some((row) => overviewScenarioOfRow(row) === scenario)) ??
+    scenarios[0]
+  );
 }
 
 function overviewEngineRows(
@@ -388,21 +458,26 @@ function buildConfigs(
   const configs: OverviewConfigResult[] = [];
   for (const [key, configRows] of rowsByConfig) {
     const latestDate = configRows.reduce(
-      (latest, row) => (row.date > latest ? row.date : latest),
-      configRows[0].date,
+      (latest, row) => (benchmarkCurveDate(row) > latest ? benchmarkCurveDate(row) : latest),
+      benchmarkCurveDate(configRows[0]),
     );
-    let latestRows = configRows.filter((row) => row.date === latestDate);
-    if (scenario === 'agentx' && latestRows.some((row) => row.workflow_run_id !== undefined)) {
+    let latestRows = configRows.filter((row) => benchmarkCurveDate(row) === latestDate);
+    if (
+      scenario === 'agentx' &&
+      latestRows.some((row) => benchmarkCurveWorkflowRunId(row) !== undefined)
+    ) {
       const winningRow = latestRows.reduce((winner, row) => {
-        const startedAt = row.run_started_at ?? '';
-        const winnerStartedAt = winner.run_started_at ?? '';
+        const startedAt = benchmarkCurveRunStartedAt(row) ?? '';
+        const winnerStartedAt = benchmarkCurveRunStartedAt(winner) ?? '';
         if (startedAt !== winnerStartedAt) return startedAt > winnerStartedAt ? row : winner;
-        return (row.workflow_run_id ?? Number.NEGATIVE_INFINITY) >
-          (winner.workflow_run_id ?? Number.NEGATIVE_INFINITY)
+        return (benchmarkCurveWorkflowRunId(row) ?? Number.NEGATIVE_INFINITY) >
+          (benchmarkCurveWorkflowRunId(winner) ?? Number.NEGATIVE_INFINITY)
           ? row
           : winner;
       });
-      latestRows = latestRows.filter((row) => row.workflow_run_id === winningRow.workflow_run_id);
+      latestRows = latestRows.filter(
+        (row) => benchmarkCurveWorkflowRunId(row) === benchmarkCurveWorkflowRunId(winningRow),
+      );
     }
     const config = buildConfigResult(model, scenario, latestRows[0].precision, key, latestRows);
     if (config) configs.push(config);
@@ -468,7 +543,13 @@ function nonComparableAsMissing(
   if (read === undefined) return nullTierRead(tier);
   return isInRangeTierRead(read)
     ? read
-    : { ...read, value: null, estimated: false, evidenceDate: null, evidenceTopologies: [] };
+    : {
+        ...read,
+        value: null,
+        estimated: false,
+        evidenceDate: null,
+        evidenceTopologies: [],
+      };
 }
 
 function configPriorityIndex(config: OverviewConfigView): number {
@@ -634,12 +715,12 @@ function buildAgenticTierReads(rows: readonly BenchmarkRow[]): TcoTierRead[] {
         interactivity,
         e2eLatency,
         throughput: totalThroughput,
-        date: row.date,
+        date: benchmarkCurveDate(row),
         evidenceLabel: topologyEvidence(row),
       },
     ];
   });
-  return computeTierReads(restrictAgenticPointsToE2eFrontier(points), OVERVIEW_TIERS);
+  return computeTierReads(points, OVERVIEW_TIERS);
 }
 
 /** Single-turn 8K/1K: frontier points at the chart's stored interactivity,
@@ -655,7 +736,7 @@ function buildSingleTurnTierReads(rows: readonly BenchmarkRow[]): TcoTierRead[] 
       {
         interactivity,
         throughput: totalTput * deployedGpuFactor(row),
-        date: row.date,
+        date: benchmarkCurveDate(row),
         evidenceLabel: topologyEvidence(row),
       },
     ];
@@ -744,11 +825,53 @@ export function buildOverviewModelSummary(
   };
 }
 
-/** DEFAULT_MODELS fixes the row order, and a model benchmarked on both
- *  scenarios contributes one row per scenario; a rowless model still renders
- *  all platforms with missing reasons. Live and fixture paths both feed this.
- *  Scenario presence reads the unscoped rows so switching the engine scope
- *  changes cell contents, never the shape of the matrix. */
+/**
+ * Tier reads for one hardware SKU without the OVERVIEW_HARDWARE restriction.
+ * Same config building and read selection as the overview matrix, so a /run
+ * page for H100-class hardware quotes the number the overview would show if
+ * its matrix listed that SKU.
+ */
+export function overviewHardwareTierReader(
+  model: Model,
+  rows: BenchmarkRow[],
+  scenario: OverviewScenario = overviewScenarioForModel(model, rows),
+  engineScope: OverviewEngineScope = 'community',
+): (
+  hardware: string,
+  tier: OverviewTier,
+) => { read: OverviewTierRead; costPerMtok: number | null } {
+  const scopedRows = overviewEngineRows(rows, engineScope);
+  const scenarioRows = overviewScenarioRows(scenario, scopedRows);
+  const configs = buildConfigs(model, scenario, scenarioRows);
+  return (hardware, tier) => {
+    const read = selectPlatformRead(configs, hardware, tier);
+    return { read, costPerMtok: overviewCostPerMtok(hardware, read.value) };
+  };
+}
+
+const overviewCategoryRank = (category: CategoryTag): number =>
+  category === 'default' ? 0 : category === 'maintenance' ? 1 : 2;
+const overviewScenarioRank = (scenario: OverviewScenario): number =>
+  OVERVIEW_SCENARIO_ROW_ORDER.indexOf(scenario);
+
+/** Category bands stay in place (defaults, then maintenance, then deprecated)
+ *  while AgentX rows lead within each band — 8K/1K rows follow — and each
+ *  (band, scenario) group keeps MODEL_CONFIG declaration order. The sort is
+ *  stable, so ties never shuffle. */
+function sortOverviewSummaries(summaries: OverviewModelSummary[]): OverviewModelSummary[] {
+  return summaries.toSorted(
+    (a, b) =>
+      overviewCategoryRank(a.category) - overviewCategoryRank(b.category) ||
+      overviewScenarioRank(a.scenario) - overviewScenarioRank(b.scenario),
+  );
+}
+
+/** DEFAULT_MODELS fixes the row order within each (category, scenario) group,
+ *  AgentX rows sit above 8K/1K rows (see sortOverviewSummaries), and a model
+ *  benchmarked on both scenarios contributes one row per scenario; a rowless
+ *  model still renders all platforms with missing reasons. Live and fixture
+ *  paths both feed this. Scenario presence reads the unscoped rows so switching
+ *  the engine scope changes cell contents, never the shape of the matrix. */
 export function assembleOverviewPageData(
   rowsByModel: Record<string, BenchmarkRow[]>,
   tier: OverviewTier = OVERVIEW_PRIMARY_TIER,
@@ -761,9 +884,11 @@ export function assembleOverviewPageData(
     rows: rowsByModel[model] ?? [],
   }));
   return {
-    models: perModel.flatMap(({ model, rows }) =>
-      overviewScenariosForModel(model, rows).map((scenario) =>
-        buildOverviewModelSummary(model, rows, tier, engineScope, scenario, referenceHardware),
+    models: sortOverviewSummaries(
+      perModel.flatMap(({ model, rows }) =>
+        overviewScenariosForModel(model, rows).map((scenario) =>
+          buildOverviewModelSummary(model, rows, tier, engineScope, scenario, referenceHardware),
+        ),
       ),
     ),
     tier,
@@ -771,8 +896,88 @@ export function assembleOverviewPageData(
     comparisonMode: OVERVIEW_DEFAULT_COMPARISON_MODE,
     referenceHardware,
     modelScope,
+    rowScope: 'all',
+    hardwareRowScope: 'all',
+    unchangedRowCount: 0,
+    emptyRowCount: 0,
     historicalWindow: null,
   };
+}
+
+/** A row earns its place in the 30-day matrix when at least one platform has a
+ *  baseline to compare against. `comparable` is the only status carrying a
+ *  `costDeltaPct`, so it is the same predicate the cells render from. */
+export function overviewRowHasHistoricalChange(model: OverviewModelSummary): boolean {
+  return model.platforms.some((platform) => platform.historicalComparison?.status === 'comparable');
+}
+
+/**
+ * Counts the rows that did not move, and narrows the matrix to the ones that
+ * did when the reader opted in.
+ *
+ * Hardware mode passes straight through. So does a window in which nothing is
+ * comparable — filtering to nothing tells the reader less than the unfiltered
+ * matrix, and the empty state is indistinguishable from a data outage.
+ *
+ * Note: an unchanged row is not an empty row. It routinely carries current
+ * costs that exist nowhere else on the page — on the live site Kimi K3's only
+ * row has no 30-day baseline yet still prices three platforms. That is why
+ * narrowing is opt-in rather than the default.
+ */
+export function applyOverviewRowScope(
+  data: OverviewPageData,
+  rowScope: OverviewRowScope,
+): OverviewPageData {
+  // Hardware mode filters on its own terms, but the reader's answer here is
+  // still carried so a tab switch can restore it. Only the count is zeroed:
+  // there is no control to label while this mode is off screen.
+  if (data.comparisonMode === 'hardware') {
+    return { ...data, rowScope, unchangedRowCount: 0 };
+  }
+
+  const changed = data.models.filter(overviewRowHasHistoricalChange);
+  const unchangedRowCount = data.models.length - changed.length;
+  if (changed.length === 0 || unchangedRowCount === 0) {
+    return { ...data, rowScope: 'all', unchangedRowCount: 0 };
+  }
+
+  return rowScope === 'changed'
+    ? { ...data, models: changed, rowScope: 'changed', unchangedRowCount }
+    : { ...data, rowScope: 'all', unchangedRowCount };
+}
+
+/** A row earns its place in the hardware matrix as soon as one platform quotes
+ *  a cost. One price is still a fact about the row; zero prices is a row of
+ *  dashes saying only that nothing was measured. */
+export function overviewRowHasAnyCost(model: OverviewModelSummary): boolean {
+  return model.platforms.some((platform) => platform.costPerMtok !== null);
+}
+
+/**
+ * The hardware-mode counterpart of {@link applyOverviewRowScope}: counts the
+ * rows that price nothing, and drops them when the reader opts in.
+ *
+ * History mode passes straight through, as does a matrix where every row is
+ * empty — filtering to nothing would read as an outage rather than a filter.
+ */
+export function applyOverviewHardwareRowScope(
+  data: OverviewPageData,
+  hardwareRowScope: OverviewHardwareRowScope,
+): OverviewPageData {
+  // Carried rather than cleared, for the same reason as the history scope.
+  if (data.comparisonMode !== 'hardware') {
+    return { ...data, hardwareRowScope, emptyRowCount: 0 };
+  }
+
+  const priced = data.models.filter(overviewRowHasAnyCost);
+  const emptyRowCount = data.models.length - priced.length;
+  if (priced.length === 0 || emptyRowCount === 0) {
+    return { ...data, hardwareRowScope: 'all', emptyRowCount: 0 };
+  }
+
+  return hardwareRowScope === 'priced'
+    ? { ...data, models: priced, hardwareRowScope: 'priced', emptyRowCount }
+    : { ...data, hardwareRowScope: 'all', emptyRowCount };
 }
 
 function overviewPlatformKey(

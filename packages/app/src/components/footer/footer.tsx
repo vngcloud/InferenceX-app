@@ -12,7 +12,7 @@ import { StarButton } from './footer-star-cta';
 const STRINGS = {
   en: {
     description:
-      'Continuous open-source inference benchmarking. Real-world, reproducible, auditable performance data trusted by trillion dollar AI infrastructure operators like OpenAI, Meta, Oracle, Microsoft, etc.',
+      'Continuous open-source agentic inference benchmarking. Real-world, reproducible, auditable performance data trusted by trillion dollar AI infrastructure operators like OpenAI, Meta, Oracle, Microsoft, etc.',
     semianalysis: 'SemiAnalysis',
     mainSite: 'Main Site',
     newsletter: 'Newsletter',
@@ -23,48 +23,54 @@ const STRINGS = {
     cookiePolicy: 'Cookie Policy',
     contribute: 'Contribute',
     benchmarks: 'Benchmarks',
-    frontend: 'Frontend',
+    agentxHarness: 'AgentX Harness',
+    visualization: 'Visualization',
     more: 'More',
     supporters: 'Supporters',
-    datasets: 'Datasets',
+    agentx: 'AgentX',
+    telemetry: 'Telemetry',
     articles: 'Articles',
     apiReference: 'API Reference',
     gpuReliability: 'Chip Reliability',
     perfPerDollar: 'Performance per Dollar',
+    modelArchitectures: 'Model Architectures',
     glossary: 'AI Inference Glossary',
-    languageLink: '中文版',
-    languageHref: '/zh',
-    languageHrefLang: 'zh-CN',
+    chipSpecs: 'Chip Specs & Pricing',
+    rankings: 'GPU Rankings',
+    runPages: 'Model on GPU Results',
     cta: 'If this data helps your work, consider starring us on GitHub or sharing with your network.',
     rights: 'All rights reserved.',
   },
   zh: {
     description:
-      '持续的开源推理基准测试。真实、可复现、可审计的性能数据，获得 OpenAI、Meta、Oracle、Microsoft 等万亿美元级 AI 基础设施运营方的信赖。',
+      'InferenceX 持续开展开源的 agentic 推理基准测试，发布来自真实环境、可复现、可审计的性能数据，并获得 OpenAI、Meta、Oracle、Microsoft 等万亿美元级 AI 基础设施运营方的信赖。',
     semianalysis: 'SemiAnalysis',
-    mainSite: '官方网站',
+    mainSite: 'SemiAnalysis 官网',
     newsletter: '订阅通讯',
-    about: '关于我们',
+    about: '关于 SemiAnalysis',
     legal: '法律信息',
-    landAcknowledgement: '土地致谢',
+    landAcknowledgement: '原住民传统领地声明',
     privacyPolicy: '隐私政策',
     cookiePolicy: 'Cookie 政策',
     contribute: '参与贡献',
     benchmarks: '基准测试仓库',
-    frontend: '前端仓库',
+    agentxHarness: 'AgentX 测试框架',
+    visualization: '可视化工具',
     more: '更多',
-    supporters: '支持者',
-    datasets: '数据集',
-    articles: '文章',
-    gpuReliability: 'Chip 可靠性',
-    apiReference: 'API 参考文档',
+    supporters: '业界评价',
+    agentx: 'AgentX',
+    telemetry: '遥测数据',
+    articles: '技术文章',
+    gpuReliability: '芯片可靠性',
+    apiReference: 'API 文档',
     perfPerDollar: '每美元性能',
+    modelArchitectures: '模型架构',
     glossary: 'AI 推理术语表',
-    languageLink: 'English',
-    languageHref: '/',
-    languageHrefLang: 'en',
-    cta: '如果这些数据对您的工作有帮助，欢迎在 GitHub 上为我们加星或分享给您的同事。',
-    rights: '保留所有权利。',
+    chipSpecs: '芯片规格与价格',
+    rankings: 'GPU 排行榜',
+    runPages: '模型在 GPU 上的实测结果',
+    cta: '如果这些数据对您的工作有帮助，欢迎在 GitHub 上点个 Star，或分享给同事。',
+    rights: '版权所有。',
   },
 } as const;
 
@@ -106,7 +112,10 @@ export const Footer = ({ starCount }: { starCount?: number | null }) => {
           </div>
 
           {/* Center — Links */}
-          <div data-testid="footer-links" className="grid grid-cols-3 gap-x-6 gap-y-8">
+          <div
+            data-testid="footer-links"
+            className="grid grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,2fr)] gap-x-6 gap-y-8 break-words hyphens-auto min-w-0"
+          >
             <div data-testid="footer-links-semianalysis" className="flex flex-col gap-2.5">
               <span className="text-sm font-medium text-foreground">{t.semianalysis}</span>
               <a
@@ -177,78 +186,124 @@ export const Footer = ({ starCount }: { starCount?: number | null }) => {
                 {t.benchmarks}
               </a>
               <a
-                data-testid="footer-link-frontend"
+                data-testid="footer-link-agentx-harness"
+                href="https://github.com/SemiAnalysisAI/agentx-harness"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {t.agentxHarness}
+              </a>
+              <a
+                data-testid="footer-link-visualization"
                 href="https://github.com/SemiAnalysisAI/InferenceX-app"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
-                {t.frontend}
+                {t.visualization}
               </a>
             </div>
-            <div data-testid="footer-links-more" className="flex flex-col gap-2.5">
+            {/* "More" holds many links, so it gets a double-width column with
+                the links flowing in two sub-columns. This keeps every group on
+                one balanced row instead of wrapping below the others. */}
+            <div
+              data-testid="footer-links-more"
+              className="col-span-2 xl:col-span-1 flex flex-col gap-2.5"
+            >
               <span className="text-sm font-medium text-foreground">{t.more}</span>
-              <Link
-                data-testid="footer-link-supporters"
-                href={`${prefix}/quotes`}
-                onClick={() => track('footer_supporters_clicked')}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.supporters}
-              </Link>
-              <Link
-                data-testid="footer-link-datasets"
-                href={`${prefix}/datasets`}
-                onClick={() => track('footer_datasets_clicked')}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.datasets}
-              </Link>
-              <Link
-                data-testid="footer-link-articles"
-                href={`${prefix}/blog`}
-                onClick={() => track('footer_articles_clicked')}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.articles}
-              </Link>
-              <Link
-                data-testid="footer-link-api"
-                href={`${prefix}/api`}
-                onClick={() => track('footer_api_clicked')}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.apiReference}
-              </Link>
-              <Link
-                data-testid="footer-link-reliability"
-                href={`${prefix}/reliability`}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.gpuReliability}
-              </Link>
-              <Link
-                data-testid="footer-link-compare-per-dollar"
-                href={`${prefix}/compare-per-dollar`}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.perfPerDollar}
-              </Link>
-              <Link
-                data-testid="footer-link-glossary"
-                href={`${prefix}/glossary`}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.glossary}
-              </Link>
-              <Link
-                data-testid="footer-link-zh"
-                href={t.languageHref}
-                hrefLang={t.languageHrefLang}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {t.languageLink}
-              </Link>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2.5">
+                <Link
+                  data-testid="footer-link-supporters"
+                  href={`${prefix}/quotes`}
+                  onClick={() => track('footer_supporters_clicked')}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.supporters}
+                </Link>
+                <Link
+                  data-testid="footer-link-agentx"
+                  href={`${prefix}/agentx`}
+                  onClick={() => track('footer_agentx_clicked')}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.agentx}
+                </Link>
+                <Link
+                  data-testid="footer-link-telemetry"
+                  href={`${prefix}/inference/agentic`}
+                  onClick={() => track('footer_telemetry_clicked')}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.telemetry}
+                </Link>
+                <Link
+                  data-testid="footer-link-articles"
+                  href={`${prefix}/blog`}
+                  onClick={() => track('footer_articles_clicked')}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.articles}
+                </Link>
+                <Link
+                  data-testid="footer-link-api"
+                  href={`${prefix}/api`}
+                  onClick={() => track('footer_api_clicked')}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.apiReference}
+                </Link>
+                <Link
+                  data-testid="footer-link-reliability"
+                  href={`${prefix}/reliability`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.gpuReliability}
+                </Link>
+                <Link
+                  data-testid="footer-link-compare-per-dollar"
+                  href={`${prefix}/compare-per-dollar`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.perfPerDollar}
+                </Link>
+                <Link
+                  data-testid="footer-link-model-architectures"
+                  // English-only route (not zh-mirrored), so no locale prefix.
+                  href="/model"
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.modelArchitectures}
+                </Link>
+                <Link
+                  data-testid="footer-link-glossary"
+                  href={`${prefix}/glossary`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.glossary}
+                </Link>
+                <Link
+                  data-testid="footer-link-chips"
+                  href={`${prefix}/chips`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.chipSpecs}
+                </Link>
+                <Link
+                  data-testid="footer-link-rankings"
+                  href={`${prefix}/rankings`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.rankings}
+                </Link>
+                <Link
+                  data-testid="footer-link-run"
+                  href={`${prefix}/run`}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t.runPages}
+                </Link>
+              </div>
             </div>
           </div>
 

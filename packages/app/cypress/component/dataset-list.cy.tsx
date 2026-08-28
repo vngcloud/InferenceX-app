@@ -3,6 +3,7 @@ import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared
 
 import { DatasetList } from '@/components/datasets/dataset-list';
 import type { DatasetRecord } from '@/hooks/api/use-datasets';
+import { createMockRouter } from '../support/mock-router';
 
 const datasets: DatasetRecord[] = [
   {
@@ -43,17 +44,6 @@ const datasets: DatasetRecord[] = [
   },
 ];
 
-function createMockRouter() {
-  return {
-    push: cy.stub(),
-    replace: cy.stub(),
-    refresh: cy.stub(),
-    back: cy.stub(),
-    forward: cy.stub(),
-    prefetch: cy.stub().resolves(),
-  };
-}
-
 function mountList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   cy.mount(
@@ -74,7 +64,7 @@ describe('DatasetList', () => {
     cy.contains('cc-traces-weka (256k)').should('be.visible');
     cy.contains('1,234').should('be.visible'); // conversation_count, localized
     cy.contains('82%').should('be.visible'); // cachedPct
-    cy.get('a[href="/datasets/cc-traces-weka-full"]').should('exist');
+    cy.get('a[href="/agentx/cc-traces-weka-full"]').should('exist');
   });
 
   it('shows the empty state when no datasets are ingested', () => {

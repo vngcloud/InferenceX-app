@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('next/cache', () => ({
+  revalidateTag: vi.fn(),
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+}));
 import type { BenchmarkRow } from './api';
 import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants';
 
@@ -53,7 +57,9 @@ const rows = [
 ];
 
 function selectedFrameworks(page: OverviewPageData) {
-  const summary = page.models.find((model) => model.model === Model.Qwen3_5);
+  const summary = page.models.find(
+    (model) => model.model === Model.Qwen3_5 && model.scenario === 'single_turn_8k1k',
+  );
   return {
     candidate: summary?.platforms.find(({ hardware }) => hardware === 'mi355x')?.read.config
       ?.framework,
@@ -71,6 +77,59 @@ afterEach(() => {
 });
 
 describe('getOverviewPageData engine scope forwarding', () => {
+  it('returns a renderable empty history payload when no current snapshot exists', async () => {
+    const getCachedBenchmarks = vi.fn(() => Promise.resolve([]));
+    const getCachedBenchmarksAsOf = vi.fn();
+    vi.doMock('@semianalysisai/inferencex-db/connection', () => ({ FIXTURES_MODE: false }));
+    vi.doMock('@/lib/benchmark-data.server', () => ({
+      getCachedBenchmarks,
+      getCachedBenchmarksAsOf,
+    }));
+    vi.doMock('@/lib/test-fixtures', () => ({ loadFixture: vi.fn() }));
+
+    const { getOverviewPageData } = await import('./overview-data.server');
+
+    await expect(
+      getOverviewPageData(75, 'all', '30d', 'b300', 'all', 'changed', 'priced'),
+    ).resolves.toEqual({
+      models: [],
+      tier: 75,
+      engineScope: 'all',
+      comparisonMode: '30d',
+      referenceHardware: 'b300',
+      modelScope: 'all',
+      rowScope: 'changed',
+      hardwareRowScope: 'priced',
+      unchangedRowCount: 0,
+      emptyRowCount: 0,
+      historicalWindow: null,
+    });
+    expect(getCachedBenchmarksAsOf).not.toHaveBeenCalled();
+  });
+
+  it('keeps hardware mode valid when every platform is missing', async () => {
+    const getCachedBenchmarks = vi.fn(() => Promise.resolve([]));
+    const getCachedBenchmarksAsOf = vi.fn();
+    vi.doMock('@semianalysisai/inferencex-db/connection', () => ({ FIXTURES_MODE: false }));
+    vi.doMock('@/lib/benchmark-data.server', () => ({
+      getCachedBenchmarks,
+      getCachedBenchmarksAsOf,
+    }));
+    vi.doMock('@/lib/test-fixtures', () => ({ loadFixture: vi.fn() }));
+
+    const { getOverviewPageData } = await import('./overview-data.server');
+    const page = await getOverviewPageData(50, 'community', 'hardware');
+
+    expect(page.comparisonMode).toBe('hardware');
+    expect(page.models.length).toBeGreaterThan(0);
+    expect(
+      page.models.every((model) =>
+        model.platforms.every((platform) => platform.costPerMtok === null),
+      ),
+    ).toBe(true);
+    expect(getCachedBenchmarksAsOf).not.toHaveBeenCalled();
+  });
+
   it('forwards the selected hardware reference through fixture mode', async () => {
     vi.doMock('@semianalysisai/inferencex-db/connection', () => ({ FIXTURES_MODE: true }));
     vi.doMock('@/lib/benchmark-data.server', () => ({ getCachedBenchmarks: vi.fn() }));
@@ -145,7 +204,9 @@ describe('getOverviewPageData engine scope forwarding', () => {
 
     const { getOverviewPageData } = await import('./overview-data.server');
     const page = await getOverviewPageData(50, 'community', '30d');
-    const qwen = page.models.find((model) => model.model === Model.Qwen3_5);
+    const qwen = page.models.find(
+      (model) => model.model === Model.Qwen3_5 && model.scenario === 'single_turn_8k1k',
+    );
     const mi355x = qwen?.platforms.find(({ hardware }) => hardware === 'mi355x');
     const b300 = qwen?.platforms.find(({ hardware }) => hardware === 'b300');
 

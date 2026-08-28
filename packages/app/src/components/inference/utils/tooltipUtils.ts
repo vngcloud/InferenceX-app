@@ -1,11 +1,15 @@
 import { formatNumber, getDisplayLabel } from '@/lib/utils';
 import { specMethodDisplayLabel } from '@/lib/compare-variant-slug';
+import { agenticDetailHref } from '@/lib/agentic-detail-link';
 import { isPersistedBenchmarkId } from '@/lib/benchmark-id';
 import type { Locale } from '@/lib/i18n';
 import { isKvOffloadEnabled } from '@/lib/kv-offload';
 
 import type { HardwareConfig, InferenceData, OverlayData } from '@/components/inference/types';
-import { parallelismLabel } from '@/components/inference/utils/parallelism-label';
+import {
+  meaningfulParallelismSize,
+  parallelismLabel,
+} from '@/components/inference/utils/parallelism-label';
 import {
   cacheImplementationLabel,
   offloadTypeLabel,
@@ -35,6 +39,8 @@ export interface TooltipConfig {
    * call so we don't ship megabytes of profile JSONL just for this check).
    */
   hasTrace?: boolean;
+  /** Whether this official DB-backed point has a linked `server_logs` row. */
+  hasLog?: boolean;
   /** Page locale for tooltip metadata labels. Defaults to English. */
   locale?: Locale;
 }
@@ -59,28 +65,37 @@ const asBool = (v: boolean | string | undefined): boolean | undefined =>
  * Delegates to the shared {@link parallelismLabel} so the chart points and the
  * agentic sibling navigator describe a config identically.
  */
-export const getPointLabel = (d: InferenceData): string =>
-  parallelismLabel({
+export const getPointLabel = (d: InferenceData): string => {
+  const aggregateDcp = meaningfulParallelismSize(d.prefill_dcp_size, d.decode_dcp_size);
+  const aggregatePcp = meaningfulParallelismSize(d.prefill_pcp_size, d.decode_pcp_size);
+  return parallelismLabel({
     // InferenceData.tp is the TOTAL GPU count (createChartDataPoint folds pp
     // into it for aggregated rows) — the label wants the actual TP width, so
     // prefer the raw decode_tp and keep d.tp only as a legacy fallback.
     tp: d.decode_tp ?? d.tp,
     ep: d.ep,
     pp: d.pp,
+    dcp: d.disagg ? (d.decode_dcp_size ?? d.prefill_dcp_size) : aggregateDcp,
+    pcp: d.disagg ? (d.decode_pcp_size ?? d.prefill_pcp_size) : aggregatePcp,
     dpAttention: asBool(d.dp_attention),
     disagg: d.disagg,
     isMultinode: d.is_multinode,
     prefillTp: d.prefill_tp,
     prefillEp: d.prefill_ep,
     prefillPp: d.prefill_pp,
+    prefillDcp: d.prefill_dcp_size,
+    prefillPcp: d.prefill_pcp_size,
     prefillDpAttention: asBool(d.prefill_dp_attention),
     prefillNumWorkers: d.prefill_num_workers,
     decodeTp: d.decode_tp,
     decodeEp: d.decode_ep,
     decodePp: d.decode_pp,
+    decodeDcp: d.decode_dcp_size,
+    decodePcp: d.decode_pcp_size,
     decodeDpAttention: asBool(d.decode_dp_attention),
     decodeNumWorkers: d.decode_num_workers,
   });
+};
 
 const runLinkHTML = (runUrl?: string) =>
   runUrl
@@ -89,8 +104,10 @@ const runLinkHTML = (runUrl?: string) =>
       </div>`
     : '';
 
+const labelColon = (label: string) => (/[\u4E00-\u9FFF]/u.test(label) ? '：' : ':');
+
 const tooltipLine = (label: string, value: string | number) =>
-  `<div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;"><strong>${label}:</strong> ${value}</div>`;
+  `<div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;"><strong>${label}${labelColon(label)}</strong> ${value}</div>`;
 
 const formatPct = (v: number | undefined): string | null =>
   v === undefined || v === null || Number.isNaN(v) ? null : `${(v * 100).toFixed(1)}%`;
@@ -103,6 +120,37 @@ export const fmt = (v: number): string => {
   if (Math.abs(rounded) >= 10000) return new Intl.NumberFormat('en-US').format(rounded);
   return String(rounded);
 };
+
+const TOOLTIP_STRINGS = {
+  en: {
+    dismiss: 'Click elsewhere to dismiss',
+    unofficialRun: '✕ UNOFFICIAL RUN',
+    date: 'Date',
+    dataFrom: (d: string) => `(data from ${d})`,
+    image: 'Image',
+    branch: 'Branch',
+    chipConfig: 'Chip Config',
+    totalChips: 'Total Chips',
+    concurrency: 'Concurrency',
+    precision: 'Precision',
+    inputTputPerChip: 'Input Token Throughput per Chip',
+    outputTputPerChip: 'Output Token Throughput per Chip',
+  },
+  zh: {
+    dismiss: '点击其他区域关闭',
+    unofficialRun: '✕ 非官方运行',
+    date: '日期',
+    dataFrom: (d: string) => `（数据来自 ${d}）`,
+    image: '镜像',
+    branch: '分支',
+    chipConfig: '芯片配置',
+    totalChips: '芯片总数',
+    concurrency: '并发数',
+    precision: '精度',
+    inputTputPerChip: '每芯片输入 token 吞吐量',
+    outputTputPerChip: '每芯片输出 token 吞吐量',
+  },
+} as const;
 
 const CACHE_STRINGS = {
   en: {
@@ -117,11 +165,11 @@ const CACHE_STRINGS = {
     legacyDisabled: 'Disabled (legacy data)',
   },
   zh: {
-    offloadType: '卸载类型',
-    offloadBackend: 'KV 卸载引擎',
+    offloadType: 'offload 类型',
+    offloadBackend: 'KV offload 引擎',
     transferEngine: 'KV 传输引擎',
     router: '路由器',
-    gpuHitRate: 'Chip Cache 命中率',
+    gpuHitRate: '芯片 Cache 命中率',
     cpuHitRate: 'CPU Cache 命中率',
     theoreticalHitRate: '理论 Cache 命中率',
     legacyEnabled: '已启用（旧版数据）',
@@ -218,27 +266,49 @@ const generateAgenticHTML = (d: InferenceData, locale: Locale): string => {
   return parts.join('');
 };
 
-/** "View charts" link — only visible when the tooltip is pinned and the
- *  point has stored trace data. Wired up by the scatter/GPU graph click handlers. */
-const viewChartsButtonHTML = (
-  isPinned: boolean,
-  hasTraceData: boolean,
-  pointId: number | undefined,
-): string => {
-  if (!isPinned || !hasTraceData || !isPersistedBenchmarkId(pointId)) return '';
-  return `<a data-action="view-charts" href="/inference/agentic/${pointId}" style="
-    display: block; margin-top: 8px; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 500;
+const ACTION_STRINGS = {
+  en: { charts: 'View charts', logs: 'View logs' },
+  zh: { charts: '查看图表', logs: '查看日志' },
+} as const;
+
+const pointDetailActionLink = (action: 'view-charts' | 'view-logs', href: string, label: string) =>
+  `<a data-action="${action}" href="${href}" style="
+    display: block; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 500;
     border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
     background: var(--accent); color: var(--accent-foreground); text-align: center; text-decoration: none;
-  ">View charts &rarr;</a>`;
+  ">${label} &rarr;</a>`;
+
+/** Point-detail links rendered only for persisted, pinned official points. */
+const viewActionsHTML = (
+  isPinned: boolean,
+  hasTraceData: boolean,
+  hasLogData: boolean,
+  pointId: number | undefined,
+  benchmarkType: string | undefined,
+  locale: Locale,
+): string => {
+  const isAgentic = benchmarkType === 'agentic_traces';
+  const showCharts = isAgentic && hasTraceData;
+  if (!isPinned || !isPersistedBenchmarkId(pointId) || (!showCharts && !hasLogData)) return '';
+  const prefix = locale === 'zh' ? '/zh' : '';
+  const agenticHref = agenticDetailHref(pointId, locale);
+  const logHref = isAgentic
+    ? `${agenticHref}${agenticHref.includes('?') ? '&' : '?'}view=logs`
+    : `${prefix}/inference/logs/${pointId}`;
+  const t = ACTION_STRINGS[locale];
+  const actions = [
+    showCharts ? pointDetailActionLink('view-charts', agenticHref, t.charts) : '',
+    hasLogData ? pointDetailActionLink('view-logs', logHref, t.logs) : '',
+  ].filter(Boolean);
+  return `<div style="display: grid; gap: 6px; margin-top: 8px;">${actions.join('')}</div>`;
 };
 
 const shortenSha = (image: string) =>
   image.replaceAll(/(?<shaPrefix>sha256:[a-f0-9]{7})[a-f0-9]+/giu, '$<shaPrefix>…');
 
-const imageTooltipLine = (image: string) =>
+const imageTooltipLine = (image: string, label: string) =>
   `<div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Image:</strong> <span style="display: inline-block; vertical-align: top; overflow-wrap: anywhere;">${shortenSha(image.trim()).replace(/\s+/u, '<br />')}</span>
+        <strong>${label}${labelColon(label)}</strong> <span style="display: inline-block; vertical-align: top; overflow-wrap: anywhere;">${shortenSha(image.trim()).replace(/\s+/u, '<br />')}</span>
       </div>`;
 
 const PARALLELISM_STRINGS = {
@@ -255,6 +325,8 @@ const PARALLELISM_STRINGS = {
     tensorParallelism: 'Tensor Parallelism',
     expertParallelism: 'Expert Parallelism',
     pipelineParallelism: 'Pipeline Parallelism',
+    decodeContextParallelism: 'Decode Context Parallelism (DCP)',
+    prefillContextParallelism: 'Prefill Context Parallelism (PCP)',
     dpAttention: 'DP Attention',
   },
   zh: {
@@ -263,16 +335,25 @@ const PARALLELISM_STRINGS = {
     singleNode: '单节点聚合',
     multiNode: '多节点聚合',
     disaggregated: '分离式',
-    gpuCount: (n: number) => `${n} 个 Chip`,
+    gpuCount: (n: number) => `${n} 个芯片`,
     prefill: '预填充',
     decode: '解码',
-    gpusUnit: '个 Chip',
+    gpusUnit: '个芯片',
     tensorParallelism: '张量并行 (TP)',
     expertParallelism: '专家并行 (EP)',
     pipelineParallelism: '流水线并行 (PP)',
+    decodeContextParallelism: '解码上下文并行 (DCP)',
+    prefillContextParallelism: '预填充上下文并行 (PCP)',
     dpAttention: 'DP Attention',
   },
 } as const;
+
+const contextParallelismParts = (dcp?: number, pcp?: number): string => {
+  const parts: string[] = [];
+  if (dcp !== undefined && dcp > 1) parts.push(`DCP: ${dcp}`);
+  if (pcp !== undefined && pcp > 1) parts.push(`PCP: ${pcp}`);
+  return parts.length > 0 ? `${parts.join(', ')}, ` : '';
+};
 
 /**
  * Generates HTML for the parallelism configuration section of a tooltip.
@@ -283,11 +364,18 @@ const PARALLELISM_STRINGS = {
 const generateParallelismHTML = (d: InferenceData, locale: Locale = 'en'): string => {
   const t = PARALLELISM_STRINGS[locale];
   const deployment = d.disagg ? t.disaggregated : d.is_multinode ? t.multiNode : t.singleNode;
+  const aggregateDcp = meaningfulParallelismSize(d.prefill_dcp_size, d.decode_dcp_size);
+  const aggregatePcp = meaningfulParallelismSize(d.prefill_pcp_size, d.decode_pcp_size);
   if (
     (d.ep === null || d.ep === undefined) &&
     (d.prefill_ep === null || d.prefill_ep === undefined)
   ) {
-    return tooltipLine(t.deployment, deployment) + tooltipLine(t.strategy, t.gpuCount(d.tp));
+    return (
+      tooltipLine(t.deployment, deployment) +
+      tooltipLine(t.strategy, t.gpuCount(d.tp)) +
+      (aggregateDcp ? tooltipLine(t.decodeContextParallelism, aggregateDcp) : '') +
+      (aggregatePcp ? tooltipLine(t.prefillContextParallelism, aggregatePcp) : '')
+    );
   }
 
   if (d.is_multinode && d.disagg) {
@@ -301,13 +389,15 @@ const generateParallelismHTML = (d: InferenceData, locale: Locale = 'en'): strin
     const ddpa = d.decode_dp_attention ?? d.dp_attention ?? false;
     const pw = d.prefill_num_workers ?? 1;
     const dw = d.decode_num_workers ?? 1;
+    const prefillContext = contextParallelismParts(d.prefill_dcp_size, d.prefill_pcp_size);
+    const decodeContext = contextParallelismParts(d.decode_dcp_size, d.decode_pcp_size);
     return `
       ${tooltipLine(t.deployment, deployment)}
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${t.prefill}:</strong> ${d.num_prefill_gpu ?? '?'} ${t.gpusUnit}, TP: ${ptp}, ${ppp > 1 ? `PP: ${ppp}, ` : ''}EP: ${pep}, DPA: ${pdpa ? 'True' : 'False'}, Workers: ${pw}
+        <strong>${t.prefill}${labelColon(t.prefill)}</strong> ${d.num_prefill_gpu ?? '?'} ${t.gpusUnit}, TP: ${ptp}, ${ppp > 1 ? `PP: ${ppp}, ` : ''}${prefillContext}EP: ${pep}, DPA: ${pdpa ? 'True' : 'False'}, Workers: ${pw}
       </div>
       <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${t.decode}:</strong> ${d.num_decode_gpu ?? '?'} ${t.gpusUnit}, TP: ${dtp}, ${dpp > 1 ? `PP: ${dpp}, ` : ''}EP: ${dep}, DPA: ${ddpa ? 'True' : 'False'}, Workers: ${dw}
+        <strong>${t.decode}${labelColon(t.decode)}</strong> ${d.num_decode_gpu ?? '?'} ${t.gpusUnit}, TP: ${dtp}, ${dpp > 1 ? `PP: ${dpp}, ` : ''}${decodeContext}EP: ${dep}, DPA: ${ddpa ? 'True' : 'False'}, Workers: ${dw}
       </div>`;
   }
 
@@ -315,6 +405,8 @@ const generateParallelismHTML = (d: InferenceData, locale: Locale = 'en'): strin
     ${tooltipLine(t.deployment, deployment)}
     ${tooltipLine(t.tensorParallelism, d.decode_tp ?? d.tp)}
     ${d.pp !== null && d.pp !== undefined && d.pp > 1 ? tooltipLine(t.pipelineParallelism, d.pp) : ''}
+    ${aggregateDcp ? tooltipLine(t.decodeContextParallelism, aggregateDcp) : ''}
+    ${aggregatePcp ? tooltipLine(t.prefillContextParallelism, aggregatePcp) : ''}
     ${d.ep !== null && d.ep !== undefined ? tooltipLine(t.expertParallelism, d.ep) : ''}
     ${tooltipLine(t.dpAttention, d.dp_attention ? 'True' : 'False')}`;
 };
@@ -337,56 +429,43 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
     hasTrace,
   } = config;
   const locale = config.locale ?? 'en';
+  const t = TOOLTIP_STRINGS[locale];
 
   return `
     <div style="background: var(--popover); border: 1px solid var(--border); border-radius: 8px; padding: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); user-select: ${isPinned ? 'text' : 'none'};">
-      ${isPinned ? '<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">Click elsewhere to dismiss</div>' : ''}
+      ${isPinned ? `<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">${t.dismiss}</div>` : ''}
       <div style="color: var(--foreground); font-size: 12px; font-weight: 600; margin-bottom: 8px;">
         ${hardwareConfig[d.hwKey] ? getDisplayLabel(hardwareConfig[d.hwKey]) : d.hwKey}
       </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Date:</strong> ${d.actualDate ?? d.date}
-      </div>
+      ${tooltipLine(t.date, `${d.actualDate ?? d.date}`)}
       ${
         d?.image
           ? `
-      ${imageTooltipLine(d.image)}`
+      ${imageTooltipLine(d.image, t.image)}`
           : ''
       }
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${fmt(d.x)}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${fmt(d.y)}
-      </div>
+      ${tooltipLine(xLabel, fmt(d.x))}
+      ${tooltipLine(yLabel, fmt(d.y))}
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
-          <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per Chip:</strong> ${fmt(d['inputTputPerGpu'].y)}
-          </div>`
+          ${tooltipLine(t.inputTputPerChip, `${fmt(d['inputTputPerGpu'].y)}`)}`
           : ''
       }
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
-          <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per Chip:</strong> ${fmt(d['outputTputPerGpu'].y)}
-          </div>`
+          ${tooltipLine(t.outputTputPerChip, `${fmt(d['outputTputPerGpu'].y)}`)}`
           : ''
       }
-      ${tooltipLine('Total Chips', d.tp)}
+      ${tooltipLine(t.totalChips, d.tp)}
       ${generateParallelismHTML(d, locale)}
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Concurrency:</strong> ${d.conc}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Precision:</strong> ${d.precision.toUpperCase()}
-      </div>
+      ${tooltipLine(t.concurrency, `${d.conc}`)}
+      ${tooltipLine(t.precision, `${d.precision.toUpperCase()}`)}
       ${generateCacheMetadataHTML(d, locale)}
       ${generateAgenticHTML(d, locale)}
       ${runLinkHTML(runUrl)}
-      ${viewChartsButtonHTML(isPinned, Boolean(hasTrace), d.id)}
+      ${viewActionsHTML(isPinned, Boolean(hasTrace), Boolean(config.hasLog), d.id, d.benchmark_type, locale)}
     </div>
   `;
 };
@@ -401,39 +480,28 @@ export const generateTooltipContent = (config: TooltipConfig): string => {
 export const generateOverlayTooltipContent = (config: OverlayTooltipConfig): string => {
   const { data: d, isPinned, xLabel, yLabel, overlayData } = config;
   const locale = config.locale ?? 'en';
+  const t = TOOLTIP_STRINGS[locale];
   const hwConfig = overlayData.hardwareConfig[d.hwKey];
   const perRow = overlayData.getRunForRow?.(d);
   const branch = perRow?.branch ?? overlayData.label;
 
   return `
     <div style="background: var(--popover); border: 2px solid #dc2626; border-radius: 8px; padding: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); user-select: ${isPinned ? 'text' : 'none'};">
-      ${isPinned ? '<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">Click elsewhere to dismiss</div>' : ''}
+      ${isPinned ? `<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">${t.dismiss}</div>` : ''}
       <div style="color: #dc2626; font-size: 10px; font-weight: 700; margin-bottom: 4px; text-transform: uppercase;">
-        ✕ UNOFFICIAL RUN
+        ${t.unofficialRun}
       </div>
       <div style="color: var(--foreground); font-size: 12px; font-weight: 600; margin-bottom: 8px;">
         ${hwConfig ? getDisplayLabel(hwConfig) : d.hwKey}
       </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Branch:</strong> ${branch}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Date:</strong> ${d.actualDate ?? d.date}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${fmt(d.x)}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${fmt(d.y)}
-      </div>
-      ${tooltipLine('Total Chips', d.tp)}
+      ${tooltipLine(t.branch, `${branch}`)}
+      ${tooltipLine(t.date, `${d.actualDate ?? d.date}`)}
+      ${tooltipLine(xLabel, fmt(d.x))}
+      ${tooltipLine(yLabel, fmt(d.y))}
+      ${tooltipLine(t.totalChips, d.tp)}
       ${generateParallelismHTML(d, locale)}
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Concurrency:</strong> ${d.conc}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Precision:</strong> ${d.precision.toUpperCase()}
-      </div>
+      ${tooltipLine(t.concurrency, `${d.conc}`)}
+      ${tooltipLine(t.precision, `${d.precision.toUpperCase()}`)}
       ${generateCacheMetadataHTML(d, locale)}
       ${generateAgenticHTML(d, locale)}
     </div>
@@ -457,58 +525,44 @@ export const generateGPUGraphTooltipContent = (config: TooltipConfig): string =>
     hardwareConfig,
     runUrl,
     hasTrace,
+    hasLog,
   } = config;
   const locale = config.locale ?? 'en';
+  const t = TOOLTIP_STRINGS[locale];
 
   return `
     <div style="background: var(--popover); border: 1px solid var(--border); border-radius: 8px; padding: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); user-select: ${isPinned ? 'text' : 'none'};">
-      ${isPinned ? '<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">Click elsewhere to dismiss</div>' : ''}
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Date:</strong> ${d.date}${d.actualDate && d.actualDate !== d.date ? ` <span style="opacity: 0.7">(data from ${d.actualDate})</span>` : ''}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Chip Config:</strong> ${hardwareConfig[d.hwKey] ? getDisplayLabel(hardwareConfig[d.hwKey]) : d.hwKey}
-      </div>
+      ${isPinned ? `<div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 6px; font-style: italic;">${t.dismiss}</div>` : ''}
+      ${tooltipLine(t.date, `${d.date}${d.actualDate && d.actualDate !== d.date ? ` <span style="opacity: 0.7">${t.dataFrom(d.actualDate)}</span>` : ''}`)}
+      ${tooltipLine(t.chipConfig, `${hardwareConfig[d.hwKey] ? getDisplayLabel(hardwareConfig[d.hwKey]) : d.hwKey}`)}
       ${
         d?.image
           ? `
-      ${imageTooltipLine(d.image)}`
+      ${imageTooltipLine(d.image, t.image)}`
           : ''
       }
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${xLabel}:</strong> ${fmt(d.x)}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>${yLabel}:</strong> ${fmt(d.y)}
-      </div>
+      ${tooltipLine(xLabel, fmt(d.x))}
+      ${tooltipLine(yLabel, fmt(d.y))}
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['inputTputPerGpu']
           ? `
-          <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Input Token Throughput per Chip:</strong> ${fmt(d['inputTputPerGpu'].y)}
-          </div>`
+          ${tooltipLine(t.inputTputPerChip, `${fmt(d['inputTputPerGpu'].y)}`)}`
           : ''
       }
       ${
         selectedYAxisMetric === 'y_tpPerGpu' && d['outputTputPerGpu']
           ? `
-          <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-            <strong>Output Token Throughput per Chip:</strong> ${fmt(d['outputTputPerGpu'].y)}
-          </div>`
+          ${tooltipLine(t.outputTputPerChip, `${fmt(d['outputTputPerGpu'].y)}`)}`
           : ''
       }
-      ${tooltipLine('Total Chips', d.tp)}
+      ${tooltipLine(t.totalChips, d.tp)}
       ${generateParallelismHTML(d, locale)}
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Concurrency:</strong> ${d.conc}
-      </div>
-      <div style="color: var(--muted-foreground); font-size: 11px; margin-bottom: 4px;">
-        <strong>Precision:</strong> ${d.precision.toUpperCase()}
-      </div>
+      ${tooltipLine(t.concurrency, `${d.conc}`)}
+      ${tooltipLine(t.precision, `${d.precision.toUpperCase()}`)}
       ${generateCacheMetadataHTML(d, locale)}
       ${generateAgenticHTML(d, locale)}
       ${runLinkHTML(runUrl)}
-      ${viewChartsButtonHTML(isPinned, Boolean(hasTrace), d.id)}
+      ${viewActionsHTML(isPinned, Boolean(hasTrace), Boolean(hasLog), d.id, d.benchmark_type, locale)}
     </div>
   `;
 };

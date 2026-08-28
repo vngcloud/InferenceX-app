@@ -4,30 +4,42 @@ import { GlobalFilterProvider } from '@/components/GlobalFilterContext';
 import { NudgeEngine } from '@/components/nudge-engine';
 import { TabNav } from '@/components/tab-nav';
 import { UnofficialRunProvider } from '@/components/unofficial-run-provider';
+import { dashboardShellCapabilitiesForPathname } from '@/lib/dashboard-routes';
+import { inferenceModelForPathname } from '@/lib/inference-model-slug';
 import { usePathname } from 'next/navigation';
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const content = (
-    <main className="relative">
-      <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4">
-        <TabNav />
-        {children}
-      </div>
-    </main>
-  );
-  if (pathname === '/collectivex' || pathname === '/zh/collectivex') return content;
+  const { providers: providerCapabilities, dashboardNudge } =
+    dashboardShellCapabilitiesForPathname(pathname);
+
+  let content = children;
+  if (providerCapabilities.globalFilters) {
+    // `/inference/<model>` pages pin the model from the path. Seeding the
+    // provider (rather than only applying it in an effect) keeps the server
+    // render and first client paint on the right model — `usePathname` is
+    // available during SSR, so hydration agrees. Soft navigations between
+    // model pages don't remount this provider; those are handled by the
+    // pathname-keyed effect inside GlobalFilterProvider.
+    content = (
+      <GlobalFilterProvider initialModel={inferenceModelForPathname(pathname) ?? undefined}>
+        {content}
+      </GlobalFilterProvider>
+    );
+  }
+  if (providerCapabilities.unofficialRuns) {
+    content = <UnofficialRunProvider>{content}</UnofficialRunProvider>;
+  }
+
   return (
     <>
-      <NudgeEngine scope="dashboard" />
-      <UnofficialRunProvider>
-        <main className="relative">
-          <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4">
-            <TabNav />
-            <GlobalFilterProvider>{children}</GlobalFilterProvider>
-          </div>
-        </main>
-      </UnofficialRunProvider>
+      {dashboardNudge && <NudgeEngine scope="dashboard" />}
+      <main className="relative">
+        <div className="container mx-auto px-4 lg:px-8 flex flex-col gap-4">
+          <TabNav />
+          {content}
+        </div>
+      </main>
     </>
   );
 }

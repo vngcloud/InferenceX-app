@@ -4,10 +4,19 @@
  * They do NOT import Node.js-specific modules (fs, path) or build-time dependencies.
  */
 
-import { resolveFrameworkAlias } from '@semianalysisai/inferencex-constants';
+import { resolveFrameworkAlias, USD_TO_CNY } from '@semianalysisai/inferencex-constants';
 import iwanthue from 'iwanthue';
 
-import type { AggDataEntry, ChartDefinition, InferenceData } from '@/components/inference/types';
+import type {
+  AggDataEntry,
+  ChartDefinition,
+  InferenceData,
+  YAxisMetricKey,
+} from '@/components/inference/types';
+import {
+  BENCHMARK_METRIC_CONFIG_KEYS,
+  type BenchmarkMetricKey,
+} from '@/components/inference/metric-registry';
 import { getGpuSpecs, isKnownGpu } from '@/lib/constants';
 import { getVendor, type Vendor } from '@/lib/dynamic-colors';
 import type { Locale } from '@/lib/i18n';
@@ -25,6 +34,7 @@ import type { Locale } from '@/lib/i18n';
 const BANNED_HUE_TEST: Record<Vendor, ((hue: number) => boolean) | null> = {
   nvidia: (hue) => hue >= 320 || hue <= 40, // red/rose/pink zone
   amd: (hue) => hue >= 120 && hue <= 195, // green zone
+  teacup: (hue) => hue < 170 || hue > 300, // keep the blue/cyan zone
   unknown: null,
 };
 
@@ -38,6 +48,7 @@ const PREFERRED_ZONE: Record<
 > = {
   nvidia: { hmin: 100, hmax: 195 }, // greens/teals
   amd: { hmin: 20, hmax: 50, cmin: 70, lmin: 50 }, // vivid reds/oranges
+  teacup: { hmin: 190, hmax: 280 }, // cyans/blues
   unknown: null,
 };
 
@@ -160,38 +171,10 @@ export const generateHighContrastColors = (
 };
 
 /**
- * Defines all possible Y-axis metrics that can be used for chart generation,
- * including base metrics and calculated roofline metrics.
+ * Metrics backed by the benchmark transform. Custom user metrics are derived
+ * later from user-entered costs/power and are excluded by the registry.
  */
-export const Y_AXIS_METRICS = [
-  'y',
-  'y_tpPerGpu',
-  'y_inputTputPerGpu',
-  'y_outputTputPerGpu',
-  'y_tpPerMw',
-  'y_inputTputPerMw',
-  'y_outputTputPerMw',
-  'y_costh',
-  'y_costn',
-  'y_costr',
-  'y_costhOutput',
-  'y_costnOutput',
-  'y_costrOutput',
-  'y_costhi',
-  'y_costni',
-  'y_costri',
-  'y_jTotal',
-  'y_jOutput',
-  'y_jInput',
-  // Measured power / energy (sourced from runner's aggregate_power.py output;
-  // distinct from the spec-sheet TDP-derived jTotal/jOutput/jInput above).
-  'y_measuredAvgPower',
-  'y_measuredPrefillAvgPower',
-  'y_measuredDecodeAvgPower',
-  'y_measuredJPerOutputToken',
-  'y_measuredJPerTotalToken',
-  'y_measuredJPerInputToken',
-] as const;
+export const Y_AXIS_METRICS = ['y', ...BENCHMARK_METRIC_CONFIG_KEYS] as const;
 
 export type YAxisMetric = (typeof Y_AXIS_METRICS)[number];
 
@@ -300,10 +283,222 @@ export function buildAvailabilityHwKey(
   return hwKey;
 }
 
+export type DerivedMetricKey = BenchmarkMetricKey;
+export type DerivedChartFields = Pick<InferenceData, DerivedMetricKey>;
+
+const chartMetric = (y: number): { y: number; roof: boolean } => ({ y, roof: false });
+
+/**
+ * Builds benchmark-derived metric fields. Passing `requestedMetrics` keeps
+ * lightweight consumers lightweight while sharing the exact formulas used by
+ * full inference points.
+ */
+export function buildDerivedChartFields(
+  entry: AggDataEntry,
+  currentHwKey: string,
+): DerivedChartFields;
+export function buildDerivedChartFields(
+  entry: AggDataEntry,
+  currentHwKey: string,
+  requestedMetrics: readonly DerivedMetricKey[],
+): Partial<DerivedChartFields>;
+export function buildDerivedChartFields(
+  entry: AggDataEntry,
+  currentHwKey: string,
+  requestedMetrics?: readonly DerivedMetricKey[],
+): Partial<DerivedChartFields> {
+  const requested = requestedMetrics ? new Set<DerivedMetricKey>(requestedMetrics) : null;
+  const wants = (key: DerivedMetricKey) => requested === null || requested.has(key);
+  const specs = getGpuSpecs(currentHwKey);
+  const hardwarePower = specs.power;
+  const tputPerGpu = entry.tput_per_gpu ?? 0;
+  const outputTputPerGpu = entry.output_tput_per_gpu ?? 0;
+  const inputTputPerGpu = entry.input_tput_per_gpu ?? 0;
+  const tokensPerHour = tputPerGpu * 3600;
+  const outputTokensPerHour = outputTputPerGpu * 3600;
+  const inputTokensPerHour = inputTputPerGpu * 3600;
+  const millionTokensPerHour = tokensPerHour / 1_000_000;
+  const millionOutputTokensPerHour = outputTokensPerHour / 1_000_000;
+  const millionInputTokensPerHour = inputTokensPerHour / 1_000_000;
+  const fields: Partial<DerivedChartFields> = {};
+
+  if (wants('tpPerGpu')) fields.tpPerGpu = chartMetric(tputPerGpu);
+  if (wants('outputTputPerGpu') && outputTputPerGpu) {
+    fields.outputTputPerGpu = chartMetric(outputTputPerGpu);
+  }
+  if (wants('inputTputPerGpu') && inputTputPerGpu) {
+    fields.inputTputPerGpu = chartMetric(inputTputPerGpu);
+  }
+  if (wants('tokenRevenuePerGpuHour')) {
+    // At $1 per million total tokens, million tokens per GPU hour is
+    // numerically equal to gross token revenue in $/GPU/hr.
+    fields.tokenRevenuePerGpuHour = chartMetric(millionTokensPerHour);
+  }
+  if (wants('tpPerMw')) fields.tpPerMw = chartMetric((tputPerGpu * 1000) / hardwarePower);
+  if (wants('inputTputPerMw') && inputTputPerGpu) {
+    fields.inputTputPerMw = chartMetric(
+      hardwarePower ? (inputTputPerGpu * 1000) / hardwarePower : 0,
+    );
+  }
+  if (wants('outputTputPerMw') && outputTputPerGpu) {
+    fields.outputTputPerMw = chartMetric(
+      hardwarePower ? (outputTputPerGpu * 1000) / hardwarePower : 0,
+    );
+  }
+
+  if (wants('costh')) {
+    fields.costh = chartMetric(
+      hardwarePower && millionTokensPerHour ? specs.costh / millionTokensPerHour : 0,
+    );
+  }
+  if (wants('costn')) {
+    fields.costn = chartMetric(
+      hardwarePower && millionTokensPerHour ? specs.costn / millionTokensPerHour : 0,
+    );
+  }
+  if (wants('costr')) {
+    fields.costr = chartMetric(
+      hardwarePower && millionTokensPerHour ? specs.costr / millionTokensPerHour : 0,
+    );
+  }
+  if (wants('costhOutput')) {
+    fields.costhOutput = chartMetric(
+      hardwarePower && millionOutputTokensPerHour ? specs.costh / millionOutputTokensPerHour : 0,
+    );
+  }
+  if (wants('costnOutput')) {
+    fields.costnOutput = chartMetric(
+      hardwarePower && millionOutputTokensPerHour ? specs.costn / millionOutputTokensPerHour : 0,
+    );
+  }
+  if (wants('costrOutput')) {
+    fields.costrOutput = chartMetric(
+      hardwarePower && millionOutputTokensPerHour ? specs.costr / millionOutputTokensPerHour : 0,
+    );
+  }
+  if (wants('costhi')) {
+    fields.costhi = chartMetric(
+      hardwarePower && millionInputTokensPerHour ? specs.costh / millionInputTokensPerHour : 0,
+    );
+  }
+  if (wants('costni')) {
+    fields.costni = chartMetric(
+      hardwarePower && millionInputTokensPerHour ? specs.costn / millionInputTokensPerHour : 0,
+    );
+  }
+  if (wants('costri')) {
+    fields.costri = chartMetric(
+      hardwarePower && millionInputTokensPerHour ? specs.costr / millionInputTokensPerHour : 0,
+    );
+  }
+
+  if (wants('tokensPerDollarH')) {
+    fields.tokensPerDollarH = chartMetric(specs.costh ? tokensPerHour / specs.costh : 0);
+  }
+  if (wants('tokensPerDollarN')) {
+    fields.tokensPerDollarN = chartMetric(specs.costn ? tokensPerHour / specs.costn : 0);
+  }
+  if (wants('tokensPerDollarR')) {
+    fields.tokensPerDollarR = chartMetric(specs.costr ? tokensPerHour / specs.costr : 0);
+  }
+  if (wants('outputTokensPerDollarH')) {
+    fields.outputTokensPerDollarH = chartMetric(
+      specs.costh ? outputTokensPerHour / specs.costh : 0,
+    );
+  }
+  if (wants('outputTokensPerDollarN')) {
+    fields.outputTokensPerDollarN = chartMetric(
+      specs.costn ? outputTokensPerHour / specs.costn : 0,
+    );
+  }
+  if (wants('outputTokensPerDollarR')) {
+    fields.outputTokensPerDollarR = chartMetric(
+      specs.costr ? outputTokensPerHour / specs.costr : 0,
+    );
+  }
+  if (wants('inputTokensPerDollarH')) {
+    fields.inputTokensPerDollarH = chartMetric(specs.costh ? inputTokensPerHour / specs.costh : 0);
+  }
+  if (wants('inputTokensPerDollarN')) {
+    fields.inputTokensPerDollarN = chartMetric(specs.costn ? inputTokensPerHour / specs.costn : 0);
+  }
+  if (wants('inputTokensPerDollarR')) {
+    fields.inputTokensPerDollarR = chartMetric(specs.costr ? inputTokensPerHour / specs.costr : 0);
+  }
+
+  if (wants('tokensPerRmbH')) {
+    fields.tokensPerRmbH = chartMetric(
+      specs.costh ? tokensPerHour / (specs.costh * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('tokensPerRmbN')) {
+    fields.tokensPerRmbN = chartMetric(
+      specs.costn ? tokensPerHour / (specs.costn * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('tokensPerRmbR')) {
+    fields.tokensPerRmbR = chartMetric(
+      specs.costr ? tokensPerHour / (specs.costr * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('outputTokensPerRmbH')) {
+    fields.outputTokensPerRmbH = chartMetric(
+      specs.costh ? outputTokensPerHour / (specs.costh * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('outputTokensPerRmbN')) {
+    fields.outputTokensPerRmbN = chartMetric(
+      specs.costn ? outputTokensPerHour / (specs.costn * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('outputTokensPerRmbR')) {
+    fields.outputTokensPerRmbR = chartMetric(
+      specs.costr ? outputTokensPerHour / (specs.costr * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('inputTokensPerRmbH')) {
+    fields.inputTokensPerRmbH = chartMetric(
+      specs.costh ? inputTokensPerHour / (specs.costh * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('inputTokensPerRmbN')) {
+    fields.inputTokensPerRmbN = chartMetric(
+      specs.costn ? inputTokensPerHour / (specs.costn * USD_TO_CNY) : 0,
+    );
+  }
+  if (wants('inputTokensPerRmbR')) {
+    fields.inputTokensPerRmbR = chartMetric(
+      specs.costr ? inputTokensPerHour / (specs.costr * USD_TO_CNY) : 0,
+    );
+  }
+
+  if (wants('jTotal')) {
+    fields.jTotal = chartMetric(
+      hardwarePower && tputPerGpu ? (hardwarePower * 1000) / tputPerGpu : 0,
+    );
+  }
+  if (wants('jOutput') && outputTputPerGpu) {
+    fields.jOutput = chartMetric(hardwarePower ? (hardwarePower * 1000) / outputTputPerGpu : 0);
+  }
+  if (wants('jInput') && inputTputPerGpu) {
+    fields.jInput = chartMetric(hardwarePower ? (hardwarePower * 1000) / inputTputPerGpu : 0);
+  }
+
+  const measured = buildMeasuredPowerChartFields(entry, specs.tdp);
+  for (const [key, value] of Object.entries(measured) as [
+    keyof MeasuredPowerChartFields,
+    { y: number; roof: boolean },
+  ][]) {
+    if (wants(key)) fields[key] = value;
+  }
+
+  return fields;
+}
+
 /**
  * Creates a single InferenceData point from an AggDataEntry.
  * Spreads all AggDataEntry fields through automatically, then overrides
- * with chart-specific derived fields (coordinates, costs, roofline metrics).
+ * with chart-specific coordinates and canonical derived fields.
  */
 export function createChartDataPoint(
   date: string,
@@ -311,37 +506,18 @@ export function createChartDataPoint(
   xKey: keyof AggDataEntry,
   yKey: keyof AggDataEntry,
   currentHwKey: string,
+  derivedFields: DerivedChartFields = buildDerivedChartFields(entry, currentHwKey),
 ): InferenceData {
-  const yValue = (entry[yKey] ?? 0) as number;
-  const xValue = (entry[xKey] ?? 0) as number;
-  const specs = getGpuSpecs(currentHwKey);
-  const hardwarePower = specs.power;
-  const tputPerGpu = entry.tput_per_gpu ?? 0;
-  const outputTputPerGpu = entry.output_tput_per_gpu ?? 0;
-  const inputTputPerGpu = entry.input_tput_per_gpu ?? 0;
-
-  const tokensPerHour = (tputPerGpu * 3600) / 1000000;
-  const outputTokensPerHour = (outputTputPerGpu * 3600) / 1000000;
-  const inputTokensPerHour = (inputTputPerGpu * 3600) / 1000000;
-
   return {
-    // Spread all AggDataEntry fields (raw stats, metadata, etc.)
     ...entry,
-
-    // Chart-specific overrides
     date,
-    x: xValue,
-    y: yValue,
+    x: (entry[xKey] ?? 0) as number,
+    y: (entry[yKey] ?? 0) as number,
     hwKey: currentHwKey,
-    // Total GPU count. Disagg rows carry explicit per-role GPU counts; for
-    // aggregated rows the world size is tp × pp (pp undefined/≤1 ⇒ ×1, so
-    // pre-PP rows are unchanged).
     tp: entry.disagg
       ? entry.num_prefill_gpu + entry.num_decode_gpu
       : entry.tp * (entry.pp && entry.pp > 1 ? entry.pp : 1),
     image: entry.image ?? undefined,
-
-    // Narrow boolean | string fields to boolean
     dp_attention:
       entry.dp_attention !== null && entry.dp_attention !== undefined
         ? entry.dp_attention === true || entry.dp_attention === 'true'
@@ -358,120 +534,80 @@ export function createChartDataPoint(
       entry.is_multinode !== null && entry.is_multinode !== undefined
         ? Boolean(entry.is_multinode)
         : undefined,
-
-    // Disagg fields: only set when active
     disagg: entry.disagg || undefined,
     num_prefill_gpu: entry.disagg ? entry.num_prefill_gpu : undefined,
     num_decode_gpu: entry.disagg ? entry.num_decode_gpu : undefined,
+    ...derivedFields,
+  };
+}
 
-    // Roofline metric fields
-    tpPerGpu: { y: tputPerGpu, roof: false },
-    ...(outputTputPerGpu ? { outputTputPerGpu: { y: outputTputPerGpu, roof: false } } : {}),
-    ...(inputTputPerGpu ? { inputTputPerGpu: { y: inputTputPerGpu, roof: false } } : {}),
-    tpPerMw: { y: (tputPerGpu * 1000) / hardwarePower, roof: false },
-    ...(inputTputPerGpu
-      ? {
-          inputTputPerMw: {
-            y: hardwarePower ? (inputTputPerGpu * 1000) / hardwarePower : 0,
-            roof: false,
-          },
-        }
-      : {}),
-    ...(outputTputPerGpu
-      ? {
-          outputTputPerMw: {
-            y: hardwarePower ? (outputTputPerGpu * 1000) / hardwarePower : 0,
-            roof: false,
-          },
-        }
-      : {}),
+type MeasuredPowerChartFields = Partial<
+  Pick<
+    InferenceData,
+    | 'measuredAvgPower'
+    | 'measuredPrefillAvgPower'
+    | 'measuredDecodeAvgPower'
+    | 'measuredJPerOutputToken'
+    | 'measuredJPerTotalToken'
+    | 'measuredJPerInputToken'
+    | 'measuredJPerSuccessfulQuery'
+    | 'measuredWhPerSuccessfulQuery'
+    | 'measuredPowerPercentTdp'
+  >
+>;
 
-    // Cost fields (combined throughput)
-    costh: {
-      y: hardwarePower && tokensPerHour ? specs.costh / tokensPerHour : 0,
-      roof: false,
-    },
-    costn: {
-      y: hardwarePower && tokensPerHour ? specs.costn / tokensPerHour : 0,
-      roof: false,
-    },
-    costr: {
-      y: hardwarePower && tokensPerHour ? specs.costr / tokensPerHour : 0,
-      roof: false,
-    },
-
-    // Cost per million output tokens
-    costhOutput: {
-      y: hardwarePower && outputTokensPerHour ? specs.costh / outputTokensPerHour : 0,
-      roof: false,
-    },
-    costnOutput: {
-      y: hardwarePower && outputTokensPerHour ? specs.costn / outputTokensPerHour : 0,
-      roof: false,
-    },
-    costrOutput: {
-      y: hardwarePower && outputTokensPerHour ? specs.costr / outputTokensPerHour : 0,
-      roof: false,
-    },
-
-    // Cost per million input tokens
-    costhi: {
-      y: hardwarePower && inputTokensPerHour ? specs.costh / inputTokensPerHour : 0,
-      roof: false,
-    },
-    costni: {
-      y: hardwarePower && inputTokensPerHour ? specs.costn / inputTokensPerHour : 0,
-      roof: false,
-    },
-    costri: {
-      y: hardwarePower && inputTokensPerHour ? specs.costr / inputTokensPerHour : 0,
-      roof: false,
-    },
-
-    // All-in provisioned Joules per token: J/token = W/GPU / tok/s/gpu
-    // hardwarePower is in kW, so multiply by 1000 to get watts
-    jTotal: {
-      y: hardwarePower && tputPerGpu ? (hardwarePower * 1000) / tputPerGpu : 0,
-      roof: false,
-    },
-    ...(outputTputPerGpu
-      ? {
-          jOutput: {
-            y: hardwarePower && outputTputPerGpu ? (hardwarePower * 1000) / outputTputPerGpu : 0,
-            roof: false,
-          },
-        }
-      : {}),
-    ...(inputTputPerGpu
-      ? {
-          jInput: {
-            y: hardwarePower && inputTputPerGpu ? (hardwarePower * 1000) / inputTputPerGpu : 0,
-            roof: false,
-          },
-        }
-      : {}),
-
-    // Measured power / energy from runner's aggregate_power.py. Gated on the
-    // raw fields existing so points from runs predating the measurement land
-    // without these keys and the chart correctly filters them out.
+/** Builds optional runner-telemetry fields for the canonical derived builder. */
+function buildMeasuredPowerChartFields(
+  entry: AggDataEntry,
+  tdpWatts: number,
+): MeasuredPowerChartFields {
+  return {
     ...(typeof entry.avg_power_w === 'number'
-      ? { measuredAvgPower: { y: entry.avg_power_w, roof: false } }
+      ? { measuredAvgPower: chartMetric(entry.avg_power_w) }
       : {}),
     ...(typeof entry.prefill_avg_power_w === 'number'
-      ? { measuredPrefillAvgPower: { y: entry.prefill_avg_power_w, roof: false } }
+      ? { measuredPrefillAvgPower: chartMetric(entry.prefill_avg_power_w) }
       : {}),
     ...(typeof entry.decode_avg_power_w === 'number'
-      ? { measuredDecodeAvgPower: { y: entry.decode_avg_power_w, roof: false } }
+      ? { measuredDecodeAvgPower: chartMetric(entry.decode_avg_power_w) }
       : {}),
     ...(typeof entry.joules_per_output_token === 'number'
-      ? { measuredJPerOutputToken: { y: entry.joules_per_output_token, roof: false } }
+      ? { measuredJPerOutputToken: chartMetric(entry.joules_per_output_token) }
       : {}),
     ...(typeof entry.joules_per_total_token === 'number'
-      ? { measuredJPerTotalToken: { y: entry.joules_per_total_token, roof: false } }
+      ? { measuredJPerTotalToken: chartMetric(entry.joules_per_total_token) }
       : {}),
     ...(typeof entry.joules_per_input_token === 'number'
-      ? { measuredJPerInputToken: { y: entry.joules_per_input_token, roof: false } }
+      ? { measuredJPerInputToken: chartMetric(entry.joules_per_input_token) }
       : {}),
+    ...(typeof entry.joules_per_successful_query === 'number'
+      ? {
+          measuredJPerSuccessfulQuery: chartMetric(entry.joules_per_successful_query),
+          measuredWhPerSuccessfulQuery: chartMetric(entry.joules_per_successful_query / 3600),
+        }
+      : {}),
+    ...(typeof entry.avg_power_w === 'number' && tdpWatts > 0
+      ? { measuredPowerPercentTdp: chartMetric((entry.avg_power_w / tdpWatts) * 100) }
+      : {}),
+  };
+}
+/**
+ * Remaps a chart-ready point onto a resolved metric and x-axis field. Official
+ * and overlay pipelines share this coordinate step while retaining separate
+ * clipping and frontier policies.
+ */
+export function remapInferencePoint(
+  point: InferenceData,
+  metricKey: YAxisMetricKey,
+  xAxisField: keyof AggDataEntry,
+): InferenceData {
+  const metric = point[metricKey];
+  const xCandidate = (point as Partial<AggDataEntry>)[xAxisField];
+  return {
+    ...point,
+    x: typeof xCandidate === 'number' ? xCandidate : point.x,
+    y: metric?.y ?? point.y,
+    roof: metric?.roof ?? false,
   };
 }
 
@@ -632,249 +768,6 @@ export type ParetoDirection = keyof typeof PARETO_BY_DIRECTION;
 export const paretoFrontForDirection = (
   dir: ParetoDirection,
 ): ((points: InferenceData[]) => InferenceData[]) => PARETO_BY_DIRECTION[dir];
-
-/**
- * Calculates the roofline for a given set of points.
- */
-export const calculateRoofline = (
-  points: InferenceData[],
-  yKey:
-    | keyof InferenceData
-    | `tpPerGpu.y`
-    | `outputTputPerGpu.y`
-    | `inputTputPerGpu.y`
-    | `tpPerMw.y`
-    | `inputTputPerMw.y`
-    | `outputTputPerMw.y`
-    | `costh.y`
-    | `costn.y`
-    | `costr.y`
-    | `costhOutput.y`
-    | `costnOutput.y`
-    | `costrOutput.y`
-    | `costhi.y`
-    | `costni.y`
-    | `costri.y`
-    | `jTotal.y`
-    | `jOutput.y`
-    | `jInput.y`
-    | `measuredAvgPower.y`
-    | `measuredPrefillAvgPower.y`
-    | `measuredDecodeAvgPower.y`
-    | `measuredJPerOutputToken.y`
-    | `measuredJPerTotalToken.y`
-    | `measuredJPerInputToken.y`,
-  rooflineDirection: 'upper_right' | 'upper_left' | 'lower_left' | 'lower_right',
-): InferenceData[] => {
-  // Exclude degenerate x <= 0 points (see isFrontierEligible) so they never
-  // anchor a roofline or show up in the optimal-only view.
-  const pointsForRoofline = points.filter(isFrontierEligible).map((p) => {
-    const yValue = getNestedYValue(p, yKey);
-    return { ...p, y: yValue };
-  });
-
-  switch (rooflineDirection) {
-    case 'upper_right': {
-      return paretoFrontUpperRight(pointsForRoofline);
-    }
-    case 'upper_left': {
-      return paretoFrontUpperLeft(pointsForRoofline);
-    }
-    case 'lower_left': {
-      return paretoFrontLowerLeft(pointsForRoofline);
-    }
-    case 'lower_right': {
-      return paretoFrontLowerRight(pointsForRoofline);
-    }
-    default: {
-      return [];
-    }
-  }
-};
-
-/**
- * Computes all relevant rooflines for a given set of grouped data points.
- */
-export function computeAllRooflines(
-  groupedData: Record<string, InferenceData[]>,
-  chartDef: ChartDefinition,
-): Record<string, Record<YAxisMetric, InferenceData[]>> {
-  const computedRooflines: Record<string, Record<YAxisMetric, InferenceData[]>> = {};
-
-  for (const hw of Object.keys(groupedData)) {
-    computedRooflines[hw] = {} as Record<YAxisMetric, InferenceData[]>;
-    for (const chartDefYKey of Y_AXIS_METRICS) {
-      const actualDataYKey = chartDef[chartDefYKey as keyof ChartDefinition];
-      const rooflineDirectionKey = `${chartDefYKey}_roofline` as keyof ChartDefinition;
-      const rooflineDirection = chartDef[rooflineDirectionKey] as
-        | 'upper_right'
-        | 'upper_left'
-        | 'lower_left'
-        | 'lower_right'
-        | undefined;
-
-      if (actualDataYKey && rooflineDirection) {
-        computedRooflines[hw][chartDefYKey] = calculateRoofline(
-          groupedData[hw],
-          actualDataYKey as
-            | keyof InferenceData
-            | `tpPerGpu.y`
-            | `outputTputPerGpu.y`
-            | `inputTputPerGpu.y`
-            | `tpPerMw.y`
-            | `inputTputPerMw.y`
-            | `outputTputPerMw.y`
-            | `costh.y`
-            | `costn.y`
-            | `costr.y`
-            | `costhOutput.y`
-            | `costnOutput.y`
-            | `costrOutput.y`
-            | `costhi.y`
-            | `costni.y`
-            | `costri.y`
-            | `jTotal.y`
-            | `jOutput.y`
-            | `jInput.y`
-            | `measuredAvgPower.y`
-            | `measuredPrefillAvgPower.y`
-            | `measuredDecodeAvgPower.y`
-            | `measuredJPerOutputToken.y`
-            | `measuredJPerTotalToken.y`
-            | `measuredJPerInputToken.y`,
-          rooflineDirection,
-        );
-      }
-    }
-  }
-  return computedRooflines;
-}
-
-/**
- * Marks data points as being "on the roofline".
- */
-export function markRooflinePoints(
-  groupedData: Record<string, InferenceData[]>,
-  computedRooflines: Record<string, Record<YAxisMetric, InferenceData[]>>,
-  chartDef: ChartDefinition,
-): InferenceData[] {
-  const finalProcessedData: InferenceData[] = [];
-
-  for (const hwKey of Object.keys(groupedData)) {
-    for (const point of groupedData[hwKey]) {
-      const newPoint = { ...point };
-      newPoint.tpPerGpu.roof = false;
-      if (newPoint.outputTputPerGpu) {
-        newPoint.outputTputPerGpu.roof = false;
-      }
-      if (newPoint.inputTputPerGpu) {
-        newPoint.inputTputPerGpu.roof = false;
-      }
-      newPoint.tpPerMw.roof = false;
-      if (newPoint.inputTputPerMw) newPoint.inputTputPerMw.roof = false;
-      if (newPoint.outputTputPerMw) newPoint.outputTputPerMw.roof = false;
-      newPoint.costh.roof = false;
-      newPoint.costn.roof = false;
-      newPoint.costr.roof = false;
-      if (newPoint.costhOutput) newPoint.costhOutput.roof = false;
-      if (newPoint.costnOutput) newPoint.costnOutput.roof = false;
-      if (newPoint.costrOutput) newPoint.costrOutput.roof = false;
-      newPoint.costhi.roof = false;
-      newPoint.costni.roof = false;
-      newPoint.costri.roof = false;
-      if (newPoint.jTotal) newPoint.jTotal.roof = false;
-      if (newPoint.jOutput) newPoint.jOutput.roof = false;
-      if (newPoint.jInput) newPoint.jInput.roof = false;
-      if (newPoint.measuredAvgPower) newPoint.measuredAvgPower.roof = false;
-      if (newPoint.measuredPrefillAvgPower) newPoint.measuredPrefillAvgPower.roof = false;
-      if (newPoint.measuredDecodeAvgPower) newPoint.measuredDecodeAvgPower.roof = false;
-      if (newPoint.measuredJPerOutputToken) newPoint.measuredJPerOutputToken.roof = false;
-      if (newPoint.measuredJPerTotalToken) newPoint.measuredJPerTotalToken.roof = false;
-      if (newPoint.measuredJPerInputToken) newPoint.measuredJPerInputToken.roof = false;
-
-      for (const chartDefYKey of Y_AXIS_METRICS) {
-        const rooflinePoints = computedRooflines[hwKey]?.[chartDefYKey];
-        if (!rooflinePoints) {
-          continue;
-        }
-
-        const actualDataYKey = chartDef[chartDefYKey as keyof ChartDefinition];
-        if (!actualDataYKey) {
-          continue;
-        }
-
-        const onCurrentRoofline = rooflinePoints.some(
-          (rooflinePoint) =>
-            rooflinePoint.x === point.x &&
-            rooflinePoint.y === getNestedYValue(point, actualDataYKey as string) &&
-            rooflinePoint.hwKey === point.hwKey,
-        );
-
-        if (chartDefYKey === 'y_tpPerGpu') {
-          newPoint.tpPerGpu.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_outputTputPerGpu') {
-          if (newPoint.outputTputPerGpu) {
-            newPoint.outputTputPerGpu.roof = onCurrentRoofline;
-          }
-        } else if (chartDefYKey === 'y_inputTputPerGpu') {
-          if (newPoint.inputTputPerGpu) {
-            newPoint.inputTputPerGpu.roof = onCurrentRoofline;
-          }
-        } else if (chartDefYKey === 'y_tpPerMw') {
-          newPoint.tpPerMw.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_inputTputPerMw') {
-          if (newPoint.inputTputPerMw) newPoint.inputTputPerMw.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_outputTputPerMw') {
-          if (newPoint.outputTputPerMw) newPoint.outputTputPerMw.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costh') {
-          newPoint.costh.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costn') {
-          newPoint.costn.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costr') {
-          newPoint.costr.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costhOutput') {
-          if (newPoint.costhOutput) newPoint.costhOutput.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costnOutput') {
-          if (newPoint.costnOutput) newPoint.costnOutput.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costrOutput') {
-          if (newPoint.costrOutput) newPoint.costrOutput.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costhi') {
-          newPoint.costhi.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costni') {
-          newPoint.costni.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_costri') {
-          newPoint.costri.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_jTotal' && newPoint.jTotal) {
-          newPoint.jTotal.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_jOutput' && newPoint.jOutput) {
-          newPoint.jOutput.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_jInput' && newPoint.jInput) {
-          newPoint.jInput.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_measuredAvgPower' && newPoint.measuredAvgPower) {
-          newPoint.measuredAvgPower.roof = onCurrentRoofline;
-        } else if (
-          chartDefYKey === 'y_measuredPrefillAvgPower' &&
-          newPoint.measuredPrefillAvgPower
-        ) {
-          newPoint.measuredPrefillAvgPower.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_measuredDecodeAvgPower' && newPoint.measuredDecodeAvgPower) {
-          newPoint.measuredDecodeAvgPower.roof = onCurrentRoofline;
-        } else if (
-          chartDefYKey === 'y_measuredJPerOutputToken' &&
-          newPoint.measuredJPerOutputToken
-        ) {
-          newPoint.measuredJPerOutputToken.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_measuredJPerTotalToken' && newPoint.measuredJPerTotalToken) {
-          newPoint.measuredJPerTotalToken.roof = onCurrentRoofline;
-        } else if (chartDefYKey === 'y_measuredJPerInputToken' && newPoint.measuredJPerInputToken) {
-          newPoint.measuredJPerInputToken.roof = onCurrentRoofline;
-        }
-      }
-      finalProcessedData.push(newPoint);
-    }
-  }
-  return finalProcessedData;
-}
 
 // ---------------------------------------------------------------------------
 // Locale-aware metric label/title helpers

@@ -1,6 +1,8 @@
 import {
   ArrowRight,
+  BookOpen,
   Download,
+  MousePointerClick,
   MessageSquareText,
   Palette,
   ShieldCheck,
@@ -13,6 +15,15 @@ import dynamic from 'next/dynamic';
 import { GITHUB_OWNER, GITHUB_REPO } from '@semianalysisai/inferencex-constants';
 
 import { FEEDBACK_SUBMITTED_EVENT } from '@/components/feedback-modal';
+import { isZhPathname, localePath } from '@/lib/i18n';
+import {
+  AGENTIC_COACH_MARK_STORAGE_KEY,
+  AGENTIC_POINT_ACTION_SELECTOR,
+  SCATTER_RENDERED_EVENT,
+  getAgenticPointAnchorMutationRoot,
+  getAgenticPointAnchorRect,
+  resolveAgenticPointAnchor,
+} from '@/lib/nudges/agentic-point-coach-mark';
 import { LANDING_BANNER_STORAGE_KEY } from '@/lib/nudges/landing-banner';
 
 // Keep the ~210-line FeedbackForm out of the landing/dashboard initial JS.
@@ -21,7 +32,7 @@ const FeedbackForm = dynamic(
   { ssr: false },
 );
 import { GitHubIcon } from '@/components/ui/github-icon';
-import { STARRED_EVENT, STARRED_KEY, saveStarred } from '@/lib/star-storage';
+import { STARRED_EVENT, STARRED_KEY } from '@/lib/star-storage';
 import type { NudgeDefinition } from './types';
 
 const GITHUB_REPO_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}`;
@@ -41,6 +52,18 @@ function isOnInferenceTab(): boolean {
   const segments = window.location.pathname.split('/').filter(Boolean);
   if (segments[0] === 'zh') segments.shift();
   return (segments[0] ?? 'inference') === 'inference';
+}
+
+/** Resolve an internal nudge destination in the locale active at click time. */
+function localizedNudgeHref(enPath: string): string {
+  if (typeof window === 'undefined') return enPath;
+  return localePath(enPath, isZhPathname(window.location.pathname) ? 'zh' : 'en');
+}
+
+export const TELEMETRY_TUTORIAL_STORAGE_KEY = 'inferencex-agentx-telemetry-tutorial-dismissed';
+
+function telemetryTutorialHref(): string {
+  return localizedNudgeHref('/agentx/telemetry');
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +95,7 @@ export const NUDGE_REGISTRY: NudgeDefinition[] = [
         label: 'See how',
         labelZh: '了解详情',
         onClick: () => {
-          window.location.href = '/about#reproducibility';
+          window.location.href = localizedNudgeHref('/about#reproducibility');
         },
       },
       testId: 'reproducibility-nudge',
@@ -247,6 +270,55 @@ export const NUDGE_REGISTRY: NudgeDefinition[] = [
   },
 
   // -------------------------------------------------------------------------
+  // Agentic chart coach mark
+  // -------------------------------------------------------------------------
+  {
+    id: 'agentic-point-detail',
+    type: 'coach-mark',
+    // Three ways in, all retried until an anchor exists (see `isEligible`'s
+    // `requireAnchor`): a short timer for a chart that is already painted,
+    // every subsequent chart render for the usual async-data case, and scroll
+    // — on a laptop viewport the chart starts below the fold, so the first two
+    // fire while there is still nothing on screen to point at. The resolver
+    // rejects an off-screen chart with a single rect read, keeping the scroll
+    // path cheap, and the engine drops these listeners once the tip is up.
+    trigger: [
+      { type: 'timer', delayMs: 1200 },
+      { type: 'event', event: SCATTER_RENDERED_EVENT, delayMs: 700 },
+      { type: 'dom-event', event: 'scroll' },
+    ],
+    dismissal: { type: 'permanent' },
+    storageKey: AGENTIC_COACH_MARK_STORAGE_KEY,
+    // Highest dashboard priority: it is the only nudge tied to a specific
+    // element, so it should claim its slot the moment that element exists.
+    // (It has its own slot, so this only orders it against future coach marks.)
+    priority: 45,
+    scope: 'dashboard',
+    content: {
+      icon: MousePointerClick,
+      iconClassName: 'text-brand',
+      title: 'Every point has a story',
+      titleZh: '每个数据点背后都有细节',
+      description:
+        'Click any point to view server metrics and logs — cache hit rates, queue depth, and the full request timeline for that run.',
+      descriptionZh:
+        '点击任意数据点即可查看服务端指标与日志——cache 命中率、队列深度，以及该次运行的完整请求时间线。',
+      testId: 'agentic-point-coach-mark',
+      anchor: {
+        resolve: resolveAgenticPointAnchor,
+        getRect: getAgenticPointAnchorRect,
+        getMutationRoot: getAgenticPointAnchorMutationRoot,
+        actionSelector: AGENTIC_POINT_ACTION_SELECTOR,
+      },
+    },
+    analytics: {
+      shown: 'inference_agentic_point_coach_mark_shown',
+      dismissed: 'inference_agentic_point_coach_mark_dismissed',
+      action: 'inference_agentic_point_coach_mark_point_clicked',
+    },
+  },
+
+  // -------------------------------------------------------------------------
   // Dashboard modals
   // -------------------------------------------------------------------------
   {
@@ -281,91 +353,16 @@ export const NUDGE_REGISTRY: NudgeDefinition[] = [
   },
 
   // -------------------------------------------------------------------------
-  // Landing modals
-  // -------------------------------------------------------------------------
-  {
-    id: 'kimi-k3-launch-modal',
-    type: 'modal',
-    trigger: { type: 'immediate' },
-    dismissal: { type: 'permanent' },
-    storageKey: 'inferencex-kimi-k3-modal-dismissed',
-    priority: 50,
-    scope: 'landing',
-    content: {
-      icon: Sparkles,
-      iconClassName: 'text-brand',
-      title: 'Kimi K3 is live',
-      titleZh: 'Kimi K3 已上线',
-      description:
-        'Day-zero benchmarks for Kimi K3 are now available across the latest NVIDIA and AMD chips. Results are experimental — see how the new model performs across hardware.',
-      descriptionZh:
-        'Kimi K3 的首日基准测试数据现已覆盖最新的 NVIDIA 和 AMD Chip。结果为实验性数据——来看看新模型在不同硬件上的表现。',
-      testId: 'launch-modal',
-      containerClassName: 'border-brand/40',
-      badge: 'New',
-      badgeZh: '最新',
-      dismissLabel: 'Maybe Later',
-      dismissLabelZh: '稍后再看',
-      primaryAction: {
-        label: 'Explore',
-        labelZh: '开始探索',
-        icon: <ArrowRight className="size-4" />,
-        onClick: () => {
-          window.location.href = '/inference?preset=kimi-k3-launch';
-        },
-      },
-    },
-    analytics: {
-      shown: 'kimi_k3_modal_shown',
-      dismissed: 'kimi_k3_modal_dismissed',
-      action: 'kimi_k3_modal_explored',
-    },
-  },
-  {
-    id: 'github-star-modal',
-    type: 'modal',
-    trigger: { type: 'immediate' },
-    dismissal: { type: 'timed', durationMs: 7 * 24 * 60 * 60 * 1000 },
-    storageKey: 'inferencex-star-modal-dismissed',
-    permanentSuppressKey: STARRED_KEY,
-    permanentSuppressEvent: STARRED_EVENT,
-    priority: 40,
-    scope: 'landing',
-    content: {
-      icon: Star,
-      iconClassName: 'text-yellow-500 fill-yellow-500',
-      title: 'Star InferenceX on GitHub',
-      titleZh: '在 GitHub 上为 InferenceX 加星',
-      description:
-        'Star InferenceX on GitHub to get notified when we publish new benchmark data. We update chip performance comparisons regularly — starring is the easiest way to stay in the loop and help the project grow.',
-      descriptionZh:
-        '在 GitHub 上为 InferenceX 加星，以便在我们发布新基准测试数据时收到通知。我们定期更新 Chip 性能对比——加星是保持关注并帮助项目成长的最简单方式。',
-      testId: 'github-star-modal',
-      dismissLabel: 'Maybe Later',
-      dismissLabelZh: '稍后再看',
-      primaryAction: {
-        label: 'Star on GitHub',
-        labelZh: '在 GitHub 上加星',
-        icon: <GitHubIcon className="size-4" />,
-        onClick: () => {
-          window.open(GITHUB_REPO_URL, '_blank', 'noopener,noreferrer');
-          saveStarred();
-        },
-      },
-      actionClassName: 'star-button-glow',
-    },
-    analytics: {
-      shown: 'star_modal_shown',
-      dismissed: 'star_modal_dismissed',
-      action: 'star_modal_starred',
-    },
-  },
-
-  // -------------------------------------------------------------------------
   // Landing banner
+  //
+  // Note: the landing scope deliberately has no GitHub star nudge. The footer
+  // grid already carries the persistent star CTA (footer-star-cta) and the
+  // header carries another, so a fixed bottom card here duplicated the control
+  // and covered the footer. The engagement-triggered star-nudge toast on the
+  // dashboard scope is the only overlay star prompt.
   // -------------------------------------------------------------------------
   {
-    id: 'kimi-k3-launch-banner',
+    id: 'openai-rubin-comparison-banner',
     type: 'banner',
     trigger: { type: 'immediate' },
     dismissal: { type: 'permanent' },
@@ -376,23 +373,78 @@ export const NUDGE_REGISTRY: NudgeDefinition[] = [
     content: {
       icon: Sparkles,
       iconClassName: 'text-brand',
-      title: 'Kimi K3 benchmarks are live',
-      titleZh: 'Kimi K3 基准测试已上线',
-      description: 'First inference numbers across NVIDIA and AMD chips, click to explore.',
-      descriptionZh: 'NVIDIA 和 AMD Chip 的首批推理数据，点击探索。',
+      title: "OpenAI's Latest In House Chip verus Rubin NVL72",
+      titleZh: 'OpenAI 最新自研芯片对比 Rubin NVL72',
+      description:
+        'Compare Jalapeño (Teacup) with Vera Rubin (July) NVL72 on DeepSeek R1 at 8K / 1K.',
+      descriptionZh:
+        '对比 Jalapeño (Teacup) 与 Vera Rubin (July) NVL72 在 DeepSeek R1 8K / 1K 工作负载下的表现。',
       testId: 'launch-banner',
       badge: 'New',
       badgeZh: '最新',
-      href: '/inference?preset=kimi-k3-launch',
+      href: '/inference?g_model=DeepSeek-R1-0528&i_seq=8k%2F1k&i_prec=fp4&i_metric=y_outputTputPerMw',
+      linkLabel: 'View results',
+      linkLabelZh: '查看结果',
       onLinkClick: () => {
-        window.location.href = '/inference?preset=kimi-k3-launch';
+        window.location.href = localizedNudgeHref(
+          '/inference?g_model=DeepSeek-R1-0528&i_seq=8k%2F1k&i_prec=fp4&i_metric=y_outputTputPerMw',
+        );
       },
     },
     analytics: {
-      shown: 'launch_banner_shown',
-      dismissed: 'launch_banner_dismissed',
-      action: 'launch_banner_clicked',
-      properties: { banner_id: 'kimi-k3-launch', preset_id: 'kimi-k3-launch' },
+      shown: 'inference_rubin_comparison_banner_shown',
+      dismissed: 'inference_rubin_comparison_banner_dismissed',
+      action: 'inference_rubin_comparison_banner_clicked',
+      properties: {
+        banner_id: 'openai-rubin-comparison',
+        scenario: '8k/1k',
+        model: 'DeepSeek-R1-0528',
+        metric: 'y_outputTputPerMw',
+      },
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Agentic point-detail modal
+  // -------------------------------------------------------------------------
+  {
+    id: 'agentx-telemetry-tutorial',
+    type: 'modal',
+    // The detail page is chart-dense and its data arrives asynchronously;
+    // waiting lets the charts paint before the card slides in.
+    trigger: { type: 'timer', delayMs: 2500 },
+    dismissal: { type: 'permanent' },
+    storageKey: TELEMETRY_TUTORIAL_STORAGE_KEY,
+    priority: 40,
+    scope: 'agentic-detail',
+    content: {
+      icon: BookOpen,
+      iconClassName: 'text-brand',
+      title: 'New to these charts?',
+      titleZh: '第一次看这些图表？',
+      description:
+        'The telemetry tutorial explains every chart on this page — the sequence-length distributions, the cache and queue series, the request timeline, and the per-conversation flamegraph.',
+      descriptionZh:
+        '遥测数据教程会讲解本页的每一张图表——序列长度分布、cache 与队列相关曲线、请求时间线，以及单会话火焰图。',
+      testId: 'telemetry-tutorial-modal',
+      // Deliberately NOT centered: a backdrop here would cover the charts the
+      // tutorial is describing. A bottom-right card leaves the page usable.
+      containerClassName: 'border-brand/40',
+      dismissLabel: 'Not now',
+      dismissLabelZh: '暂不需要',
+      primaryAction: {
+        label: 'Read the tutorial',
+        labelZh: '阅读教程',
+        icon: <ArrowRight className="size-4" />,
+        onClick: () => {
+          window.location.href = telemetryTutorialHref();
+        },
+      },
+    },
+    analytics: {
+      shown: 'agentx_telemetry_modal_shown',
+      dismissed: 'agentx_telemetry_modal_dismissed',
+      action: 'agentx_telemetry_modal_opened',
     },
   },
 ];

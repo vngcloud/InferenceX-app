@@ -3,21 +3,27 @@ import { useMemo, useRef } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { rowToSequence } from '@semianalysisai/inferencex-constants';
 
-import chartDefinitions from '@/components/inference/inference-chart-config.json';
+import chartDefinitions, {
+  tokenMetricTypeForConfigKey,
+} from '@/components/inference/metric-registry';
 import type {
   AggDataEntry,
   ChartDefinition,
   HardwareConfig,
   InferenceData,
   RenderableGraph,
+  TokenRevenuePricing,
+  TokenRevenuePriceSource,
   YAxisMetricKey,
 } from '@/components/inference/types';
+import { applyTokenRevenuePricing } from '@/components/inference/token-revenue';
 import { partitionChartDataByLimits } from '@/components/inference/utils';
 import {
   parseComparisonEntry,
   resolveComparisonEntries,
 } from '@/components/inference/utils/comparisonEntry';
 import { useBenchmarks, benchmarkQueryOptions } from '@/hooks/api/use-benchmarks';
+import type { BenchmarkRow } from '@/lib/api';
 import {
   GPU_ALIAS_TO_CANONICAL,
   getModelSortIndex,
@@ -25,12 +31,15 @@ import {
 } from '@/lib/constants';
 import { mergeRunScopedRows, transformBenchmarkRows } from '@/lib/benchmark-transform';
 import {
+  benchmarkCurveDate,
   dedupeAgenticHistoryRuns,
   dedupeRowsToLatestPerConfig as dedupeLatestBenchmarkSeries,
 } from '@/lib/benchmark-run-selection';
 import { Sequence, type Model } from '@/lib/data-mappings';
 import { calculateCostsForGpus, calculatePowerForGpus } from '@/lib/utils';
+import { remapInferencePoint } from '@/lib/chart-utils';
 import { overviewServingSeriesKey, type OverviewServingSeriesRow } from '@/lib/overview-data';
+import { supportsChartTokenMetric, type TokenMetricType } from '@/lib/supplemental-benchmarks';
 import { resolveXAxisField } from '@/components/inference/utils/resolveXAxisField';
 import {
   applyQuickFilters,
@@ -40,9 +49,8 @@ import {
 } from '@/components/inference/utils/quickFilters';
 
 /**
- * Chart x-axis variant selected by the mode buttons above the plot. This is
- * the single definition — InferenceContext (URL/state) and ChartDisplay
- * (buttons) import it from here.
+ * Chart x-axis variant selected by the mode buttons above the plot. The
+ * inference provider and ChartDisplay import this single definition.
  */
 export type XAxisMode = 'ttft' | 'e2e' | 'interactivity' | 'e2e-normalized-interactivity';
 
@@ -124,9 +132,9 @@ export function flipRooflineDirection(dir: RooflineDirection): RooflineDirection
  * Roofline corner for a trace-derived x-axis mode. Derived modes render on the
  * e2e chart definition, whose corners assume lower-x-is-better; when the
  * derived metric is higher-is-better (E2E Normalized Interactivity) the corner mirrors
- * horizontally. This keeps the y-metric's own good direction — throughput
- * lands on an upper corner, cost and joules on a lower one — where hardcoding
- * a single corner inverted the frontier for the cost metrics.
+ * horizontally. This keeps the y-metric's own good direction — throughput and
+ * tokens-per-dollar purchasing power land on an upper corner, while cost and
+ * joules land on a lower one.
  */
 export function derivedModeRoofline(
   configuredE2eCorner: RooflineDirection | undefined,
@@ -199,6 +207,14 @@ export function applyScopeFilters(
   return scoped;
 }
 
+/** Apply snapshot-scoped metric support using the source date, not its display date. */
+export function supportsPointTokenMetric(
+  point: Pick<InferenceData, 'hwKey' | 'date' | 'actualDate'>,
+  tokenType: TokenMetricType,
+): boolean {
+  return supportsChartTokenMetric(String(point.hwKey), point.actualDate ?? point.date, tokenType);
+}
+
 export function useChartData(
   selectedModel: Model,
   selectedSequence: Sequence,
@@ -211,6 +227,8 @@ export function useChartData(
   selectedDateRange: { startDate: string; endDate: string },
   userCosts: Record<string, number | undefined> | null,
   userPowers: Record<string, number | undefined> | null,
+  tokenRevenuePricing: TokenRevenuePricing | null,
+  tokenRevenuePriceSource: TokenRevenuePriceSource,
   selectedRunDate?: string,
   enabled = true,
   latestAvailableDate?: string,
@@ -242,6 +260,8 @@ export function useChartData(
     currentConfigKey: string;
     baselineConfigKey: string;
   },
+  benchmarkQueryScope?: string,
+  initialBenchmarkRows?: BenchmarkRow[],
 ) {
   // When the selected date is the latest available, use '' (empty string) to match
   // the initial no-date query key, reusing the eagerly-fetched benchmarks from the
@@ -267,7 +287,16 @@ export function useChartData(
     data: baseRows,
     isLoading: baseLoading,
     error: baseError,
-  } = useBenchmarks(selectedModel, queryDate, enabled, asOfRunId);
+  } = useBenchmarks(
+    selectedModel,
+    queryDate,
+    enabled,
+    asOfRunId,
+    undefined,
+    undefined,
+    !asOfRunId && queryDate === '' ? initialBenchmarkRows : undefined,
+    benchmarkQueryScope,
+  );
   const {
     data: runRows,
     isLoading: runLoading,
@@ -341,9 +370,11 @@ export function useChartData(
     // an offload=on sweep can't hide a differently-dated offload=off series.
     const deduped = dedupeRowsToLatestPerConfig(seqFiltered);
 
-    const mainRows = deduped.map((r) =>
-      selectedRunDate ? { ...r, date: selectedRunDate, actualDate: r.date } : r,
-    );
+    const mainRows = deduped.map((r) => ({
+      ...r,
+      date: selectedRunDate ?? benchmarkCurveDate(r),
+      actualDate: r.date,
+    }));
     if (comparisonDates.length === 0) return mainRows;
     const extraRows = comparisonQueries.flatMap((q, i) => {
       const filtered = filterOverviewHistoryRows(
@@ -352,7 +383,11 @@ export function useChartData(
       );
       const selected =
         selectedSequence === Sequence.AgenticTraces ? dedupeAgenticHistoryRuns(filtered) : filtered;
-      return selected.map((r) => ({ ...r, date: comparisonDates[i], actualDate: r.date }));
+      return selected.map((r) => ({
+        ...r,
+        date: comparisonDates[i],
+        actualDate: r.date,
+      }));
     });
     return [...mainRows, ...extraRows];
   }, [
@@ -368,7 +403,10 @@ export function useChartData(
   // Transform filtered rows into chart data
   const { chartData, hardwareConfig: rawHardwareConfig } = useMemo(() => {
     if (rows.length === 0)
-      return { chartData: [] as InferenceData[][], hardwareConfig: {} as HardwareConfig };
+      return {
+        chartData: [] as InferenceData[][],
+        hardwareConfig: {} as HardwareConfig,
+      };
     return transformBenchmarkRows(rows, selectedPercentile);
   }, [rows, selectedPercentile]);
 
@@ -480,9 +518,6 @@ export function useChartData(
         const xAxisFlipped =
           xAxisField !== naturalX && !(chartDef.chartType === 'e2e' && isTtftOverride);
 
-        const yLabelKey = `${selectedYAxisMetric}_label` as keyof ChartDefinition;
-        const dynamicYLabel = chartDef[yLabelKey];
-
         const rooflineOverrides: Partial<ChartDefinition> = {};
         if (xAxisFlipped) {
           for (const key of Object.keys(chartDef) as (keyof ChartDefinition)[]) {
@@ -495,10 +530,36 @@ export function useChartData(
           }
         }
 
+        const revenueLabels: Partial<ChartDefinition> =
+          selectedYAxisMetric === 'y_tokenRevenuePerGpuHour'
+            ? tokenRevenuePriceSource === 'openrouter'
+              ? {
+                  y_tokenRevenuePerGpuHour_label:
+                    'Token Revenue per GPU Hour at OpenRouter Pricing ($/GPU/hr)',
+                  y_tokenRevenuePerGpuHour_labelZh:
+                    '按 OpenRouter 价格计算的每 GPU 小时 token 收入（$/GPU/hr）',
+                  y_tokenRevenuePerGpuHour_title:
+                    'Token Revenue per GPU Hour at OpenRouter Pricing',
+                  y_tokenRevenuePerGpuHour_titleZh:
+                    '按 OpenRouter 价格计算的每 GPU 小时 token 收入',
+                }
+              : {
+                  y_tokenRevenuePerGpuHour_label:
+                    'Token Revenue per GPU Hour at $1/M tok ($/GPU/hr)',
+                  y_tokenRevenuePerGpuHour_labelZh:
+                    '按 $1/百万 token 计价的每 GPU 小时 token 收入（$/GPU/hr）',
+                  y_tokenRevenuePerGpuHour_title: 'Token Revenue per GPU Hour at $1/M tok',
+                  y_tokenRevenuePerGpuHour_titleZh: '按 $1/百万 token 计价的每 GPU 小时 token 收入',
+                }
+            : {};
+        const yLabelKey = `${selectedYAxisMetric}_label` as keyof ChartDefinition;
+        const dynamicYLabel = { ...chartDef, ...revenueLabels }[yLabelKey];
+
         return {
           chartDefinition: {
             ...chartDef,
             ...rooflineOverrides,
+            ...revenueLabels,
             heading: chartHeading,
             x_label: xAxisLabel,
             y_label: dynamicYLabel === null ? undefined : String(dynamicYLabel),
@@ -513,19 +574,33 @@ export function useChartData(
       selectedE2eXAxisMetric,
       selectedPercentile,
       selectedSequence,
+      tokenRevenuePriceSource,
     ],
   );
 
   // Build renderable graphs (data processing + stable chart definitions)
   const graphs: RenderableGraph[] = useMemo(() => {
     if (chartData.length === 0) return [];
+    if (
+      selectedYAxisMetric === 'y_tokenRevenuePerGpuHour' &&
+      tokenRevenuePriceSource === 'openrouter' &&
+      !tokenRevenuePricing
+    ) {
+      return [];
+    }
 
     let dataSource: InferenceData[][] = chartData;
-    if (selectedYAxisMetric === 'y_costUser' && userCosts) {
+    if (
+      (selectedYAxisMetric === 'y_costUser' || selectedYAxisMetric === 'y_tokensPerDollarUser') &&
+      userCosts
+    ) {
       dataSource = chartData.map((d) => calculateCostsForGpus(d, userCosts));
     }
     if (selectedYAxisMetric === 'y_powerUser' && userPowers) {
       dataSource = chartData.map((d) => calculatePowerForGpus(d, userPowers));
+    }
+    if (selectedYAxisMetric === 'y_tokenRevenuePerGpuHour') {
+      dataSource = chartData.map((d) => applyTokenRevenuePricing(d, tokenRevenuePricing));
     }
 
     const result = stableChartDefinitions.map(
@@ -543,27 +618,14 @@ export function useChartData(
         // Filter to points that have the selected metric, then remap x/y.
         // Intentional cost/TTFT outliers are partitioned only after this step
         // so ScatterGraph can retain them for dashed boundary continuations.
-        const hasMetric = filteredData.some((d) => metricKey in d);
+        const tokenType = tokenMetricTypeForConfigKey(selectedYAxisMetric);
+        const metricData = filteredData.filter(
+          (d) => metricKey in d && supportsPointTokenMetric(d, tokenType),
+        );
+        const hasMetric = metricData.length > 0;
         const isTtftX = typeof xAxisField === 'string' && xAxisField.endsWith('_ttft');
         const mappedData = hasMetric
-          ? filteredData
-              .filter((d) => metricKey in d)
-              .map((d: InferenceData) => {
-                const yValue = (d[metricKey] as { y: number })?.y ?? d.y;
-                const roof = (d[metricKey] as { roof: boolean })?.roof ?? false;
-                // xAxisField is `keyof AggDataEntry`; InferenceData embeds those
-                // fields via `Partial<Omit<AggDataEntry, ...>>`, so a typed
-                // accessor catches a future field rename (silent fallthrough to
-                // d.x would otherwise mask the regression).
-                const xCandidate = (d as Partial<AggDataEntry>)[xAxisField];
-                const xValue = typeof xCandidate === 'number' ? xCandidate : d.x;
-                return {
-                  ...d,
-                  x: xValue,
-                  y: yValue,
-                  roof,
-                };
-              })
+          ? metricData.map((d) => remapInferencePoint(d, metricKey, xAxisField))
           : [];
 
         const isAgentic = selectedSequence === Sequence.AgenticTraces;
@@ -593,6 +655,8 @@ export function useChartData(
     selectedGPUs,
     userCosts,
     userPowers,
+    tokenRevenuePricing,
+    tokenRevenuePriceSource,
     stableChartDefinitions,
     compareGpuPair,
     selectedPercentile,
@@ -611,5 +675,12 @@ export function useChartData(
     [chartData, selectedGPUs, quickFilters, compareGpuPair],
   );
 
-  return { graphs, selectionPoints, loading, error, hardwareConfig, availableQuickFilters };
+  return {
+    graphs,
+    selectionPoints,
+    loading,
+    error,
+    hardwareConfig,
+    availableQuickFilters,
+  };
 }
