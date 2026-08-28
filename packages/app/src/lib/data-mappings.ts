@@ -7,6 +7,7 @@ export enum Model {
   DeepSeek_Coder_V2_Lite = 'DeepSeek-Coder-V2-Lite-Instruct',
   GptOss = 'gpt-oss-120b',
   Qwen3_5 = 'Qwen-3.5-397B-A17B',
+  Qwen3_8_Flash_Next = 'Qwen3.8-Flash-Next',
   Kimi_K2_5 = 'Kimi-K2.5',
   Kimi_K3 = 'Kimi-K3',
   MiniMax_M2_5 = 'MiniMax-M2.5',
@@ -48,6 +49,15 @@ interface ModelConfig {
   label: string;
   prefix: string;
   category: CategoryTag;
+  /** Exact public model id in OpenRouter's `/api/v1/models` catalog. */
+  openRouterModelId?: string;
+  /**
+   * Filename under `public/logos/` for the model creator's logo, shown beside
+   * the model name in UI surfaces such as the inference chart caption. Absent =
+   * no logo rendered. Monochrome `currentColor`/black SVGs are inverted in dark
+   * mode by `ModelLogo`; colored raster assets (`.webp`) are shown as-is.
+   */
+  logo?: string;
   /**
    * Data-driven exclusion rules for this model (see `exclusion.ts`). Each spec
    * partitions matching config keys into comparability groups that can't share
@@ -65,13 +75,17 @@ interface ModelConfig {
  * Scoped to `hardware` for the same reason the STP rule below is: the guard
  * exists to stop two engines being read off one SKU's curve, not to stop a
  * chart holding two SKUs. B200 vLLM MTP next to B300 SGLang MTP compares
- * hardware, which is the point of the chart.
+ * hardware, which is the point of the chart. Where only one engine has a run
+ * for a SKU there is nothing to confuse, so that SKU is free to show it.
+ *
+ * ATOM is its own family and is deliberately NOT grouped with SGLang, so it
+ * stays comparable with everything — including both vLLM and SGLang on the
+ * SKUs where it runs.
  */
 const MTP_ENGINE_EXCLUSION: ExclusionSpec[] = [
   {
     suffix: '_mtp',
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
-    groupAliases: { atom: 'sglang' },
     scope: 'hardware',
   },
 ];
@@ -80,12 +94,16 @@ const MTP_ENGINE_EXCLUSION: ExclusionSpec[] = [
  * STP exclusion: unsuffixed standard-token configs for the same hardware SKU
  * can't mix engine families, because each engine tunes its serving path
  * differently. Different hardware may use different engines on one graph.
+ * `dynamo-`/`mori-`/`llmd-`/`mooncake-` are routers, not engines, so
+ * `dynamo-sglang` is SGLang and is guarded as such.
+ *
+ * ATOM is its own family and is not aliased to SGLang — it stays comparable
+ * with everything.
  */
 const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
   {
     suffix: null,
     stripPrefixes: ['dynamo-', 'mori-', 'llmd-', 'mooncake-'],
-    groupAliases: { atom: 'sglang' },
     scope: 'hardware',
   },
 ];
@@ -119,9 +137,11 @@ const GUARDED_ENGINE_FAMILIES = ['vllm', 'sglang'] as const;
 // duplication needed.
 const MODEL_CONFIG: Record<Model, ModelConfig> = {
   [Model.DeepSeek_V4_Pro]: {
-    label: 'DeepSeek V4 Pro 1.6T',
+    label: 'DeepSeek V4 Pro 0813 1.6T',
     prefix: 'dsv4',
     category: 'default',
+    openRouterModelId: 'deepseek/deepseek-v4-pro-0813',
+    logo: 'deepseek-color.svg',
     exclusion: MTP_ENGINE_EXCLUSION,
   },
   [Model.Kimi_K3]: {
@@ -130,6 +150,8 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     label: 'Kimi K3 2.8T',
     prefix: 'kimik3',
     category: 'default',
+    openRouterModelId: 'moonshotai/kimi-k3',
+    logo: 'kimi-color.svg',
   },
   [Model.Kimi_K2_5]: {
     // K2.5, K2.6, and K2.7-Code share an architecture, so the dropdown surfaces
@@ -145,36 +167,102 @@ const MODEL_CONFIG: Record<Model, ModelConfig> = {
     label: 'Kimi K2.5/2.6/2.7-Code 1T',
     prefix: 'kimik2.5',
     category: 'deprecated',
+    openRouterModelId: 'moonshotai/kimi-k2.7-code',
+    logo: 'kimi-color.svg',
   },
   [Model.MiniMax_M3]: {
     label: 'MiniMax M3 428B',
     prefix: 'minimaxm3',
     category: 'default',
+    openRouterModelId: 'minimax/minimax-m3',
+    logo: 'minimax-color.svg',
   },
   [Model.DeepSeek_R1]: {
     label: 'DeepSeek R1 0528 671B',
     prefix: 'dsr1',
     category: 'maintenance',
+    openRouterModelId: 'deepseek/deepseek-r1-0528',
+    logo: 'deepseek-color.svg',
+  },
+  [Model.GLM_5]: {
+    label: 'GLM5/5.1 744B',
+    prefix: 'glm5',
+    category: 'deprecated',
+    openRouterModelId: 'z-ai/glm-5.1',
+    logo: 'zai-color.svg',
+  },
+  // GLM-5.2 and GLM-5.3 share the same architecture and inference profile, so
+  // the selector presents both releases over the existing GLM-5.2 data bucket.
+  [Model.GLM_5_2]: {
+    label: 'GLM5.2/GLM5.3 744B',
+    prefix: 'glm5.2',
+    category: 'default',
+    openRouterModelId: 'z-ai/glm-5.3',
+    logo: 'zai-color.svg',
+  },
+  [Model.Qwen3_5]: {
+    label: 'Qwen3.5 397B',
+    prefix: 'qwen3.5',
+    category: 'default',
+    openRouterModelId: 'qwen/qwen3.5-397b-a17b',
+    logo: 'qwen-color.svg',
+  },
+  // 176B total: a 125B main model plus a 51B n-gram embedding table, 6B active
+  // per forward pass, and a separate 4B MTP head the parameter count excludes.
+  // Default alongside the other current models, so it appears in the /overview
+  // matrix from day zero. The matrix is built from DEFAULT_MODELS, so its
+  // fixed-sequence row stays empty until the sweep covers 8k1k as well as the
+  // agentic scenario.
+  [Model.Qwen3_8_Flash_Next]: {
+    label: 'Qwen3.8 Flash Next 176B',
+    prefix: 'qwen3.8next',
+    category: 'default',
+    openRouterModelId: 'qwen/qwen3.8-flash',
+    logo: 'qwen-color.svg',
+  },
+  [Model.GptOss]: {
+    label: 'gpt-oss 120B',
+    prefix: 'gptoss',
+    category: 'deprecated',
+    openRouterModelId: 'openai/gpt-oss-120b',
+    logo: 'openai.svg',
   },
   [Model.DeepSeek_Coder_V2_Lite]: {
     label: 'DeepSeek Coder V2 Lite 16B',
     prefix: 'dsv2lite',
     category: 'default',
+    openRouterModelId: 'deepseek/deepseek-coder-v2-lite-instruct',
+    logo: 'deepseek-color.svg',
   },
-  [Model.GLM_5]: { label: 'GLM5/5.1 744B', prefix: 'glm5', category: 'deprecated' },
-  [Model.GLM_5_2]: { label: 'GLM5.2', prefix: 'glm5.2', category: 'default' },
-  [Model.Qwen3_5]: { label: 'Qwen3.5 397B', prefix: 'qwen3.5', category: 'default' },
-  [Model.GptOss]: { label: 'gpt-oss 120B', prefix: 'gptoss', category: 'deprecated' },
   [Model.MiniMax_M2_5]: {
     // M2.5 and M2.7 share an architecture — same GLM5/5.1 pattern as Kimi.
     // Superseded by MiniMax M3, so it's deprecated (no longer actively benchmarked).
     label: 'MiniMax M2.5/2.7 230B',
     prefix: 'minimaxm2.5',
     category: 'deprecated',
+    openRouterModelId: 'minimax/minimax-m2.7',
+    logo: 'minimax-color.svg',
   },
-  [Model.Llama3_3_70B]: { label: 'Llama 3.3 70B Instruct', prefix: '70b', category: 'deprecated' },
-  [Model.Llama3_1_70B]: { label: 'Llama 3.1 70B Instruct', prefix: '', category: 'hidden' },
-  [Model.Gemma4_31B]: { label: 'Gemma 4 31B', prefix: 'gemma4', category: 'default' },
+  [Model.Llama3_3_70B]: {
+    label: 'Llama 3.3 70B Instruct',
+    prefix: '70b',
+    category: 'deprecated',
+    openRouterModelId: 'meta-llama/llama-3.3-70b-instruct',
+    logo: 'meta-color.svg',
+  },
+  [Model.Llama3_1_70B]: {
+    label: 'Llama 3.1 70B Instruct',
+    prefix: '',
+    category: 'hidden',
+    openRouterModelId: 'meta-llama/llama-3.1-70b-instruct',
+    logo: 'meta-color.svg',
+  },
+  [Model.Gemma4_31B]: {
+    label: 'Gemma 4 31B',
+    prefix: 'gemma4',
+    category: 'default',
+    openRouterModelId: 'google/gemma-4-31b-it',
+  },
 };
 
 function modelsByCategory(cat: CategoryTag): ReadonlySet<Model> {
@@ -213,6 +301,20 @@ export function getModelCategory(model: Model): CategoryTag {
 
 export function getModelLabel(model: Model): string {
   return MODEL_CONFIG[model]?.label ?? model;
+}
+
+/** Exact OpenRouter catalog model used for live input/output pricing. */
+export function getOpenRouterModelId(model: Model): string | null {
+  return MODEL_CONFIG[model]?.openRouterModelId ?? null;
+}
+
+/**
+ * Filename under `public/logos/` for the model creator's logo, or null when the
+ * model has no configured logo. Callers render it via `ModelLogo`, which
+ * handles dark-mode inversion and load-failure fallback.
+ */
+export function getModelLogo(model: Model): string | null {
+  return MODEL_CONFIG[model]?.logo ?? null;
 }
 
 /**
@@ -326,8 +428,8 @@ const SEQUENCE_CONFIG: Record<Sequence, SequenceConfig> = {
     exclusionFamilies: GUARDED_ENGINE_FAMILIES,
   },
   [Sequence.AgenticTraces]: {
-    label: 'Agentic Traces',
-    labelZh: '智能体轨迹',
+    label: 'Agentic',
+    labelZh: '智能体',
     compact: 'agentic',
     category: 'default',
     kind: 'agentic',

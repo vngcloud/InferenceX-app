@@ -10,7 +10,7 @@ import { track } from '@/lib/analytics';
 import type { Locale } from '@/lib/i18n';
 
 import { CompanyLogo, highlightBrand } from './quote-utils';
-import { QUOTES } from './quotes-data';
+import { QUOTES, orgAnchorId } from './quotes-data';
 
 const STRINGS = {
   en: {
@@ -20,21 +20,12 @@ const STRINGS = {
     jumpTo: (org: string) => `Jump to ${org}’s quote`,
   },
   zh: {
-    heading: <>InferenceX&trade; 计划支持者</>,
+    heading: <>业界与社区对 InferenceX&trade; 的评价</>,
     intro:
-      'InferenceX™ 计划获得众多主要算力买家与 ML 社区知名成员的支持，包括来自 MiniMax、Moonshot Kimi、阿里巴巴 Qwen、OpenAI、Microsoft、vLLM、PyTorch 基金会、Oracle 等机构的支持者。',
-    jumpTo: (org: string) => `跳转到 ${org} 的评价`,
+      'InferenceX™ 获得了众多大型算力采购方和 ML 社区知名人士的认可。以下评价来自 MiniMax、Moonshot Kimi、Alibaba Qwen、OpenAI、Microsoft、vLLM、PyTorch Foundation 和 Oracle 等机构的相关人士。',
+    jumpTo: (org: string) => `查看 ${org} 的评价`,
   },
 } as const;
-
-/** Stable anchor id for an org's quote (first occurrence wins). */
-function orgAnchorId(org: string): string {
-  const slug = org
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/gu, '-')
-    .replaceAll(/^-|-$/gu, '');
-  return `quote-${slug}`;
-}
 
 /** Deduplicated logos from all quote orgs. */
 const orgLogos: { org: string; logo: string }[] = [];
@@ -149,7 +140,7 @@ export function QuotesContent({ locale = 'en' }: { locale?: Locale } = {}) {
                       }
                       text={locale === 'zh' ? (quote.textZh ?? quote.text) : quote.text}
                       name={quote.name}
-                      title={quote.title}
+                      title={locale === 'zh' ? (quote.titleZh ?? quote.title) : quote.title}
                       org={quote.org}
                       logo={quote.logo}
                       link={quote.link}

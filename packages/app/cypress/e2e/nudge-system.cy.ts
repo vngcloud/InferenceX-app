@@ -14,8 +14,7 @@ function clearAllNudgeStorage(win: Cypress.AUTWindow) {
   const keys = [
     'inferencex-starred',
     'inferencex-star-modal-dismissed',
-    'inferencex-kimi-k3-modal-dismissed',
-    'inferencex-kimi-k3-banner-dismissed',
+    'inferencex-openai-rubin-banner-dismissed',
     'inferencex-reproducibility-nudge-shown',
     'inferencex-star-nudge-shown',
     'inferencex-export-nudge-shown',
@@ -43,90 +42,86 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('Landing nudges — modals', () => {
-  it('shows launch modal and banner simultaneously on fresh first load', () => {
+  it('shows the launch banner on fresh first load', () => {
     cy.visit('/', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    // Banner (inline) and modal (overlay) occupy independent slots
-    cy.get('[data-testid="launch-banner"]').should('be.visible');
-    cy.get('[data-testid="launch-modal"]')
+    cy.get('[data-testid="launch-banner"]')
       .should('be.visible')
-      .and('match', 'div[role="dialog"][aria-modal="false"]');
-    // Only one overlay at a time — star modal should not appear
-    cy.get('[data-testid="github-star-modal"]').should('not.exist');
+      .and('contain.text', "OpenAI's Latest In House Chip verus Rubin NVL72")
+      .and(
+        'contain.text',
+        'Compare Jalapeño (Teacup) with Vera Rubin (July) NVL72 on DeepSeek R1 at 8K / 1K.',
+      )
+      .and('contain.text', 'View results');
+    // Banner + header-nav badges, plus the six AgentX hero ledger rows — the
+    // shared pill must render at the same fixed size everywhere it appears.
+    cy.get('[data-new-badge]')
+      .should('have.length', 8)
+      .then(($badges) => {
+        const sizes = [...$badges].map((badge) => {
+          const rect = badge.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        });
+        for (const size of sizes) {
+          expect(size.width).to.eq(sizes[0].width);
+          expect(size.height).to.eq(sizes[0].height);
+        }
+        expect(sizes[0]).to.deep.eq({ width: 32, height: 16 });
+
+        for (const badge of $badges) {
+          const label = badge.querySelector('[data-new-badge-label]');
+          expect(label, 'badge label').not.to.eq(null);
+
+          const badgeRect = badge.getBoundingClientRect();
+          const labelRect = label!.getBoundingClientRect();
+          const horizontalOffset =
+            labelRect.left + labelRect.width / 2 - (badgeRect.left + badgeRect.width / 2);
+          const verticalOffset =
+            labelRect.top + labelRect.height / 2 - (badgeRect.top + badgeRect.height / 2);
+
+          expect(horizontalOffset).to.be.closeTo(0, 0.1);
+          expect(verticalOffset).to.eq(0);
+
+          // The label box can sit dead centre while the glyphs themselves spill
+          // out of it, so measure the rendered text and not just its container.
+          const range = badge.ownerDocument.createRange();
+          range.selectNodeContents(label!);
+          const inkRect = range.getBoundingClientRect();
+          const inkOffset =
+            inkRect.left + inkRect.width / 2 - (badgeRect.left + badgeRect.width / 2);
+
+          expect(inkRect.left, 'label ink stays inside the pill').to.be.at.least(badgeRect.left);
+          expect(inkRect.right, 'label ink stays inside the pill').to.be.at.most(badgeRect.right);
+          expect(inkOffset, 'label ink is centred').to.be.closeTo(0, 0.5);
+        }
+      });
   });
 
-  it('dismissing launch modal persists — not shown on reload', () => {
+  it('localizes the Rubin comparison banner title in Chinese', () => {
+    cy.visit('/zh', {
+      onBeforeLoad: clearAllNudgeStorage,
+    });
+    cy.get('[data-testid="launch-banner"]')
+      .should('be.visible')
+      .and('contain.text', 'OpenAI 最新自研芯片对比 Rubin NVL72')
+      .and(
+        'contain.text',
+        '对比 Jalapeño (Teacup) 与 Vera Rubin (July) NVL72 在 DeepSeek R1 8K / 1K 工作负载下的表现。',
+      )
+      .and('contain.text', '查看结果');
+  });
+
+  it('does not float a duplicate GitHub star card over the footer', () => {
+    // The persistent star CTA lives in the footer grid (footer-star-cta) and
+    // the header; the old immediate star modal duplicated it and covered the
+    // footer, so it must stay gone.
     cy.visit('/', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    cy.get('[data-testid="launch-modal"]').should('be.visible');
-    cy.get('[data-testid="launch-modal-dismiss"]').click();
-    cy.get('[data-testid="launch-modal"]').should('not.exist');
-
-    cy.reload();
-    cy.get('[data-testid="launch-modal"]').should('not.exist');
-  });
-
-  it('launch modal Explore action persists dismissal in localStorage', () => {
-    cy.visit('/', {
-      onBeforeLoad: clearAllNudgeStorage,
-    });
-    cy.get('[data-testid="launch-modal"]').should('be.visible');
-
-    // The action writes localStorage synchronously before navigation. Check
-    // the storage value before the navigation completes; combined with the
-    // "Maybe Later" persists-across-reload test, this covers the explore
-    // path without needing to stub window.location.
-    cy.get('[data-testid="launch-modal-action"]').click();
-    cy.window().then((win) => {
-      expect(win.localStorage.getItem('inferencex-kimi-k3-modal-dismissed')).to.eq('1');
-    });
-  });
-
-  it('shows star modal when launch modal was previously dismissed', () => {
-    cy.visit('/', {
-      onBeforeLoad(win) {
-        clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-kimi-k3-modal-dismissed', '1');
-      },
-    });
-    cy.get('[data-testid="launch-modal"]').should('not.exist');
-    cy.get('[data-testid="github-star-modal"]').should('be.visible');
-  });
-
-  it('star modal dismiss uses timed strategy — re-shows after expiry', () => {
-    cy.visit('/', {
-      onBeforeLoad(win) {
-        clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-kimi-k3-modal-dismissed', '1');
-      },
-    });
-    cy.get('[data-testid="github-star-modal"]').should('be.visible');
-    cy.get('[data-testid="github-star-modal-dismiss"]').click();
+    cy.get('[data-testid="launch-banner"]').should('be.visible');
     cy.get('[data-testid="github-star-modal"]').should('not.exist');
-
-    cy.window().then((win) => {
-      const value = win.localStorage.getItem('inferencex-star-modal-dismissed');
-      expect(value).to.not.equal(null);
-      expect(Number(value)).to.be.greaterThan(0);
-    });
-  });
-
-  it('starring permanently suppresses both star modal and star nudge', () => {
-    cy.visit('/', {
-      onBeforeLoad(win) {
-        clearAllNudgeStorage(win);
-        win.localStorage.setItem('inferencex-kimi-k3-modal-dismissed', '1');
-      },
-    });
-    cy.get('[data-testid="github-star-modal"]').should('be.visible');
-    cy.get('[data-testid="github-star-modal-action"]').click();
-    cy.get('[data-testid="github-star-modal"]').should('not.exist');
-
-    cy.window().then((win) => {
-      expect(win.localStorage.getItem('inferencex-starred')).to.eq('1');
-    });
+    cy.get('[data-testid="footer-star-cta"]').should('exist');
   });
 });
 
@@ -137,16 +132,8 @@ describe('Landing nudges — modals', () => {
 describe('Landing nudges — banner', () => {
   it('shows launch banner on landing page', () => {
     cy.visit('/', {
-      onBeforeLoad(win) {
-        clearAllNudgeStorage(win);
-        // Dismiss modals so the banner (highest priority at 60) is the active nudge.
-        // Actually the banner has priority 60 > launch modal 50, so it should show first.
-        // But the engine only shows one nudge at a time; the banner wins because of priority.
-      },
+      onBeforeLoad: clearAllNudgeStorage,
     });
-    // The banner has the highest priority (60), so it should appear.
-    // However, NudgeEngine only shows one nudge at a time.
-    // With immediate triggers and priority 60 > 50 > 40, the banner wins.
     cy.get('[data-testid="launch-banner"]').should('be.visible');
   });
 
@@ -178,7 +165,7 @@ describe('Landing nudges — banner', () => {
     cy.get('[data-testid="launch-banner"]').should('be.visible');
     cy.window().then((win) => {
       // Only the X button should persist a dismissal — show alone must not.
-      expect(win.localStorage.getItem('inferencex-kimi-k3-banner-dismissed')).to.eq(null);
+      expect(win.localStorage.getItem('inferencex-openai-rubin-banner-dismissed')).to.eq(null);
     });
   });
 
@@ -189,11 +176,16 @@ describe('Landing nudges — banner', () => {
     cy.get('[data-testid="launch-banner"]').should('be.visible');
     cy.get('[data-testid="launch-banner"]').click();
     cy.location('pathname', { timeout: 10000 }).should('eq', '/inference');
+    cy.location('search')
+      .should('include', 'g_model=DeepSeek-R1-0528')
+      .and('include', 'i_seq=8k%2F1k')
+      .and('include', 'i_prec=fp4')
+      .and('include', 'i_metric=y_outputTputPerMw');
 
     // Body click must not write the dismissal key — the banner should still
     // render on a fresh visit to landing.
     cy.window().then((win) => {
-      expect(win.localStorage.getItem('inferencex-kimi-k3-banner-dismissed')).to.eq(null);
+      expect(win.localStorage.getItem('inferencex-openai-rubin-banner-dismissed')).to.eq(null);
     });
 
     cy.visit('/');
@@ -259,6 +251,24 @@ describe('Dashboard nudges — filter-hint toast', () => {
     cy.visit('/evaluation', { onBeforeLoad: suppressCompetingDashboardToasts });
     cy.wait(3500);
     cy.get('[data-testid="filter-hint-nudge"]').should('not.exist');
+  });
+
+  it('arms the filter hint before a client transition into inference', () => {
+    cy.visit('/evaluation', { onBeforeLoad: suppressCompetingDashboardToasts });
+    cy.get('[data-testid="filter-hint-nudge"]').should('not.exist');
+
+    cy.get('[data-testid="tab-trigger-inference"]').click();
+    cy.location('pathname').should('eq', '/inference');
+    cy.get('[data-testid="filter-hint-nudge"]', { timeout: 3000 }).should('be.visible');
+  });
+
+  it('re-evaluates the localized filter hint after a Chinese tab transition', () => {
+    cy.visit('/zh/evaluation', { onBeforeLoad: suppressCompetingDashboardToasts });
+    cy.get('[data-testid="tab-trigger-inference"]').click();
+    cy.location('pathname').should('eq', '/zh/inference');
+    cy.get('[data-testid="filter-hint-nudge"]', { timeout: 3000 })
+      .should('be.visible')
+      .and('contain.text', '图表太拥挤？');
   });
 
   it('dismissal persists to localStorage and the nudge stays gone after reload', () => {
@@ -344,7 +354,6 @@ describe('Nudge scope isolation', () => {
     cy.visit('/inference', {
       onBeforeLoad: clearAllNudgeStorage,
     });
-    cy.get('[data-testid="launch-modal"]').should('not.exist');
     cy.get('[data-testid="github-star-modal"]').should('not.exist');
     cy.get('[data-testid="launch-banner"]').should('not.exist');
   });
@@ -354,8 +363,7 @@ describe('Nudge scope isolation', () => {
       onBeforeLoad(win) {
         clearAllNudgeStorage(win);
         // Dismiss all landing nudges so nothing blocks visibility checks
-        win.localStorage.setItem('inferencex-kimi-k3-modal-dismissed', '1');
-        win.localStorage.setItem('inferencex-kimi-k3-banner-dismissed', '1');
+        win.localStorage.setItem('inferencex-openai-rubin-banner-dismissed', '1');
         win.localStorage.setItem('inferencex-starred', '1');
       },
     });

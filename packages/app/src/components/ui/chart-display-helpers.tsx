@@ -1,21 +1,62 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
+
+import {
+  HW_REGISTRY,
+  TCO_SOURCE_TITLE,
+  TCO_SOURCE_URL,
+} from '@semianalysisai/inferencex-constants';
 
 import { Badge } from '@/components/ui/badge';
 import { ExternalLinkIcon } from '@/components/ui/external-link-icon';
 import { ShareButton } from '@/components/ui/share-button';
-import { HW_REGISTRY } from '@semianalysisai/inferencex-constants';
 import { useLocale } from '@/lib/use-locale';
 import type { Locale } from '@/lib/i18n';
 
 // Keep these metric-key groups in sync with chart-utils/chart configs when new source-backed
 // metrics are added; this helper owns which caption notes and caveats appear for each family.
 const POWER_SOURCE_METRICS = new Set(['y_tpPerMw', 'y_inputTputPerMw', 'y_outputTputPerMw']);
-const TOTAL_COST_METRICS = new Set(['y_costh', 'y_costn', 'y_costr']);
-const OUTPUT_COST_METRICS = new Set(['y_costhOutput', 'y_costnOutput', 'y_costrOutput']);
-const INPUT_COST_METRICS = new Set(['y_costhi', 'y_costni', 'y_costri']);
+// The disaggregation caveat only applies to the per-token-type per-MW metrics: a
+// disaggregated run reports input/output throughput per prefill or per decode chip,
+// so dividing by per-chip power inherits that skew. Total tok/s/MW divides
+// throughput per chip overall by the same per-chip power an aggregated config
+// uses, so it needs no caveat — the same split the cost caveats below make.
+const PER_TOKEN_TYPE_POWER_METRICS = new Set(['y_inputTputPerMw', 'y_outputTputPerMw']);
+const TOTAL_COST_METRICS = new Set([
+  'y_costh',
+  'y_costn',
+  'y_costr',
+  'y_tokensPerDollarH',
+  'y_tokensPerDollarN',
+  'y_tokensPerDollarR',
+  'y_tokensPerRmbH',
+  'y_tokensPerRmbN',
+  'y_tokensPerRmbR',
+]);
+const OUTPUT_COST_METRICS = new Set([
+  'y_costhOutput',
+  'y_costnOutput',
+  'y_costrOutput',
+  'y_outputTokensPerDollarH',
+  'y_outputTokensPerDollarN',
+  'y_outputTokensPerDollarR',
+  'y_outputTokensPerRmbH',
+  'y_outputTokensPerRmbN',
+  'y_outputTokensPerRmbR',
+]);
+const INPUT_COST_METRICS = new Set([
+  'y_costhi',
+  'y_costni',
+  'y_costri',
+  'y_inputTokensPerDollarH',
+  'y_inputTokensPerDollarN',
+  'y_inputTokensPerDollarR',
+  'y_inputTokensPerRmbH',
+  'y_inputTokensPerRmbN',
+  'y_inputTokensPerRmbR',
+]);
 const POWER_VALUES = Object.fromEntries(
   Object.entries(HW_REGISTRY).map(([base, specs]) => [base, `${specs.power}kW`]),
 );
@@ -32,7 +73,7 @@ function MetricBadges({
       {label}{' '}
       {Object.entries(values).map(([base, value]) => (
         <Badge key={base} variant="outline">
-          {base.toUpperCase()}: {value}
+          {HW_REGISTRY[base]?.badgeLabel ?? base.toUpperCase()}: {value}
         </Badge>
       ))}
     </p>
@@ -63,6 +104,11 @@ function SourceLink({
 
 const NOUN_ZH: Record<string, string> = {
   cost: '成本',
+  'cost per million tokens': '每百万 token 成本',
+  'token cost': 'token 成本',
+  'tokens per $1 USD': '每 1 美元可购买的 token 数',
+  'tokens per ¥1 RMB': '每 1 元人民币可购买的 token 数',
+  'purchasing power': '购买力',
   'input throughput': '输入吞吐量',
   'output throughput': '输出吞吐量',
   power: '功耗',
@@ -84,10 +130,10 @@ function DisaggCaveat({
   const content =
     locale === 'zh' ? (
       <>
-        <strong>注意：</strong>分离式推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码 Chip 或预填充
-        Chip 计算
+        <strong>注意：</strong>分离式推理配置（如 MoRI SGLang、Dynamo TRTLLM）按解码芯片或预填充
+        芯片计算
         {NOUN_ZH[calculationNoun] ?? calculationNoun}
-        ，而非按 Chip 总数计算。因此，与聚合配置进行
+        ，而非按芯片总数计算。因此，与聚合配置进行
         {NOUN_ZH[comparisonNoun] ?? comparisonNoun}
         的直接对比并不完全等价。
       </>
@@ -119,11 +165,23 @@ function getCostValues(selectedYAxisMetric: string) {
       base,
       selectedYAxisMetric === 'y_costh' ||
       selectedYAxisMetric === 'y_costhOutput' ||
-      selectedYAxisMetric === 'y_costhi'
+      selectedYAxisMetric === 'y_costhi' ||
+      selectedYAxisMetric === 'y_tokensPerRmbH' ||
+      selectedYAxisMetric === 'y_outputTokensPerRmbH' ||
+      selectedYAxisMetric === 'y_inputTokensPerRmbH' ||
+      selectedYAxisMetric === 'y_tokensPerDollarH' ||
+      selectedYAxisMetric === 'y_outputTokensPerDollarH' ||
+      selectedYAxisMetric === 'y_inputTokensPerDollarH'
         ? specs.costh
         : selectedYAxisMetric === 'y_costn' ||
             selectedYAxisMetric === 'y_costnOutput' ||
-            selectedYAxisMetric === 'y_costni'
+            selectedYAxisMetric === 'y_costni' ||
+            selectedYAxisMetric === 'y_tokensPerRmbN' ||
+            selectedYAxisMetric === 'y_outputTokensPerRmbN' ||
+            selectedYAxisMetric === 'y_inputTokensPerRmbN' ||
+            selectedYAxisMetric === 'y_tokensPerDollarN' ||
+            selectedYAxisMetric === 'y_outputTokensPerDollarN' ||
+            selectedYAxisMetric === 'y_inputTokensPerDollarN'
           ? specs.costn
           : specs.costr,
     ]),
@@ -136,16 +194,43 @@ export function ChartShareActions() {
 
 export function MetricAssumptionNotes({
   selectedYAxisMetric,
+  activeHwKeys,
   includeAllPowerThroughputMetrics = true,
   includePowerThroughputCaveat = true,
 }: {
   selectedYAxisMetric: string;
+  /**
+   * Active legend hardware keys (e.g. `gb300_dynamo-sglang`). When provided,
+   * the TCO $/chip/hr and Power/Chip badges are narrowed to the base GPUs the
+   * selection covers, so the caption only quotes chips that can appear on the
+   * plot. Omitted (or when the selection maps to no registry GPU) every
+   * registry GPU is shown, preserving the historical behavior.
+   */
+  activeHwKeys?: ReadonlySet<string> | readonly string[];
   // Historical trends only annotates y_tpPerMw and intentionally omits per-MW caveats to preserve
   // the tab's existing caption contract while sharing the same helper as inference.
   includeAllPowerThroughputMetrics?: boolean;
   includePowerThroughputCaveat?: boolean;
 }) {
   const locale = useLocale();
+  // Legend keys are `{base}` or `{base}_{framework/variant}`; badge maps are
+  // keyed by registry base, so reduce the selection to its base GPUs.
+  const activeBases = useMemo(() => {
+    const bases = new Set<string>();
+    for (const key of activeHwKeys ?? []) {
+      const base = key.split('_')[0];
+      if (base in HW_REGISTRY) bases.add(base);
+    }
+    return bases;
+  }, [activeHwKeys]);
+  const filterToActive = (values: Record<string, string | number>) => {
+    if (activeBases.size === 0) return values;
+    const filtered = Object.fromEntries(
+      Object.entries(values).filter(([base]) => activeBases.has(base)),
+    );
+    // Defensive: never render a badge row with an empty value list.
+    return Object.keys(filtered).length > 0 ? filtered : values;
+  };
   const showPowerSource = includeAllPowerThroughputMetrics
     ? POWER_SOURCE_METRICS.has(selectedYAxisMetric)
     : selectedYAxisMetric === 'y_tpPerMw';
@@ -154,13 +239,16 @@ export function MetricAssumptionNotes({
   const showInputCostSource = INPUT_COST_METRICS.has(selectedYAxisMetric);
   const showInputThroughputCaveat = selectedYAxisMetric === 'y_inputTputPerGpu';
   const showOutputThroughputCaveat = selectedYAxisMetric === 'y_outputTputPerGpu';
-  // Per-token-type cost only. A disagg config's prefill and decode chips are
-  // counted separately, so the input- and output-token costs are attributed to
-  // one side of the split and can't be lined up against an aggregated config.
-  // The total-token cost divides by the whole chip count, which is the same
+  // Per-token-type cost and purchasing power only. A disagg config's prefill and decode
+  // chips are counted separately, so input/output economics are attributed to one side
+  // of the split and can't be lined up against an aggregated config.
+  // The total-token metric uses the whole chip count, which is the same
   // denominator an aggregated config uses, so it needs no caveat — the same
   // split the throughput caveats above already make (input/output, not total).
   const showCostCaveat = showOutputCostSource || showInputCostSource;
+  const isTokensPerDollar = selectedYAxisMetric.includes('TokensPerDollar');
+  const isTokensPerRmb = selectedYAxisMetric.includes('TokensPerRmb');
+  const isTokensPerCurrency = isTokensPerDollar || isTokensPerRmb;
   const showJouleSource = selectedYAxisMetric.startsWith('y_j');
 
   const costValues =
@@ -168,15 +256,15 @@ export function MetricAssumptionNotes({
       ? getCostValues(selectedYAxisMetric)
       : null;
 
-  const powerLabel = locale === 'zh' ? '全包功耗/Chip：' : 'All in Power/Chip:';
-  const costLabel = locale === 'zh' ? 'TCO $/chip/小时：' : 'TCO $/chip/hr:';
+  const powerLabel = locale === 'zh' ? '全含功率/芯片：' : 'All in Power/Chip:';
+  const costLabel = locale === 'zh' ? 'TCO $/chip/hr：' : 'TCO $/chip/hr:';
   const sourceLabel = locale === 'zh' ? '来源：' : 'Source:';
 
   return (
     <>
       {showPowerSource && (
         <>
-          <MetricBadges label={powerLabel} values={POWER_VALUES} />
+          <MetricBadges label={powerLabel} values={filterToActive(POWER_VALUES)} />
           <SourceLink
             href="https://semianalysis.com/datacenter-industry-model/"
             sourceLabel={sourceLabel}
@@ -187,13 +275,24 @@ export function MetricAssumptionNotes({
       )}
       {costValues && (
         <>
-          <MetricBadges label={costLabel} values={costValues} />
-          <SourceLink href="https://semianalysis.com/ai-cloud-tco-model/" sourceLabel={sourceLabel}>
-            SemiAnalysis Market July 2026 Pricing Surveys & AI Cloud TCO Model
+          <MetricBadges label={costLabel} values={filterToActive(costValues)} />
+          <SourceLink href={TCO_SOURCE_URL} sourceLabel={sourceLabel}>
+            {TCO_SOURCE_TITLE}
           </SourceLink>
         </>
       )}
-      <DisaggCaveat visible={showCostCaveat} calculationNoun="cost" locale={locale} />
+      <DisaggCaveat
+        visible={showCostCaveat}
+        calculationNoun={
+          isTokensPerRmb
+            ? 'tokens per ¥1 RMB'
+            : isTokensPerDollar
+              ? 'tokens per $1 USD'
+              : 'cost per million tokens'
+        }
+        comparisonNoun={isTokensPerCurrency ? 'purchasing power' : 'token cost'}
+        locale={locale}
+      />
       <DisaggCaveat
         visible={showInputThroughputCaveat}
         calculationNoun="input throughput"
@@ -206,14 +305,14 @@ export function MetricAssumptionNotes({
       />
       {includePowerThroughputCaveat && (
         <DisaggCaveat
-          visible={POWER_SOURCE_METRICS.has(selectedYAxisMetric)}
+          visible={PER_TOKEN_TYPE_POWER_METRICS.has(selectedYAxisMetric)}
           calculationNoun="power"
           locale={locale}
         />
       )}
       {showJouleSource && (
         <>
-          <MetricBadges label={powerLabel} values={POWER_VALUES} />
+          <MetricBadges label={powerLabel} values={filterToActive(POWER_VALUES)} />
           <SourceLink
             href="https://semianalysis.com/datacenter-industry-model/"
             sourceLabel={sourceLabel}

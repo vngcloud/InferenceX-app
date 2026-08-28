@@ -1,12 +1,14 @@
 import { useState } from 'react';
+import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
 
 import {
   ModelSelector,
+  ScenarioSelector,
   SequenceSelector,
   PrecisionSelector,
 } from '@/components/ui/chart-selectors';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Model } from '@/lib/data-mappings';
+import { Model, Sequence } from '@/lib/data-mappings';
 
 function ModelSelectorHarness() {
   const [value, setValue] = useState('DeepSeek-R1-0528');
@@ -37,6 +39,20 @@ function SequenceSelectorHarness() {
         onChange={setValue}
         availableSequences={['1024_128', '1024_8192', '8192_1024']}
         data-testid="sequence-selector"
+      />
+    </TooltipProvider>
+  );
+}
+
+function ScenarioSelectorHarness({ initial = Sequence.AgenticTraces }: { initial?: Sequence }) {
+  const [value, setValue] = useState<string>(initial);
+  return (
+    <TooltipProvider delayDuration={0}>
+      <ScenarioSelector
+        value={value}
+        onChange={setValue}
+        availableSequences={[Sequence.EightK_OneK, Sequence.AgenticTraces]}
+        data-testid="scenario-selector"
       />
     </TooltipProvider>
   );
@@ -93,6 +109,22 @@ describe('Chart Selectors', () => {
         'be.visible',
       );
     });
+
+    it('localizes model category labels and reasons on Chinese routes', () => {
+      cy.mount(
+        <PathnameContext.Provider value="/zh/inference">
+          <ModelSelectorHarness />
+        </PathnameContext.Provider>,
+      );
+      cy.get('[data-testid="model-selector"]').click();
+      cy.contains('维护模式').should('be.visible');
+      cy.contains('已弃用').should('be.visible');
+      cy.contains('Maintenance Mode').should('not.exist');
+      cy.get('[data-testid="selector-category-maintenance-mode-info"]').trigger('pointermove', {
+        pointerType: 'mouse',
+      });
+      cy.contains('这些模型的相关性较低，因此以较低优先级更新。').should('be.visible');
+    });
   });
 
   describe('SequenceSelector', () => {
@@ -112,6 +144,85 @@ describe('Chart Selectors', () => {
     });
   });
 
+  describe('ScenarioSelector', () => {
+    it('labels the agentic scenario "Agentic"', () => {
+      cy.mount(<ScenarioSelectorHarness />);
+      cy.get('[data-testid="scenario-selector"]').should('have.text', 'Agentic');
+      cy.get('[data-testid="scenario-selector"]').click();
+      cy.contains('[role="option"]', 'Agentic').should('be.visible');
+      cy.contains('[role="option"]', 'Agentic Traces').should('not.exist');
+      // The lone agentic entry needs no "Agentic" heading above it.
+      cy.get('[data-slot="select-content"]')
+        .find('[data-slot="select-label"]')
+        .should('not.contain.text', 'Agentic');
+    });
+
+    it('explains the agentic workload in a tooltip that links to /agentx', () => {
+      cy.mount(<ScenarioSelectorHarness />);
+      cy.get('[data-testid="scenario-agentic-info"]').trigger('pointermove', {
+        pointerType: 'mouse',
+      });
+
+      cy.contains('Realistic Long Context Multi Turn Agentic Workload with Sub Agents.').should(
+        'be.visible',
+      );
+      cy.get('[data-testid="scenario-agentic-info-link"]')
+        .should('be.visible')
+        .and('have.attr', 'href', '/agentx');
+    });
+
+    it('renders nothing when the only scenario is fixed-sequence', () => {
+      cy.mount(
+        <TooltipProvider delayDuration={0}>
+          <div data-testid="selector-host">
+            <ScenarioSelector
+              value={Sequence.EightK_OneK}
+              onChange={() => {}}
+              availableSequences={[Sequence.EightK_OneK]}
+              data-testid="scenario-selector"
+            />
+          </div>
+        </TooltipProvider>,
+      );
+      cy.get('[data-testid="selector-host"]').should('exist');
+      cy.get('[data-testid="scenario-selector"]').should('not.exist');
+      cy.contains('Scenario').should('not.exist');
+    });
+
+    it('renders nothing when agentic is the only scenario', () => {
+      // A static "Scenario: Agentic" readout is as redundant as a one-option
+      // dropdown — the whole control disappears for single-scenario models.
+      cy.mount(
+        <TooltipProvider delayDuration={0}>
+          <div data-testid="selector-host">
+            <ScenarioSelector
+              value={Sequence.AgenticTraces}
+              onChange={() => {}}
+              availableSequences={[Sequence.AgenticTraces]}
+              data-testid="scenario-selector"
+            />
+          </div>
+        </TooltipProvider>,
+      );
+      cy.get('[data-testid="selector-host"]').should('exist');
+      cy.get('[data-testid="scenario-selector"]').should('not.exist');
+      cy.contains('Scenario').should('not.exist');
+      cy.get('[data-testid="scenario-static-value"]').should('not.exist');
+      cy.get('[data-testid="scenario-agentic-info"]').should('not.exist');
+    });
+
+    it('hides the agentic explainer on fixed-sequence scenarios', () => {
+      cy.mount(<ScenarioSelectorHarness initial={Sequence.EightK_OneK} />);
+      cy.get('[data-testid="scenario-selector"]').should('contain.text', '8K / 1K');
+      cy.get('[data-testid="scenario-agentic-info"]').should('not.exist');
+
+      // ...and appears as soon as the user picks the agentic scenario.
+      cy.get('[data-testid="scenario-selector"]').click();
+      cy.contains('[role="option"]', 'Agentic').click();
+      cy.get('[data-testid="scenario-agentic-info"]').should('exist');
+    });
+  });
+
   describe('PrecisionSelector', () => {
     beforeEach(() => {
       cy.mount(<PrecisionSelectorHarness />);
@@ -119,6 +230,24 @@ describe('Chart Selectors', () => {
 
     it('shows current selection', () => {
       cy.get('[data-testid="precision-multiselect"]').should('contain', 'FP8');
+    });
+
+    it('renders nothing when only one precision is available', () => {
+      cy.mount(
+        <TooltipProvider>
+          <div data-testid="selector-host">
+            <PrecisionSelector
+              value={['FP8']}
+              onChange={() => {}}
+              availablePrecisions={['FP8']}
+              data-testid="precision-multiselect"
+            />
+          </div>
+        </TooltipProvider>,
+      );
+      cy.get('[data-testid="selector-host"]').should('exist');
+      cy.get('[data-testid="precision-multiselect"]').should('not.exist');
+      cy.contains('Precision').should('not.exist');
     });
   });
 });

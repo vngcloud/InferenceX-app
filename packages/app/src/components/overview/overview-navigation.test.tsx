@@ -18,6 +18,7 @@ vi.mock('next/navigation', () => ({
 import {
   OverviewNavigationProvider,
   useOverviewData,
+  useOverviewNavigationError,
   useOverviewNavigation,
   useOverviewReference,
 } from './overview-navigation';
@@ -33,6 +34,8 @@ let root: Root;
 let selectTier: (() => void) | undefined;
 let selectEngine: (() => void) | undefined;
 let selectReference: (() => void) | undefined;
+let selectRowScope: (() => void) | undefined;
+let selectHardwareRowScope: (() => void) | undefined;
 let prefetchTier: (() => void) | undefined;
 
 function pageData(tier: OverviewTier): OverviewPageData {
@@ -43,23 +46,31 @@ function pageData(tier: OverviewTier): OverviewPageData {
     comparisonMode: 'hardware',
     referenceHardware: 'b200',
     modelScope: 'default',
+    rowScope: 'all',
+    hardwareRowScope: 'all',
+    unchangedRowCount: 0,
+    emptyRowCount: 0,
     historicalWindow: null,
   };
 }
 
 function Probe() {
   const navigation = useOverviewNavigation();
+  const navigationError = useOverviewNavigationError();
   const data = useOverviewData();
   const reference = useOverviewReference();
   selectTier = () => navigation.push('/overview?tier=75', ['tier']);
   selectEngine = () => navigation.push('/overview?engine=all', ['engine']);
   selectReference = () => navigation.push('/overview?ref=b300', ['ref']);
+  selectRowScope = () => navigation.push('/overview?compare=30d&rows=changed', ['rows']);
+  selectHardwareRowScope = () => navigation.push('/overview?hwrows=priced', ['hwrows']);
   prefetchTier = () => navigation.prefetch('/overview?tier=75', ['tier']);
   return (
     <>
       <output data-testid="tier">{data.tier}</output>
       <output data-testid="reference">{reference}</output>
       <output data-testid="pending">{navigation.isPending ? 'pending' : 'settled'}</output>
+      <output data-testid="error">{navigationError ? 'error' : 'ok'}</output>
     </>
   );
 }
@@ -105,6 +116,8 @@ afterEach(() => {
   selectTier = undefined;
   selectEngine = undefined;
   selectReference = undefined;
+  selectRowScope = undefined;
+  selectHardwareRowScope = undefined;
   prefetchTier = undefined;
   vi.unstubAllGlobals();
 });
@@ -153,7 +166,7 @@ describe('OverviewNavigationProvider', () => {
     // The shared afterEach unmounts again; react-dom tolerates the repeat.
   });
 
-  it('replaces rather than pushes when the overview request fails', async () => {
+  it('keeps a failed selector entry without falling back to router navigation', async () => {
     const { settlers } = deferredFetch();
     const searchEvents: string[] = [];
     const onSearchChange = (event: Event) => {
@@ -173,12 +186,14 @@ describe('OverviewNavigationProvider', () => {
 
     window.removeEventListener(CLIENT_SEARCH_CHANGE_EVENT, onSearchChange);
 
-    expect(routerStub.replace).toHaveBeenCalledTimes(1);
-    expect(routerStub.replace).toHaveBeenCalledWith('/overview?tier=75', { scroll: false });
+    expect(routerStub.replace).not.toHaveBeenCalled();
     expect(routerStub.push).not.toHaveBeenCalled();
     // The failed selection stays in the address bar so a retry click still works.
     expect(window.location.search).toBe('?tier=75');
     expect(searchEvents).toEqual(['?tier=75']);
+    expect(readProbe('tier')).toBe('50');
+    expect(readProbe('pending')).toBe('settled');
+    expect(readProbe('error')).toBe('error');
   });
 
   it('pushes one history entry when the same selection repeats while pending', () => {
@@ -196,7 +211,7 @@ describe('OverviewNavigationProvider', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('reloads on a failed popstate commit', async () => {
+  it('retains the last data and history when a popstate request fails, then clears the error', async () => {
     renderProvider(pageData(50), '/overview');
 
     const { settlers } = deferredFetch();
@@ -212,6 +227,11 @@ describe('OverviewNavigationProvider', () => {
       origin: 'http://localhost',
       reload,
     });
+    const replaceState = vi.spyOn(History.prototype, 'replaceState');
+    const pushState = vi.spyOn(History.prototype, 'pushState');
+    replaceState.mockClear();
+    pushState.mockClear();
+    const historyLength = window.history.length;
 
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -220,7 +240,35 @@ describe('OverviewNavigationProvider', () => {
       await Promise.resolve();
     });
 
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+    expect(routerStub.push).not.toHaveBeenCalled();
+    expect(routerStub.replace).not.toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(historyLength);
+    expect(window.location.search).toBe('?tier=75');
+    expect(readProbe('tier')).toBe('50');
+    expect(readProbe('pending')).toBe('settled');
+    expect(readProbe('error')).toBe('error');
+
+    window.history.replaceState({}, '', '/overview?tier=100');
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await Promise.resolve();
+    });
+
+    expect(readProbe('pending')).toBe('pending');
+    expect(readProbe('error')).toBe('ok');
+
+    await act(async () => {
+      settlers[1]?.resolve(Response.json(pageData(100)));
+      await Promise.resolve();
+    });
+
+    expect(readProbe('tier')).toBe('100');
+    expect(readProbe('error')).toBe('ok');
+    replaceState.mockRestore();
+    pushState.mockRestore();
   });
 
   it('fetches on a cache-miss popstate and ignores non-overview routes', async () => {
@@ -377,11 +425,35 @@ describe('OverviewNavigationProvider', () => {
     });
 
     expect(settlers).toHaveLength(1);
-    expect(routerStub.replace).toHaveBeenCalledWith('/overview?tier=75&ref=b300', {
-      scroll: false,
-    });
+    expect(routerStub.replace).not.toHaveBeenCalled();
     expect(readProbe('tier')).toBe('50');
     expect(readProbe('reference')).toBe('b300');
+  });
+
+  // Both row scopes narrow the rows the server sends, so neither may collapse
+  // into the unfiltered payload's cache key the way `ref` deliberately does.
+  it('requests a narrowed matrix for each row scope instead of reusing the full one', () => {
+    deferredFetch();
+
+    renderProvider(pageData(50), '/overview?compare=30d');
+    act(() => selectRowScope?.());
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/overview?compare=30d&rows=changed', {
+      headers: { Accept: 'application/json' },
+    });
+    expect(readProbe('pending')).toBe('pending');
+  });
+
+  it('requests a narrowed matrix for the hardware row scope', () => {
+    deferredFetch();
+
+    renderProvider(pageData(50), '/overview');
+    act(() => selectHardwareRowScope?.());
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/overview?hwrows=priced', {
+      headers: { Accept: 'application/json' },
+    });
+    expect(readProbe('pending')).toBe('pending');
   });
 
   it('preserves unknown params and the fragment on the first selection', () => {

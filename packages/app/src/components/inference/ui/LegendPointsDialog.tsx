@@ -10,6 +10,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useEphemeralUrlState } from '@/hooks/useUrlState';
+import { rememberChartStateInUrl } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
 
 import {
@@ -24,7 +26,7 @@ export interface LegendPointsDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Series label, e.g. "B300 (vLLM)". */
   title: string;
-  /** Context line, e.g. "DeepSeek V4 Pro · Agentic Traces". */
+  /** Context line, e.g. "DeepSeek V4 Pro · Agentic". */
   subtitle: string;
   /** Legend swatch color for this series (overlayRunColor for overlay runs). */
   accentColor: string;
@@ -64,6 +66,7 @@ export default function LegendPointsDialog({
   onRowClick,
 }: LegendPointsDialogProps) {
   const [sort, setSort] = useState<{ key: LegendPointsSortKey; dir: 'asc' | 'desc' } | null>(null);
+  const ephemeralUrlState = useEphemeralUrlState();
 
   const hasOffload = rows.some((r) => r.offload !== null);
   const columns = useMemo(
@@ -181,7 +184,15 @@ export default function LegendPointsDialog({
                   key={row.key}
                   href={row.href}
                   {...(row.isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                  onClick={() => onRowClick?.(row)}
+                  onClick={() => {
+                    // In-app detail links are full-document navigations, so the
+                    // chart state has to be written into this history entry
+                    // before we leave or Back lands on a default chart. Skipped
+                    // in ephemeral scopes (/model embeds): the store holds the
+                    // primary dashboard's state there, not this chart's.
+                    if (!row.isExternal && !ephemeralUrlState) rememberChartStateInUrl();
+                    onRowClick?.(row);
+                  }}
                   className="col-span-full grid grid-cols-subgrid items-center rounded-sm hover:bg-accent whitespace-nowrap"
                 >
                   {renderCells(row)}
@@ -200,7 +211,7 @@ export default function LegendPointsDialog({
           </div>
         )}
 
-        <p className="text-[10px] text-muted-foreground/70 leading-tight">
+        <p className="text-3xs text-muted-foreground/70 leading-tight">
           {isOverlay
             ? 'Unofficial overlay points have no stored benchmark records — metrics only, no detail links.'
             : 'Click a row for the point detail — agentic points open the trace detail page, fixed-seq points open the GitHub Actions run.'}{' '}

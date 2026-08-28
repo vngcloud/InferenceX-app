@@ -1,16 +1,20 @@
-import { useState } from 'react';
-import { GlobalFilterContext } from '@/components/GlobalFilterContext';
-import { InferenceContext } from '@/components/inference/InferenceContext';
-import { UnofficialRunContext } from '@/components/unofficial-run-provider';
+import { useReducer, useState } from 'react';
+import { GlobalFilterSelectionContext } from '@/components/GlobalFilterContext';
+import { InferenceContextsProvider } from '@/components/inference/InferenceContext';
+import {
+  overlaySelectionReducer,
+  UnofficialRunContext,
+} from '@/components/unofficial-run-provider';
 import ScatterGraph from '@/components/inference/ui/ScatterGraph';
 import ChartDisplay from '@/components/inference/ui/ChartDisplay';
 import { mountWithProviders } from '../support/test-utils';
+import { expandLegendAdvanced } from '../support/legend-advanced';
 import {
   createMockInferenceData,
   createMockChartDefinition,
   createMockHardwareConfig,
-  createMockGlobalFilterContext,
-  createMockInferenceContext,
+  createMockGlobalFilterContexts,
+  createMockInferenceContextValues,
   createMockUnofficialRunContext,
 } from '../support/mock-data';
 import { Model, Precision, Sequence } from '@/lib/data-mappings';
@@ -138,7 +142,7 @@ describe('ScatterGraph', () => {
         }),
       ),
     );
-    const baseInference = createMockInferenceContext();
+    const baseInference = createMockInferenceContextValues();
 
     function OfficialScopeHarness() {
       const [secondScope, setSecondScope] = useState(false);
@@ -155,7 +159,12 @@ describe('ScatterGraph', () => {
       };
 
       return (
-        <InferenceContext.Provider value={inference}>
+        <InferenceContextsProvider
+          data={inference}
+          filters={inference}
+          display={inference}
+          actions={inference}
+        >
           <button data-testid="change-official-scope" onClick={() => setSecondScope(true)}>
             Change official scope
           </button>
@@ -169,7 +178,7 @@ describe('ScatterGraph', () => {
               chartDefinition={chartDefinition}
             />
           </div>
-        </InferenceContext.Provider>
+        </InferenceContextsProvider>
       );
     }
 
@@ -204,7 +213,7 @@ describe('ScatterGraph', () => {
       chartType: 'interactivity',
       y_tpPerGpu_roofline: 'upper_left',
     });
-    const baseInference = createMockInferenceContext();
+    const baseInference = createMockInferenceContextValues();
     const baseUnofficial = createMockUnofficialRunContext();
 
     function DelayedOfficialScopeHarness() {
@@ -256,15 +265,22 @@ describe('ScatterGraph', () => {
         ...baseUnofficial,
         isUnofficialRun: true,
         activeOverlayHwTypes: activeOverlayKeys,
-        setActiveOverlayHwTypes: setActiveOverlayKeys,
+        setUnifiedOverlaySelection: (official: Set<string>, overlay: Set<string>) => {
+          setOfficialOverride(official);
+          setActiveOverlayKeys(overlay);
+        },
         allOverlayHwTypes: new Set(['h100_vllm', 'b200_vllm']),
         localOfficialOverride: officialOverride,
-        setLocalOfficialOverride: setOfficialOverride,
       };
 
       return (
         <UnofficialRunContext.Provider value={unofficial}>
-          <InferenceContext.Provider value={inference}>
+          <InferenceContextsProvider
+            data={inference}
+            filters={inference}
+            display={inference}
+            actions={inference}
+          >
             <button data-testid="change-delayed-chart-scope" onClick={() => setSecondScope(true)}>
               Change scope
             </button>
@@ -291,7 +307,7 @@ describe('ScatterGraph', () => {
                 overlayData={overlayData}
               />
             </div>
-          </InferenceContext.Provider>
+          </InferenceContextsProvider>
         </UnofficialRunContext.Provider>
       );
     }
@@ -346,6 +362,9 @@ describe('ScatterGraph', () => {
       chartType: 'interactivity',
       y_tpPerGpu_roofline: 'upper_left',
     });
+    const runId = 32177976542;
+    const runBranch = 'qwen3.5-fp4-gb200-dynamo-sglang-agentic-mtp-pareto-refresh';
+    const runUrl = `https://github.com/SemiAnalysisAI/InferenceX/actions/runs/${runId}`;
     const officialData = [
       createMockInferenceData({ hwKey: 'h100', x: 8, y: 240, precision: Precision.FP4 }),
       createMockInferenceData({ hwKey: 'h100', x: 16, y: 200, precision: Precision.FP4 }),
@@ -358,26 +377,26 @@ describe('ScatterGraph', () => {
           x: 8,
           y: 320,
           precision: Precision.FP4,
-          run_url: 'https://github.com/x/y/actions/runs/12345',
+          run_url: runUrl,
         }),
         createMockInferenceData({
           hwKey: 'b200_trt',
           x: 16,
           y: 280,
           precision: Precision.FP4,
-          run_url: 'https://github.com/x/y/actions/runs/12345',
+          run_url: runUrl,
         }),
         createMockInferenceData({
           hwKey: 'b200_trt',
           x: 32,
           y: 220,
           precision: Precision.FP4,
-          run_url: 'https://github.com/x/y/actions/runs/12345',
+          run_url: runUrl,
         }),
       ],
       hardwareConfig: hwConfig,
-      label: 'feature-branch',
-      runUrl: 'https://github.com/x/y/actions/runs/12345',
+      label: runBranch,
+      runUrl,
     };
 
     mountWithProviders(
@@ -403,15 +422,15 @@ describe('ScatterGraph', () => {
         unofficial: {
           activeOverlayHwTypes: new Set(['b200_trt']),
           allOverlayHwTypes: new Set(['b200_trt']),
-          runIndexByUrl: { 'https://github.com/x/y/actions/runs/12345': 0, '12345': 0 },
+          runIndexByUrl: { [runUrl]: 0, [String(runId)]: 0 },
           unofficialRunInfos: [
             {
-              id: 12345,
+              id: runId,
               name: 'CI run',
-              branch: 'feature-branch',
-              sha: 'abc123',
-              createdAt: '2026-05-01T00:00:00Z',
-              url: 'https://github.com/x/y/actions/runs/12345',
+              branch: runBranch,
+              sha: '7a4a06b',
+              createdAt: '2026-08-18T19:40:51Z',
+              url: runUrl,
               conclusion: 'success',
               status: 'completed',
               isNonMainBranch: true,
@@ -435,11 +454,104 @@ describe('ScatterGraph', () => {
     cy.get('#test-scatter-overlay-labels svg .line-label')
       .filter('[data-line-key]:not([data-line-key^="overlay-"])')
       .should('have.length.greaterThan', 0);
-    // Overlay label text is the run's branch name (matching the overlay legend),
-    // not the hw label.
+    // The exact branch that crashed the production page remains visible in the
+    // overlay line label and legend after ScatterGraph's render-time updates.
     cy.get('#test-scatter-overlay-labels svg .line-label[data-line-key^="overlay-"]')
       .find('text')
-      .should('contain.text', 'feature-branch');
+      .should('contain.text', runBranch);
+    cy.get(
+      '#test-scatter-overlay-labels svg .line-label[data-line-key^="overlay-"] .ll-gpu',
+    ).should('not.exist');
+    cy.get('#test-scatter-overlay-labels [data-testid="chart-legend"]').should(
+      'contain.text',
+      runBranch,
+    );
+  });
+
+  it('places precision between the GPU and engine in multi-precision labels', () => {
+    const runUrl = 'https://github.com/x/y/actions/runs/precision-order';
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      y_tpPerGpu_roofline: 'upper_left',
+    });
+    const data = [Precision.FP4, Precision.FP8].flatMap((precision, precisionIndex) =>
+      [8, 16].map((x, index) =>
+        createMockInferenceData({
+          hwKey: 'b200_trt',
+          x,
+          y: 320 - precisionIndex * 20 - index * 40,
+          precision,
+        }),
+      ),
+    );
+    const overlayData = {
+      data: [Precision.FP4, Precision.FP8].flatMap((precision, precisionIndex) =>
+        [8, 16].map((x, index) =>
+          createMockInferenceData({
+            hwKey: 'h100_vllm',
+            x,
+            y: 260 - precisionIndex * 20 - index * 40,
+            precision,
+            run_url: runUrl,
+          }),
+        ),
+      ),
+      hardwareConfig: hwConfig,
+      label: '',
+      runUrl,
+    };
+
+    mountWithProviders(
+      <div style={{ width: 800, height: 600 }}>
+        <ScatterGraph
+          chartId="test-scatter-precision-order"
+          modelLabel="DeepSeek R1"
+          data={data}
+          xLabel="Concurrency"
+          yLabel="Throughput / Chip (tok/s)"
+          chartDefinition={chartDefinition}
+          overlayData={overlayData}
+        />
+      </div>,
+      {
+        inference: {
+          hardwareConfig: hwConfig,
+          activeHwTypes: new Set(['b200_trt']),
+          hwTypesWithData: new Set(['b200_trt']),
+          selectedPrecisions: [Precision.FP4, Precision.FP8],
+          showLineLabels: true,
+        },
+        unofficial: {
+          activeOverlayHwTypes: new Set(['h100_vllm']),
+          allOverlayHwTypes: new Set(['h100_vllm']),
+          runIndexByUrl: { [runUrl]: 0, 'precision-order': 0 },
+          // No run metadata: exercise the hardware-label fallback path.
+          unofficialRunInfos: [],
+        },
+      },
+    );
+
+    cy.get('#test-scatter-precision-order svg .line-label[data-hw-key="b200_trt"] .ll-text')
+      .should('have.length', 2)
+      .then(($labels) => {
+        expect($labels.toArray().map((label) => label.textContent)).to.have.members([
+          'B200 FP4 (TRTLLM)',
+          'B200 FP8 (TRTLLM)',
+        ]);
+        for (const label of $labels) {
+          expect(
+            [...label.querySelectorAll('tspan')].map((segment) => segment.className.baseVal),
+          ).to.deep.equal(['ll-gpu', 'll-precision', 'll-engine']);
+        }
+      });
+    cy.get('#test-scatter-precision-order svg .line-label[data-line-key^="overlay-"] .ll-text')
+      .should('have.length', 2)
+      .then(($labels) => {
+        expect($labels.toArray().map((label) => label.textContent)).to.have.members([
+          'H100 FP4 (vLLM)',
+          'H100 FP8 (vLLM)',
+        ]);
+      });
   });
 
   it('renders a line label for a singleton unofficial overlay series', () => {
@@ -548,21 +660,25 @@ describe('ScatterGraph', () => {
       createMockInferenceData({ hwKey: 'h100', x: 300, y: 190, precision: Precision.FP8 }),
       createMockInferenceData({ hwKey: 'h100', x: 340, y: 150, precision: Precision.FP8 }),
     ];
-    const baseInference = createMockInferenceContext();
+    const baseInference = createMockInferenceContextValues();
 
     function IngestedSingletonLabelHarness() {
       const [showLineLabels, setShowLineLabels] = useState(true);
+      const inference = {
+        ...baseInference,
+        hardwareConfig: hwConfig,
+        activeHwTypes: new Set(['b200_tilert_mtp', 'h100']),
+        hwTypesWithData: new Set(['b200_tilert_mtp', 'h100']),
+        selectedPrecisions: [Precision.FP8],
+        showLineLabels,
+        setShowLineLabels,
+      };
       return (
-        <InferenceContext.Provider
-          value={{
-            ...baseInference,
-            hardwareConfig: hwConfig,
-            activeHwTypes: new Set(['b200_tilert_mtp', 'h100']),
-            hwTypesWithData: new Set(['b200_tilert_mtp', 'h100']),
-            selectedPrecisions: [Precision.FP8],
-            showLineLabels,
-            setShowLineLabels,
-          }}
+        <InferenceContextsProvider
+          data={inference}
+          filters={inference}
+          display={inference}
+          actions={inference}
         >
           <div style={{ width: 800, height: 600 }}>
             <ScatterGraph
@@ -574,7 +690,7 @@ describe('ScatterGraph', () => {
               chartDefinition={interactivityChartDef}
             />
           </div>
-        </InferenceContext.Provider>
+        </InferenceContextsProvider>
       );
     }
 
@@ -585,7 +701,18 @@ describe('ScatterGraph', () => {
       .should('have.css', 'opacity', '1')
       .find('text')
       .should('have.text', 'B200 (TileRT, MTP)');
+    cy.get(
+      '#test-scatter-ingested-singleton-label svg .line-label[data-hw-key="b200_tilert_mtp"] .ll-gpu',
+    )
+      .should('have.text', 'B200')
+      .and('have.attr', 'font-weight', '700');
+    cy.get(
+      '#test-scatter-ingested-singleton-label svg .line-label[data-hw-key="b200_tilert_mtp"] .ll-engine',
+    )
+      .should('have.text', ' (TileRT, MTP)')
+      .and('have.attr', 'fill', '#d1d5db');
 
+    expandLegendAdvanced();
     cy.get('#scatter-line-labels').click();
     cy.get('#test-scatter-ingested-singleton-label svg .line-label').should('not.exist');
     cy.get('#scatter-line-labels').click();
@@ -676,6 +803,12 @@ describe('ScatterGraph', () => {
     cy.get('#test-scatter-m3-eagle svg .line-label[data-line-key^="overlay-"]')
       .find('text')
       .should('contain.text', 'EAGLE');
+    cy.get('#test-scatter-m3-eagle svg .line-label[data-line-key^="overlay-"] .ll-gpu')
+      .should('have.text', 'B200')
+      .and('have.attr', 'font-weight', '700');
+    cy.get('#test-scatter-m3-eagle svg .line-label[data-line-key^="overlay-"] .ll-engine')
+      .should('contain.text', 'EAGLE')
+      .and('have.attr', 'fill', '#d1d5db');
     // No label should show the generic MTP token for M3.
     cy.get('#test-scatter-m3-eagle svg .line-label text').should('not.contain.text', 'MTP');
   });
@@ -767,15 +900,84 @@ describe('ScatterGraph', () => {
     ).should('have.css', 'opacity', '1');
     // The exclusion resolver must be bypassed rather than resolving in favor of
     // either the official or overlay engine family.
-    cy.get('@setActiveOverlayHwTypes').should('not.have.been.called');
+    cy.get('@setUnifiedOverlaySelection').should('not.have.been.called');
 
     // An additional official engine can also be selected while the preview is
     // loaded; the production-only conflict toggle must not be consulted.
     cy.get('label[for="checkbox-h100_vllm"]').click();
     cy.get('@blockedComparisonToggle').should('not.have.been.called');
-    cy.get('@setLocalOfficialOverride').should((setOverride) => {
-      const selection = setOverride.lastCall.args[0] as Set<string>;
-      expect([...selection]).to.have.members(['b200_sglang', 'h100_vllm']);
+    cy.get('@setUnifiedOverlaySelection').should((setSelection) => {
+      const official = setSelection.lastCall.args[0] as Set<string>;
+      expect([...official]).to.have.members(['b200_sglang', 'h100_vllm']);
+    });
+  });
+
+  it('keeps the unofficial overlay active when soloing an official hardware series', () => {
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      y_tpPerGpu_roofline: 'upper_left',
+    });
+    const officialData = ['b200_sglang', 'h100_vllm'].flatMap((hwKey, hwIndex) =>
+      [8, 16, 32].map((x, index) =>
+        createMockInferenceData({
+          hwKey,
+          x,
+          y: 320 - hwIndex * 20 - index * 40,
+          precision: Precision.FP4,
+        }),
+      ),
+    );
+    const runUrl = 'https://github.com/x/y/actions/runs/official-solo';
+    const overlayData = {
+      data: [8, 16, 32].map((x, index) =>
+        createMockInferenceData({
+          hwKey: 'h100_vllm',
+          x,
+          y: 260 - index * 40,
+          precision: Precision.FP4,
+          run_url: runUrl,
+        }),
+      ),
+      hardwareConfig: hwConfig,
+      label: 'official-solo',
+      runUrl,
+    };
+
+    mountWithProviders(
+      <div style={{ width: 800, height: 600 }}>
+        <ScatterGraph
+          chartId="test-scatter-official-solo"
+          modelLabel="DeepSeek V4 Pro"
+          data={officialData}
+          xLabel="Concurrency"
+          yLabel="Throughput / Chip (tok/s)"
+          chartDefinition={chartDefinition}
+          overlayData={overlayData}
+        />
+      </div>,
+      {
+        inference: {
+          hardwareConfig: hwConfig,
+          activeHwTypes: new Set(['b200_sglang', 'h100_vllm']),
+          hwTypesWithData: new Set(['b200_sglang', 'h100_vllm']),
+          selectedModel: Model.DeepSeek_V4_Pro,
+          selectedSequence: Sequence.AgenticTraces,
+          selectedPrecisions: [Precision.FP4],
+        },
+        unofficial: {
+          activeOverlayHwTypes: new Set(['h100_vllm']),
+          allOverlayHwTypes: new Set(['h100_vllm']),
+        },
+      },
+    );
+
+    cy.get('#test-scatter-official-solo svg .overlay-roofline-path').should('exist');
+    cy.get('label[for="checkbox-h100_vllm"]').click();
+    cy.get('@setUnifiedOverlaySelection').should((setSelection) => {
+      const official = setSelection.lastCall.args[0] as Set<string>;
+      const overlay = setSelection.lastCall.args[1] as Set<string>;
+      expect([...official]).to.deep.equal(['h100_vllm']);
+      expect([...overlay]).to.deep.equal(['h100_vllm']);
     });
   });
 
@@ -938,7 +1140,7 @@ describe('ScatterGraph', () => {
 });
 
 describe('ChartDisplay engine comparison guard', () => {
-  it('includes cost-clipped official and unofficial points in table mode', () => {
+  it('includes explicitly clipped official and unofficial points in table mode', () => {
     const chartDefinition = createMockChartDefinition({
       chartType: 'interactivity',
       x: 'median_intvty',
@@ -1044,8 +1246,8 @@ describe('ChartDisplay engine comparison guard', () => {
 
   it('keeps official table rows synchronized with legend state after a scope change', () => {
     const chartDefinition = createMockChartDefinition({ chartType: 'interactivity' });
-    const baseInference = createMockInferenceContext();
-    const baseGlobalFilters = createMockGlobalFilterContext();
+    const baseInference = createMockInferenceContextValues();
+    const baseGlobalFilters = createMockGlobalFilterContexts().selection;
 
     function OfficialRowsScopeHarness() {
       const [secondScope, setSecondScope] = useState(false);
@@ -1082,8 +1284,13 @@ describe('ChartDisplay engine comparison guard', () => {
       };
 
       return (
-        <GlobalFilterContext.Provider value={globalFilters}>
-          <InferenceContext.Provider value={inference}>
+        <GlobalFilterSelectionContext.Provider value={globalFilters}>
+          <InferenceContextsProvider
+            data={inference}
+            filters={inference}
+            display={inference}
+            actions={inference}
+          >
             <button data-testid="change-official-table-scope" onClick={() => setSecondScope(true)}>
               Change scope
             </button>
@@ -1094,8 +1301,8 @@ describe('ChartDisplay engine comparison guard', () => {
               Select vLLM
             </button>
             <ChartDisplay />
-          </InferenceContext.Provider>
-        </GlobalFilterContext.Provider>
+          </InferenceContextsProvider>
+        </GlobalFilterSelectionContext.Provider>
       );
     }
 
@@ -1111,7 +1318,62 @@ describe('ChartDisplay engine comparison guard', () => {
     cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 1);
     cy.get('[data-testid="inference-results-table"] tbody').contains('vLLM').should('exist');
     cy.get('[data-testid="inference-results-table"] tbody').contains('SGLang').should('not.exist');
-    cy.get('@setLocalOfficialOverride').should('not.have.been.called');
+    cy.get('@setUnifiedOverlaySelection').should('not.have.been.called');
+  });
+
+  it('renders the table columns without the median interactivity or TTFT columns', () => {
+    // Mirror the real interactivity chart: x IS interactivity, which is what
+    // made the separate median column a duplicate.
+    const chartDefinition = createMockChartDefinition({
+      chartType: 'interactivity',
+      x: 'median_intvty',
+      x_label: 'Interactivity (tok/s/user)',
+    });
+    const row = createMockInferenceData({
+      hwKey: 'b200_sglang',
+      hw: 'Official SGLang',
+      model: Model.DeepSeek_V4_Pro,
+      precision: Precision.FP4,
+    });
+
+    mountWithProviders(<ChartDisplay />, {
+      inference: {
+        graphs: [
+          {
+            model: Model.DeepSeek_V4_Pro,
+            sequence: Sequence.AgenticTraces,
+            chartDefinition,
+            data: [row],
+          },
+        ],
+        selectedModel: Model.DeepSeek_V4_Pro,
+        selectedSequence: Sequence.AgenticTraces,
+        selectedXAxisMode: 'interactivity',
+        activeHwTypes: new Set(['b200_sglang']),
+        hwTypesWithData: new Set(['b200_sglang']),
+      },
+      globalFilters: {
+        selectedModel: Model.DeepSeek_V4_Pro,
+        selectedSequence: Sequence.AgenticTraces,
+        effectiveSequence: Sequence.AgenticTraces,
+      },
+      unofficial: {},
+    });
+
+    cy.get('[data-testid="inference-table-view-btn"]').click();
+    cy.get('[data-testid="inference-results-table"] thead th').then(($headers) => {
+      const headers = [...$headers].map((th) => (th.textContent ?? '').trim());
+      // Interactivity is already the x-axis column on the interactivity chart,
+      // so the median column duplicated it. Assert both that the column is gone
+      // and that exactly one interactivity column remains, so a rename cannot
+      // quietly reintroduce the duplicate.
+      expect(headers).to.not.include('Median Interactivity (tok/s)');
+      expect(headers.filter((h) => h.toLowerCase().includes('interactivity'))).to.have.length(1);
+      // Median TTFT was dropped too; unlike interactivity it is not duplicated
+      // by the x-axis column, so nothing else in the table should carry it.
+      expect(headers).to.not.include('Median TTFT (ms)');
+      expect(headers.filter((h) => h.toLowerCase().includes('ttft'))).to.have.length(0);
+    });
   });
 
   it('keeps same-hardware cross-engine AgentX STP rows out of table mode', () => {
@@ -1249,8 +1511,10 @@ describe('ChartDisplay engine comparison guard', () => {
     cy.get('[data-testid="inference-results-table"] tbody tr').should('have.length', 2);
     cy.get('[data-testid="inference-results-table"] tbody').contains('vLLM').should('exist');
     cy.get('[data-testid="inference-results-table"] tbody').contains('SGLang').should('exist');
-    // The reconciliation effect must not strip the run's hw types from the provider.
-    cy.get('@setActiveOverlayHwTypes').should('not.have.been.called');
+    cy.get('@reconcileOverlayScope').should((reconcile) => {
+      const scope = reconcile.lastCall.args[0] as { overlayHwTypes: Set<string> };
+      expect([...scope.overlayHwTypes]).to.have.members(['h100_vllm']);
+    });
   });
 
   it('keeps an explicitly empty official legend out of table mode', () => {
@@ -1320,15 +1584,24 @@ describe('ChartDisplay engine comparison guard', () => {
       status: 'completed',
       isNonMainBranch: true,
     };
-    const baseInference = createMockInferenceContext();
-    const baseGlobalFilters = createMockGlobalFilterContext();
+    const baseInference = createMockInferenceContextValues();
+    const baseGlobalFilters = createMockGlobalFilterContexts().selection;
     const baseUnofficial = createMockUnofficialRunContext();
 
     function OverlayScopeHarness() {
       const [secondScope, setSecondScope] = useState(false);
       const [secondScopeLoaded, setSecondScopeLoaded] = useState(false);
-      const [activeOverlayKeys, setActiveOverlayKeys] = useState(new Set(['h100_sglang']));
-      const [officialOverride, setOfficialOverride] = useState<Set<string> | null>(null);
+      const [selection, dispatchSelection] = useReducer(overlaySelectionReducer, {
+        availabilityKey: String(runInfo.id),
+        activeOverlayHwTypes: new Set(['h100_sglang']),
+        availableOverlayHwTypes: new Set(['h100_sglang', 'h200_sglang', 'b200_vllm']),
+        localOfficialOverride: null,
+        scopeKey: `${Model.DeepSeek_V4_Pro}|${Sequence.AgenticTraces}|${Precision.FP4}|${runInfo.url}|official:b200_sglang|overlay:h100_sglang,h200_sglang`,
+        scopeOverlayHwTypes: new Set(['h100_sglang', 'h200_sglang']),
+        scopeReady: true,
+        bestSelectionKey: '',
+        bestPerSku: false,
+      });
       const [, setRenderVersion] = useState(0);
       const model = secondScope ? Model.DeepSeek_R1 : Model.DeepSeek_V4_Pro;
       const officialKeys = secondScope ? ['h100_vllm', 'b200_sglang'] : ['b200_sglang'];
@@ -1387,17 +1660,25 @@ describe('ChartDisplay engine comparison guard', () => {
         unofficialRunInfos: [runInfo],
         runIndexByUrl: { [runInfo.url]: 0, [String(runInfo.id)]: 0 },
         getOverlayData: () => ({ data: overlayRows, hardwareConfig: hwConfig }),
-        activeOverlayHwTypes: activeOverlayKeys,
-        setActiveOverlayHwTypes: setActiveOverlayKeys,
-        allOverlayHwTypes: new Set(['h100_sglang', 'h200_sglang', 'b200_vllm']),
-        localOfficialOverride: officialOverride,
-        setLocalOfficialOverride: setOfficialOverride,
+        activeOverlayHwTypes: selection.activeOverlayHwTypes,
+        reconcileOverlayScope: (
+          input: Parameters<typeof baseUnofficial.reconcileOverlayScope>[0],
+        ) => dispatchSelection({ type: 'scope', input }),
+        setUnifiedOverlaySelection: (official: Set<string>, overlay: Set<string>) =>
+          dispatchSelection({ type: 'selection', official, overlay }),
+        allOverlayHwTypes: selection.availableOverlayHwTypes,
+        localOfficialOverride: selection.localOfficialOverride,
       };
 
       return (
-        <GlobalFilterContext.Provider value={globalFilters}>
+        <GlobalFilterSelectionContext.Provider value={globalFilters}>
           <UnofficialRunContext.Provider value={unofficial}>
-            <InferenceContext.Provider value={inference}>
+            <InferenceContextsProvider
+              data={inference}
+              filters={inference}
+              display={inference}
+              actions={inference}
+            >
               <button data-testid="change-overlay-scope" onClick={() => setSecondScope(true)}>
                 Change scope
               </button>
@@ -1406,7 +1687,13 @@ describe('ChartDisplay engine comparison guard', () => {
               </button>
               <button
                 data-testid="clear-overlay-scope"
-                onClick={() => setActiveOverlayKeys(new Set())}
+                onClick={() =>
+                  dispatchSelection({
+                    type: 'selection',
+                    official: selection.localOfficialOverride ?? new Set(officialKeys),
+                    overlay: new Set(),
+                  })
+                }
               >
                 Clear overlays
               </button>
@@ -1417,9 +1704,9 @@ describe('ChartDisplay engine comparison guard', () => {
                 Rerender
               </button>
               <ChartDisplay />
-            </InferenceContext.Provider>
+            </InferenceContextsProvider>
           </UnofficialRunContext.Provider>
-        </GlobalFilterContext.Provider>
+        </GlobalFilterSelectionContext.Provider>
       );
     }
 

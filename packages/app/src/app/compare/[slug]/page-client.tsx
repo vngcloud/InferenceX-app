@@ -3,21 +3,26 @@
 import Link from 'next/link';
 import { useEffect, useMemo } from 'react';
 
-import type { GPUDataPoint, InterpolatedResult } from '@/components/calculator/types';
+import type { GPUDataPoint } from '@/components/calculator/types';
 import { useThroughputData } from '@/components/calculator/useThroughputData';
-import { CompareInterpolatedTable } from '@/components/compare/compare-interpolated-table';
-import { useGlobalFilters, GlobalFilterProvider } from '@/components/GlobalFilterContext';
+import {
+  CompareTableRenderer,
+  type CompareTableData,
+} from '@/components/compare/compare-table-renderer';
+import {
+  GlobalFilterProvider,
+  useGlobalFilterAvailability,
+  useGlobalFilterRun,
+  useGlobalFilterSelection,
+} from '@/components/GlobalFilterContext';
 import { InferenceProvider } from '@/components/inference/InferenceContext';
 import InferenceChartDisplay from '@/components/inference/ui/ChartDisplay';
 import { Card } from '@/components/ui/card';
 import { track } from '@/lib/analytics';
+import type { BenchmarkRow } from '@/lib/api';
+import { toCalculatorBenchmarkRows } from '@/lib/benchmark-api-view';
 import { toModel, toPrecisions, toSequence } from '@/lib/compare-enum-coerce';
-
-interface SsrTableData {
-  defaultTargets: number[];
-  ssrRows: { target: number; a: InterpolatedResult | null; b: InterpolatedResult | null }[];
-  interactivityRange: { min: number; max: number };
-}
+import type { AgenticScenarioIntro } from '@/lib/compare-ssr';
 
 const STRINGS = {
   en: {
@@ -30,13 +35,13 @@ const STRINGS = {
       'No interpolated comparison data available for the default model. Use the chart controls below to select a model with benchmark data for both chips.',
   },
   zh: {
-    eyebrowSuffix: 'Chip 对比',
+    eyebrowSuffix: '芯片对比',
     mainChartLinkText: '主推理图表',
     perDollarLinkText: '查看每美元性能对比 →',
     caveatSeqFallback: '序列',
     caveatPrecFallback: '精度',
     emptyState:
-      '当前默认模型没有可用的插值对比数据。请使用下方图表控件选择一个两款 Chip 均有基准测试数据的模型。',
+      '当前默认模型没有可用的插值对比数据。请使用下方图表控件选择一个两款芯片均有基准测试数据的模型。',
   },
 } as const;
 
@@ -54,13 +59,18 @@ interface ComparePageClientProps {
   defaultModel: string;
   defaultSequence: string | null;
   defaultPrecision: string | null;
-  ssrTableData: SsrTableData;
+  ssrTableData: CompareTableData;
+  initialBenchmarkRows?: BenchmarkRow[];
   /** One SSR-rendered prose paragraph per interpolated-table row (default
    *  interactivity target). Each paragraph picks a template variant
    *  deterministically from the slug so prose stays stable across renders
    *  but varies across pages in the catalog. Empty array when there's no
    *  comparable data. */
   narrative: string[];
+  /** Set only when the page is rendering the agentic workload. Explains what
+   *  AgentX measures before the head-to-head numbers, since a reader who
+   *  arrived from a GPU query has no reason to expect a replayed trace. */
+  agenticIntro?: AgenticScenarioIntro | null;
   aLabel: string;
   bLabel: string;
   aVendor: string;
@@ -80,7 +90,9 @@ export default function ComparePageClient({
   defaultSequence,
   defaultPrecision,
   ssrTableData,
+  initialBenchmarkRows,
   narrative,
+  agenticIntro = null,
   aLabel,
   bLabel,
   aVendor,
@@ -96,6 +108,14 @@ export default function ComparePageClient({
   const compareGpuPair = useMemo(() => [a, b] as const, [a, b]);
   const initialModel = toModel(defaultModel);
   const initialSequence = toSequence(defaultSequence);
+  const benchmarkQueryScope = `compare-pair:${a}:${b}`;
+  const initialCalculatorRows = useMemo(
+    () =>
+      initialBenchmarkRows && defaultSequence
+        ? toCalculatorBenchmarkRows(initialBenchmarkRows, defaultSequence)
+        : undefined,
+    [defaultSequence, initialBenchmarkRows],
+  );
   const initialPrecisions = toPrecisions(defaultPrecision);
   const t = STRINGS[locale];
   const isZh = locale === 'zh';
@@ -110,6 +130,9 @@ export default function ComparePageClient({
         activeTab="compare"
         initialActiveHwTypes={[a, b]}
         compareGpuPair={compareGpuPair}
+        benchmarkQueryScope={benchmarkQueryScope}
+        initialBenchmarkModel={initialModel}
+        initialBenchmarkRows={initialBenchmarkRows}
       >
         <div className="flex flex-col gap-4">
           <Card className="flex flex-col gap-3">
@@ -140,6 +163,21 @@ export default function ComparePageClient({
                     {t.mainChartLinkText}
                   </Link>
                   .
+                </p>
+              )}
+              {agenticIntro && (
+                <p
+                  className="mt-3 max-w-3xl text-sm text-foreground/80"
+                  data-testid="compare-agentic-intro"
+                >
+                  {agenticIntro.paragraph}{' '}
+                  <Link
+                    href={agenticIntro.href}
+                    data-testid="compare-agentic-intro-link"
+                    className="font-medium text-brand underline underline-offset-4 hover:no-underline"
+                  >
+                    {agenticIntro.linkLabel} →
+                  </Link>
                 </p>
               )}
               {narrative.length > 0 && (
@@ -177,6 +215,9 @@ export default function ComparePageClient({
               aLabel={aLabel}
               bLabel={bLabel}
               ssrTableData={ssrTableData}
+              initialModel={initialModel}
+              initialSequence={initialSequence}
+              initialCalculatorRows={initialCalculatorRows}
               emptyStateText={t.emptyState}
             />
           </Card>
@@ -193,23 +234,46 @@ function CompareTableSection({
   aLabel,
   bLabel,
   ssrTableData,
+  initialModel,
+  initialSequence,
+  initialCalculatorRows,
   emptyStateText,
 }: {
   a: string;
   b: string;
   aLabel: string;
   bLabel: string;
-  ssrTableData: SsrTableData;
+  ssrTableData: CompareTableData;
+  initialModel: ReturnType<typeof toModel>;
+  initialSequence: ReturnType<typeof toSequence>;
+  initialCalculatorRows?: BenchmarkRow[];
   emptyStateText: string;
 }) {
-  const { effectiveSequence, effectivePrecisions, selectedRunDate, selectedModel } =
-    useGlobalFilters();
+  const { effectiveSequence, effectivePrecisions, selectedModel, sequenceResolved } =
+    useGlobalFilterSelection();
+  const { availableDates } = useGlobalFilterAvailability();
+  const { selectedRunDate } = useGlobalFilterRun();
+  const latestAvailableDate = availableDates.at(-1) ?? '';
+  const calculatorRunDate =
+    selectedRunDate && selectedRunDate === latestAvailableDate ? '' : selectedRunDate;
+  const initialRows =
+    initialCalculatorRows &&
+    sequenceResolved &&
+    selectedModel === initialModel &&
+    effectiveSequence === initialSequence &&
+    calculatorRunDate === ''
+      ? initialCalculatorRows
+      : undefined;
 
   const { gpuDataByGroupKey, ranges, hasData } = useThroughputData(
     selectedModel,
     effectiveSequence,
     effectivePrecisions,
-    selectedRunDate,
+    calculatorRunDate,
+    undefined,
+    undefined,
+    initialRows,
+    sequenceResolved,
   );
 
   // Extract GPUDataPoint arrays for just the two GPUs in the pair.
@@ -229,23 +293,15 @@ function CompareTableSection({
 
   const clientRange = hasData ? ranges.interactivity : ssrTableData.interactivityRange;
 
-  if (ssrTableData.defaultTargets.length === 0) {
-    return (
-      <div className="border border-border/50 rounded-md px-4 py-3 text-sm text-muted-foreground bg-muted/30">
-        {emptyStateText}
-      </div>
-    );
-  }
-
   return (
-    <CompareInterpolatedTable
+    <CompareTableRenderer
       aLabel={aLabel}
       bLabel={bLabel}
-      ssrRows={ssrTableData.ssrRows}
-      defaultTargets={ssrTableData.defaultTargets}
+      ssrTableData={ssrTableData}
       interactivityRange={clientRange}
       gpuDataPointsA={pointsA}
       gpuDataPointsB={pointsB}
+      emptyStateText={emptyStateText}
     />
   );
 }

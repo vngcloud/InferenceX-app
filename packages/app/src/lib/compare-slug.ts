@@ -50,7 +50,7 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
     slug: 'deepseek-v4',
     displayName: 'DeepSeek-V4-Pro',
     dbKeys: ['dsv4'],
-    label: 'DeepSeek V4 Pro 1.6T',
+    label: 'DeepSeekv4 Pro 0813 1.6T',
     seoName: 'DeepSeek V4 Pro',
   },
   {
@@ -104,7 +104,10 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
     slug: 'glm-5-2',
     displayName: 'GLM-5.2',
     dbKeys: ['glm5.2'],
-    label: 'GLM 5.2',
+    // GLM-5.2 and GLM-5.3 share one data bucket (see MODEL_CONFIG); the card
+    // shows the current release. `slug`, `displayName`, and `dbKeys` stay on
+    // 5.2 so URLs and the `g_model` param keep resolving.
+    label: 'GLM 5.3 744B',
     seoName: 'GLM-5.2',
   },
   {
@@ -125,6 +128,15 @@ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
     label: 'MiniMax M2.5/M2.7',
     // Primary version the slug canonicalizes to (M2.7).
     seoName: 'MiniMax M2.7',
+  },
+  {
+    slug: 'qwen-3-8-flash-next',
+    displayName: 'Qwen3.8-Flash-Next',
+    dbKeys: ['qwen3.8next'],
+    // 176B total: a 125B main model plus a 51B n-gram embedding table, with 6B
+    // active per forward pass (MoE). The 4B MTP head sits outside that total.
+    label: 'Qwen 3.8 Flash Next 176B-A6B',
+    seoName: 'Qwen3.8-Flash-Next',
   },
   {
     slug: 'qwen-3-5',
@@ -187,6 +199,20 @@ const CANONICAL_MODEL_SLUGS = new Set(COMPARE_MODEL_SLUGS.map((m) => m.slug));
 export function getCompareModelBySlug(slug: string): CompareModelSlug | null {
   const canonical = COMPARE_MODEL_ALIASES[slug] ?? slug;
   return SLUG_TO_MODEL[canonical] ?? null;
+}
+
+const DISPLAY_NAME_TO_SLUG: Record<string, CompareModelSlug> = Object.fromEntries(
+  COMPARE_MODEL_SLUGS.map((m) => [m.displayName, m]),
+);
+
+/**
+ * Resolve a dashboard model (the `Model` enum value / `g_model` param) to its
+ * canonical model-page slug entry. Used by the `/model/[slug]` pages and by
+ * the dashboard's "learn more about the architecture" link. Returns null for
+ * models without a public slug (e.g. hidden models like Llama 3.1 70B).
+ */
+export function getModelSlugEntryForDisplayName(displayName: string): CompareModelSlug | null {
+  return DISPLAY_NAME_TO_SLUG[displayName] ?? null;
 }
 
 // ---------------------------------------------------------------------------

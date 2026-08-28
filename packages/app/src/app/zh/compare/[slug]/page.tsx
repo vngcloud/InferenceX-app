@@ -4,7 +4,12 @@ import { notFound, permanentRedirect } from 'next/navigation';
 import { HW_REGISTRY, SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
 
 import { JsonLd } from '@/components/json-ld';
-import { pickPairDefaults } from '@/lib/compare-pair-defaults';
+import {
+  isAgenticSequence,
+  type ScenarioSegment,
+  sequenceForScenarioSegment,
+} from '@/lib/compare-scenario-route';
+import { comparisonScenarioForModel } from '@/lib/compare-agentx';
 import {
   canonicalCompareSlug,
   compareDisplayLabel,
@@ -12,17 +17,13 @@ import {
   compareModelSeoName,
   parseCompareSlug,
 } from '@/lib/compare-slug';
+import { KNOWN_MODELS, KNOWN_PRECISIONS, KNOWN_SEQUENCES, pickString } from '@/lib/compare-ssr';
 import {
-  computeCompareTableData,
-  dateRangeForPair,
-  getCachedBenchmarks,
-  KNOWN_MODELS,
-  KNOWN_PRECISIONS,
-  KNOWN_SEQUENCES,
-  pickString,
-  summarize,
-} from '@/lib/compare-ssr';
+  getComparePageDerivedData,
+  initialCompareBenchmarkRows,
+} from '@/lib/compare-page-data.server';
 import {
+  AGENTIC_SCENARIO_INTRO_ZH,
   buildBreadcrumbJsonLdZh,
   buildJsonLdZh,
   compareMetaDescriptionZh,
@@ -34,6 +35,28 @@ import ComparePageClient from '../../../compare/[slug]/page-client';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * `/zh/compare/<slug>/<scenario>` renders this same page with the workload
+ * pinned by the path. The segment is threaded through rather than duplicated
+ * in a parallel route file so the body — redirects, JSON-LD, metadata, client
+ * props — is written once and cannot drift between the two URLs.
+ */
+export interface ScenarioOptions {
+  scenarioSegment?: ScenarioSegment;
+}
+
+/** English twin of `scenarioPath` — hreflang pairs are keyed off the
+ *  English route, so the segment has to survive the locale swap. */
+function enScenarioPath(canonical: string, scenarioSegment?: ScenarioSegment): string {
+  return scenarioSegment ? `/compare/${canonical}/${scenarioSegment}` : `/compare/${canonical}`;
+}
+
+function scenarioPath(canonical: string, scenarioSegment?: ScenarioSegment): string {
+  return scenarioSegment
+    ? `/zh/compare/${canonical}/${scenarioSegment}`
+    : `/zh/compare/${canonical}`;
+}
+
 interface Props {
   params: Promise<{ slug: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -41,13 +64,25 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
+  return buildCompareMetadataZh(slug, {});
+}
+
+export async function buildCompareMetadataZh(
+  slug: string,
+  { scenarioSegment }: ScenarioOptions,
+): Promise<Metadata> {
   const parsed = parseCompareSlug(slug);
   if (!parsed) return {};
   const fullLabel = compareModelDisplayLabel(parsed.model, parsed.a, parsed.b);
   const gpuLabel = compareDisplayLabel(parsed.a, parsed.b);
   const modelSeoName = compareModelSeoName(parsed.model);
   const canonical = canonicalCompareSlug(parsed.model.slug, parsed.a, parsed.b);
-  const url = `${SITE_URL}/zh/compare/${canonical}`;
+  // The scenario segments are views of one comparison, so the bare slug URL
+  // stays the indexable representative and every segment canonicalizes to it.
+  // Without this, `/…/<slug>/<default-scenario>` and `/…/<slug>` would serve
+  // byte-identical pages, each claiming to be canonical.
+  const routePath = scenarioPath(canonical, scenarioSegment);
+  const url = `${SITE_URL}${routePath}`;
 
   // GPU-pair-first title (mirrors the English page) via `absolute` so the long
   // root template doesn't bury the search phrase. Model name / SKUs stay English.
@@ -55,15 +90,20 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   // Stat-led Chinese meta description from the interpolated head-to-head numbers
   // at the slug's default operating point (falls back to boilerplate when thin).
-  const rows = await getCachedBenchmarks(parsed.model.dbKeys);
-  const { sequence, precision } = pickPairDefaults(rows, parsed.a, parsed.b);
-  const { ssrRows } = computeCompareTableData(rows, parsed.a, parsed.b, sequence, precision);
+  const { ssrRows } = await getComparePageDerivedData(
+    parsed.model.dbKeys,
+    parsed.a,
+    parsed.b,
+    null,
+    null,
+    comparisonScenarioForModel(parsed.model).sequence,
+  );
   const description = compareMetaDescriptionZh(parsed.model, parsed.a, parsed.b, ssrRows);
 
   return {
     title: { absolute: title },
     description,
-    alternates: zhAlternates(`/compare/${canonical}`),
+    alternates: zhAlternates(enScenarioPath(canonical)),
     openGraph: {
       title: `${fullLabel} | ${SITE_NAME}`,
       description,
@@ -81,10 +121,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ComparePageZh({ params, searchParams }: Props) {
   const { slug } = await params;
+  return renderComparePageZh(slug, await searchParams, {});
+}
+
+export async function renderComparePageZh(
+  slug: string,
+  sp: Record<string, string | string[] | undefined>,
+  { scenarioSegment }: ScenarioOptions,
+) {
   const parsed = parseCompareSlug(slug);
   if (!parsed) notFound();
-
-  const sp = await searchParams;
 
   const canonical = canonicalCompareSlug(parsed.model.slug, parsed.a, parsed.b);
   if (canonical !== slug.toLowerCase()) {
@@ -96,36 +142,44 @@ export default async function ComparePageZh({ params, searchParams }: Props) {
       })
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
       .join('&');
-    permanentRedirect(`/zh/compare/${canonical}${qs ? `?${qs}` : ''}`);
+    // Keep the scenario segment across the redirect — dropping it would send
+    // the reader to the pair's default workload instead.
+    permanentRedirect(`${scenarioPath(canonical, scenarioSegment)}${qs ? `?${qs}` : ''}`);
   }
 
-  const rows = await getCachedBenchmarks(parsed.model.dbKeys);
-  const summaryA = summarize(rows, parsed.a);
-  const summaryB = summarize(rows, parsed.b);
-  const { sequence: pickedSequence, precision: pickedPrecision } = pickPairDefaults(
-    rows,
-    parsed.a,
-    parsed.b,
-  );
+  const fallbackSequence = comparisonScenarioForModel(parsed.model).sequence;
 
   const urlSeq = pickString(sp.i_seq);
   const urlPrec = pickString(sp.i_prec);
   const urlModel = pickString(sp.g_model);
-  const effectiveSequence = urlSeq && KNOWN_SEQUENCES.has(urlSeq) ? urlSeq : pickedSequence;
-  const effectivePrecision = urlPrec && KNOWN_PRECISIONS.has(urlPrec) ? urlPrec : pickedPrecision;
   const effectiveModel =
     urlModel && KNOWN_MODELS.has(urlModel) ? urlModel : parsed.model.displayName;
-
-  const { defaultTargets, ssrRows, interactivityRange } = computeCompareTableData(
-    rows,
+  // Path beats query beats the pair's default: a scenario segment is an
+  // explicit address for one workload, so it outranks a stale `?i_seq=`.
+  const pathSequence = scenarioSegment ? sequenceForScenarioSegment(scenarioSegment) : null;
+  const requestedSequence = pathSequence ?? (urlSeq && KNOWN_SEQUENCES.has(urlSeq) ? urlSeq : null);
+  const requestedPrecision = urlPrec && KNOWN_PRECISIONS.has(urlPrec) ? urlPrec : null;
+  const {
+    sequence: effectiveSequence,
+    precision: effectivePrecision,
+    summaryA,
+    summaryB,
+    defaultTargets,
+    ssrRows,
+    interactivityRange,
+    oldest,
+    newest,
+    initialPairBenchmarkRows,
+  } = await getComparePageDerivedData(
+    parsed.model.dbKeys,
     parsed.a,
     parsed.b,
-    effectiveSequence,
-    effectivePrecision,
+    requestedSequence,
+    requestedPrecision,
+    fallbackSequence,
   );
 
-  const url = `${SITE_URL}/zh/compare/${canonical}`;
-  const { oldest, newest } = dateRangeForPair(rows, parsed.a, parsed.b);
+  const url = `${SITE_URL}${scenarioPath(canonical, scenarioSegment)}`;
   const jsonLd = buildJsonLdZh(
     'full',
     parsed.model,
@@ -172,8 +226,14 @@ export default async function ComparePageZh({ params, searchParams }: Props) {
         defaultModel={effectiveModel}
         defaultSequence={effectiveSequence}
         defaultPrecision={effectivePrecision}
+        initialBenchmarkRows={initialCompareBenchmarkRows(
+          parsed.model.displayName,
+          effectiveModel,
+          initialPairBenchmarkRows,
+        )}
         ssrTableData={{ defaultTargets, ssrRows, interactivityRange }}
         narrative={narrative}
+        agenticIntro={isAgenticSequence(effectiveSequence) ? AGENTIC_SCENARIO_INTRO_ZH : null}
         aLabel={aLabel}
         bLabel={bLabel}
         aVendor={aMeta?.vendor ?? ''}

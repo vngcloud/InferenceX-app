@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { SITE_URL } from '@semianalysisai/inferencex-constants';
+import { DASHBOARD_ROUTES } from './dashboard-routes';
 
 import {
   enAlternates,
   hasZhSibling,
   isZhPathname,
   languageAlternates,
+  localePath,
   switchLocalePath,
   zhAlternates,
   zhPath,
@@ -20,6 +22,14 @@ describe('zhPath', () => {
   it('prefixes non-root paths', () => {
     expect(zhPath('/blog')).toBe('/zh/blog');
     expect(zhPath('/blog/some-post')).toBe('/zh/blog/some-post');
+  });
+});
+
+describe('localePath', () => {
+  it('keeps English paths and prefixes Chinese paths', () => {
+    expect(localePath('/about', 'en')).toBe('/about');
+    expect(localePath('/about', 'zh')).toBe('/zh/about');
+    expect(localePath('/', 'zh')).toBe('/zh');
   });
 });
 
@@ -45,6 +55,13 @@ describe('hasZhSibling', () => {
     expect(hasZhSibling('/collectivex')).toBe(true);
   });
 
+  it.each(DASHBOARD_ROUTES.filter((route) => route.localeMirrored))(
+    'derives the mirrored dashboard route "$path" from the canonical registry',
+    ({ path }) => {
+      expect(hasZhSibling(path)).toBe(true);
+    },
+  );
+
   it('matches blog and compare child paths', () => {
     expect(hasZhSibling('/blog/some-post')).toBe(true);
     expect(hasZhSibling('/compare')).toBe(true);
@@ -57,8 +74,8 @@ describe('hasZhSibling', () => {
   });
 
   it('matches datasets, gated tabs, and agentic detail pages', () => {
-    expect(hasZhSibling('/datasets')).toBe(true);
-    expect(hasZhSibling('/datasets/some-set/conversations/abc123')).toBe(true);
+    expect(hasZhSibling('/agentx')).toBe(true);
+    expect(hasZhSibling('/agentx/some-set/conversations/abc123')).toBe(true);
     expect(hasZhSibling('/ai-chart')).toBe(true);
     expect(hasZhSibling('/current-inferencex-image')).toBe(true);
     expect(hasZhSibling('/feedback')).toBe(true);
@@ -107,8 +124,8 @@ describe('switchLocalePath', () => {
   });
 
   it('switches datasets pages within the language trees', () => {
-    expect(switchLocalePath('/datasets')).toBe('/zh/datasets');
-    expect(switchLocalePath('/zh/datasets/some-set')).toBe('/datasets/some-set');
+    expect(switchLocalePath('/agentx')).toBe('/zh/agentx');
+    expect(switchLocalePath('/zh/agentx/some-set')).toBe('/agentx/some-set');
   });
 
   it('falls back to the other homepage for unmirrored paths', () => {

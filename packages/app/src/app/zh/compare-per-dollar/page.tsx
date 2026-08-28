@@ -11,6 +11,7 @@ import {
 import { ComparePairCardLink } from '@/components/compare/compare-pair-card-link';
 import { JsonLd } from '@/components/json-ld';
 import { Card } from '@/components/ui/card';
+import { comparisonPairHref, comparisonScenarioForModel } from '@/lib/compare-agentx';
 import { getComparablePairsByModelSlug } from '@/lib/compare-availability';
 import { type ComparePair, COMPARE_MODEL_SLUGS, type CompareModelSlug } from '@/lib/compare-slug';
 import { bucketComparePairsByVendor, formatModelList } from '@/lib/compare-ssr';
@@ -18,14 +19,14 @@ import { ZH_OG_LOCALE, zhAlternates } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
 
-const DESCRIPTION = `哪款 Chip 每美元推理性能最高？InferenceX 是 SemiAnalysis 推出的独立开源基准测试平台，提供经过验证的、可复现的测试结果。${SUPPORTERS_LINE_ZH}横向对比 DeepSeek V4 Pro、DeepSeek R1、Kimi K2、MiniMax M3、GLM 5、Qwen 3.5 等模型基于云服务商 TCO 归一化的每百万 token 成本。`;
+const DESCRIPTION = `哪款芯片每美元推理性能最高？InferenceX 是 SemiAnalysis 推出的独立开源基准测试平台，提供经过验证的、可复现的测试结果。${SUPPORTERS_LINE_ZH}横向对比 DeepSeek V4 Pro、DeepSeek R1、Kimi K2、MiniMax M3、GLM 5、Qwen 3.5 等模型基于云服务商 TCO 归一化的每百万 token 成本。`;
 
 export const metadata: Metadata = {
-  title: 'Chip 每美元性能',
+  title: '芯片每美元性能',
   description: DESCRIPTION,
   alternates: zhAlternates('/compare-per-dollar'),
   openGraph: {
-    title: `Chip 每美元性能 | ${SITE_NAME}`,
+    title: `芯片每美元性能 | ${SITE_NAME}`,
     description: DESCRIPTION,
     url: `${SITE_URL}/zh/compare-per-dollar`,
     type: 'website',
@@ -33,7 +34,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: `Chip 每美元性能 | ${SITE_NAME}`,
+    title: `芯片每美元性能 | ${SITE_NAME}`,
     description: DESCRIPTION,
   },
 };
@@ -77,7 +78,7 @@ function groupPairsByVendorForModel(
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'CollectionPage',
-  name: `Chip 每美元性能 | ${SITE_NAME}`,
+  name: `芯片每美元性能 | ${SITE_NAME}`,
   description: DESCRIPTION,
   url: `${SITE_URL}/zh/compare-per-dollar`,
   inLanguage: 'zh-CN',
@@ -95,12 +96,16 @@ export default async function ComparePerDollarIndexPageZh() {
       <JsonLd data={jsonLd} />
       <section>
         <Card>
-          <h1 className="text-2xl lg:text-4xl font-bold tracking-tight">Chip 每美元性能</h1>
+          <h1 className="text-2xl lg:text-4xl font-bold tracking-tight">芯片每美元性能</h1>
           <p className="mt-3 text-base lg:text-lg text-muted-foreground max-w-3xl">
             {totalUrls.toLocaleString()} 组每百万 token 成本的正面对比，涵盖{' '}
             {formatModelList(modelsWithPairs)}
             。性能按所属云服务商 TCO 归一化——每个页面展示每 token 成本图表及插值美元/百万 token
-            对比表格，帮助您在任意目标交互性水平下选出更经济的 Chip。
+            对比表格，帮助您在任意目标交互性水平下选出更经济的芯片。
+          </p>
+          <p className="mt-3 text-base lg:text-lg text-muted-foreground max-w-3xl">
+            具备 AgentX 数据的模型会打开长上下文、多轮 trace 回放结果；尚未纳入 AgentX
+            的模型则打开受控的 8K→1K 负载。每张卡片都会标明其对应场景。
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link
@@ -108,7 +113,7 @@ export default async function ComparePerDollarIndexPageZh() {
               href="/zh/compare"
               className="inline-flex items-center gap-2 rounded-md bg-brand px-5 py-3 text-base lg:text-lg font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-brand/90"
             >
-              Chip 延迟 + 吞吐量对比
+              芯片延迟 + 吞吐量对比
               <span aria-hidden="true" className="text-lg lg:text-xl">
                 →
               </span>
@@ -140,13 +145,16 @@ export default async function ComparePerDollarIndexPageZh() {
       {modelsWithPairs.map((model) => {
         const pairs = comparablePairsByModel.get(model.slug) ?? [];
         const groups = groupPairsByVendorForModel(model, pairs);
+        // Same scenario split /compare uses: models with AgentX data open the
+        // agentic trace replay, the rest open the fixed 8K→1K workload.
+        const scenario = comparisonScenarioForModel(model);
         return (
           <section key={model.slug} id={model.slug}>
             <Card className="flex flex-col gap-4">
               <div>
                 <h2 className="text-xl lg:text-2xl font-bold tracking-tight">{model.label}</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {pairs.length} 组 Chip 对比具有 {model.label} 的每 token 成本基准测试数据。
+                  {pairs.length} 组芯片对比具有 {model.label} 的每 token 成本基准测试数据。
                 </p>
               </div>
               {groups.map((group) => (
@@ -163,10 +171,11 @@ export default async function ComparePerDollarIndexPageZh() {
                       return (
                         <ComparePairCardLink
                           key={slug}
-                          href={`/zh/compare-per-dollar/${slug}`}
+                          href={comparisonPairHref('zh', slug, model, 'compare-per-dollar')}
                           slug={slug}
                           label={label}
                           archLine={archLine}
+                          scenarioLabel={scenario.label}
                         />
                       );
                     })}

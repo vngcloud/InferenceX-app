@@ -2,7 +2,21 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { sequenceToIslOsl } from '@semianalysisai/inferencex-constants';
 
-import type { InferenceData, TrendDataPoint, YAxisMetricKey } from '@/components/inference/types';
+import type {
+  InferenceData,
+  TokenRevenuePricing,
+  TrendDataPoint,
+  YAxisMetricKey,
+} from '@/components/inference/types';
+import {
+  applyTokenRevenuePricing,
+  NORMALIZED_TOKEN_REVENUE_PRICING,
+} from '@/components/inference/token-revenue';
+import {
+  isBenchmarkMetricKey,
+  resolveMetricConfigKey,
+  tokenMetricTypeForConfigKey,
+} from '@/components/inference/metric-registry';
 import {
   hermiteInterpolate,
   monotoneSlopes,
@@ -11,89 +25,61 @@ import {
   reciprocalMetricAt,
 } from '@/components/calculator/useThroughputData';
 import { useBenchmarkHistory } from '@/hooks/api/use-benchmark-history';
-import { getHardwareKey } from '@/lib/chart-utils';
-import { getGpuSpecs, isKnownGpu } from '@/lib/constants';
+import { buildDerivedChartFields, getHardwareKey, type DerivedMetricKey } from '@/lib/chart-utils';
+import { isKnownGpu } from '@/lib/constants';
 import { rowToAggDataEntry } from '@/lib/benchmark-transform';
 import type { BenchmarkRow } from '@/lib/api';
-import { dedupeAgenticHistoryRuns } from '@/lib/benchmark-run-selection';
+import { benchmarkCurveDate, dedupeAgenticHistoryRuns } from '@/lib/benchmark-run-selection';
 import { Sequence, type Model } from '@/lib/data-mappings';
+import { supportsTokenMetric } from '@/lib/supplemental-benchmarks';
 
-// Trend points never sit on a roofline — they're synthetic per-(date, config)
-// aggregates, not the per-load Pareto-frontier points the chart marks. Hardcode
-// roof:false so the field shape lines up with InferenceData without a cast.
-const wrapMetric = (n: number): { y: number; roof: boolean } => ({ y: n, roof: false });
+/** Snapshot-scoped token metric support for raw historical rows. */
+export function rowSupportsTrendMetric(row: BenchmarkRow, selectedYAxisMetric: string): boolean {
+  return supportsTokenMetric(row, tokenMetricTypeForConfigKey(selectedYAxisMetric));
+}
 
 /**
  * Build a lightweight InferenceData-compatible point from a raw BenchmarkRow.
- * Skips the expensive transformBenchmarkRows pipeline (rooflines, cost derivations)
- * since the trend interpolation only needs x (interactivity), tpPerGpu, and metric values.
+ * This deliberately skips full chart transformation and derives only the
+ * selected trend metric plus its frontier/interpolation dependencies.
  */
-function rowToLightweightPoint(row: BenchmarkRow): InferenceData | null {
+export function rowToLightweightPoint(
+  row: BenchmarkRow,
+  requestedMetrics: readonly DerivedMetricKey[],
+  tokenRevenuePricing: TokenRevenuePricing | null = NORMALIZED_TOKEN_REVENUE_PRICING,
+): InferenceData | null {
   const entry = rowToAggDataEntry(row);
   const hwKey = getHardwareKey(entry);
+  // Historical rows predating explicit output-throughput telemetry used total
+  // throughput as output throughput. Preserve that production fallback for
+  // output cost, purchasing-power, and energy trend metrics.
+  const derivedEntry =
+    row.metrics.output_tput_per_gpu === null || row.metrics.output_tput_per_gpu === undefined
+      ? { ...entry, output_tput_per_gpu: entry.tput_per_gpu }
+      : entry;
   if (!isKnownGpu(hwKey)) return null;
 
-  const m = row.metrics;
-  const tput = m.tput_per_gpu ?? 0;
-  const outputTput = m.output_tput_per_gpu ?? tput;
-  const inputTput = m.input_tput_per_gpu ?? 0;
-  const specs = getGpuSpecs(hwKey);
-  const power = specs.power;
-
-  const tokPerHr = (tput * 3600) / 1_000_000;
-  const outTokPerHr = (outputTput * 3600) / 1_000_000;
-  const inTokPerHr = (inputTput * 3600) / 1_000_000;
-
-  // Build metric objects matching InferenceData shape. Measured-power keys are
-  // only set when the runner-side aggregate_power.py emitted them — leaving the
-  // field undefined lets extractMetric return null and the trend show a real
-  // gap instead of a flat-zero line.
-  const point: InferenceData = {
-    x: m.median_intvty ?? 0,
-    y: tput,
+  const point = {
+    x: row.metrics.median_intvty ?? 0,
+    y: row.metrics.tput_per_gpu ?? 0,
     hwKey,
     precision: row.precision,
     tp: row.decode_tp,
     conc: row.conc,
-    date: row.date,
-    tpPerGpu: wrapMetric(tput),
-    outputTputPerGpu: wrapMetric(outputTput),
-    inputTputPerGpu: wrapMetric(inputTput),
-    tpPerMw: wrapMetric(power > 0 ? (tput * 1000) / power : 0),
-    // Cost per million tokens (total / output / input)
-    costh: wrapMetric(tokPerHr ? specs.costh / tokPerHr : 0),
-    costn: wrapMetric(tokPerHr ? specs.costn / tokPerHr : 0),
-    costr: wrapMetric(tokPerHr ? specs.costr / tokPerHr : 0),
-    costhOutput: wrapMetric(outTokPerHr ? specs.costh / outTokPerHr : 0),
-    costnOutput: wrapMetric(outTokPerHr ? specs.costn / outTokPerHr : 0),
-    costrOutput: wrapMetric(outTokPerHr ? specs.costr / outTokPerHr : 0),
-    costhi: wrapMetric(inTokPerHr ? specs.costh / inTokPerHr : 0),
-    costni: wrapMetric(inTokPerHr ? specs.costn / inTokPerHr : 0),
-    costri: wrapMetric(inTokPerHr ? specs.costr / inTokPerHr : 0),
-    // Energy: J/token = W / tok/s
-    jTotal: wrapMetric(power > 0 && tput ? (power * 1000) / tput : 0),
-    ...(outputTput ? { jOutput: wrapMetric(power > 0 ? (power * 1000) / outputTput : 0) } : {}),
-    ...(inputTput ? { jInput: wrapMetric(power > 0 ? (power * 1000) / inputTput : 0) } : {}),
-    ...(typeof entry.avg_power_w === 'number'
-      ? { measuredAvgPower: { y: entry.avg_power_w, roof: false } }
-      : {}),
-    ...(typeof entry.joules_per_output_token === 'number'
-      ? { measuredJPerOutputToken: { y: entry.joules_per_output_token, roof: false } }
-      : {}),
-    ...(typeof entry.joules_per_total_token === 'number'
-      ? { measuredJPerTotalToken: { y: entry.joules_per_total_token, roof: false } }
-      : {}),
-    ...(typeof entry.prefill_avg_power_w === 'number'
-      ? { measuredPrefillAvgPower: { y: entry.prefill_avg_power_w, roof: false } }
-      : {}),
-    ...(typeof entry.decode_avg_power_w === 'number'
-      ? { measuredDecodeAvgPower: { y: entry.decode_avg_power_w, roof: false } }
-      : {}),
-    ...(typeof entry.joules_per_input_token === 'number'
-      ? { measuredJPerInputToken: { y: entry.joules_per_input_token, roof: false } }
-      : {}),
-  };
-  return point;
+    date: benchmarkCurveDate(row),
+    tput_per_gpu: entry.tput_per_gpu,
+    input_tput_per_gpu: entry.input_tput_per_gpu,
+    output_tput_per_gpu: entry.output_tput_per_gpu,
+    isl: entry.isl,
+    osl: entry.osl,
+    total_prompt_tokens: entry.total_prompt_tokens,
+    total_generation_tokens: entry.total_generation_tokens,
+    ...buildDerivedChartFields(derivedEntry, hwKey, requestedMetrics),
+  } as InferenceData;
+
+  return requestedMetrics.includes('tokenRevenuePerGpuHour')
+    ? applyTokenRevenuePricing([point], tokenRevenuePricing)[0]!
+    : point;
 }
 
 /**
@@ -125,8 +111,70 @@ const RECIPROCAL_OF_THROUGHPUT: Partial<Record<YAxisMetricKey, YAxisMetricKey>> 
 };
 
 /**
+ * Business metrics mapped to the throughput they scale. When the multiplier is
+ * constant, interpolation preserves that identity. OpenRouter revenue can use
+ * a point-specific input/output mix; in that case multiplier recovery fails
+ * safely and the metric itself is splined on the total-throughput frontier.
+ */
+const PROPORTIONAL_TO_THROUGHPUT: Partial<Record<YAxisMetricKey, YAxisMetricKey>> = {
+  tokenRevenuePerGpuHour: 'tpPerGpu',
+  tokensPerDollarH: 'tpPerGpu',
+  tokensPerDollarN: 'tpPerGpu',
+  tokensPerDollarR: 'tpPerGpu',
+  outputTokensPerDollarH: 'outputTputPerGpu',
+  outputTokensPerDollarN: 'outputTputPerGpu',
+  outputTokensPerDollarR: 'outputTputPerGpu',
+  inputTokensPerDollarH: 'inputTputPerGpu',
+  inputTokensPerDollarN: 'inputTputPerGpu',
+  inputTokensPerDollarR: 'inputTputPerGpu',
+  tokensPerRmbH: 'tpPerGpu',
+  tokensPerRmbN: 'tpPerGpu',
+  tokensPerRmbR: 'tpPerGpu',
+  outputTokensPerRmbH: 'outputTputPerGpu',
+  outputTokensPerRmbN: 'outputTputPerGpu',
+  outputTokensPerRmbR: 'outputTputPerGpu',
+  inputTokensPerRmbH: 'inputTputPerGpu',
+  inputTokensPerRmbN: 'inputTputPerGpu',
+  inputTokensPerRmbR: 'inputTputPerGpu',
+};
+
+export function trendMetricDependencies(metricKey: YAxisMetricKey): DerivedMetricKey[] {
+  const dependencies = new Set<DerivedMetricKey>(['tpPerGpu']);
+  if (!isBenchmarkMetricKey(metricKey)) return [...dependencies];
+  dependencies.add(metricKey);
+  const throughputKey =
+    RECIPROCAL_OF_THROUGHPUT[metricKey] ?? PROPORTIONAL_TO_THROUGHPUT[metricKey];
+  if (throughputKey && isBenchmarkMetricKey(throughputKey)) dependencies.add(throughputKey);
+  return [...dependencies];
+}
+
+function recoverProportionalMultiplier(
+  values: readonly number[],
+  throughputs: readonly number[],
+): number | null {
+  const RELATIVE_TOLERANCE = 1e-3;
+  let multiplier: number | null = null;
+
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    const throughput = throughputs[i];
+    if (value === undefined || throughput === undefined) continue;
+    if (!(value > 0) || !(throughput > 0)) continue;
+
+    const candidate = value / throughput;
+    if (multiplier === null) {
+      multiplier = candidate;
+    } else if (Math.abs(candidate - multiplier) > Math.abs(multiplier) * RELATIVE_TOLERANCE) {
+      return null;
+    }
+  }
+
+  return multiplier;
+}
+
+/**
  * Interpolate a selected metric at a target interactivity for a set of InferenceData points
- * from a single GPU. Uses Pareto front (throughput-based frontier) + monotone cubic Hermite spline.
+ * from a single GPU. Uses a throughput-based Pareto front + monotone cubic Hermite spline.
  *
  * Exported for unit testing.
  */
@@ -137,11 +185,19 @@ export function interpolateMetricAtInteractivity(
 ): number | null {
   if (points.length === 0) return null;
 
-  // Build Pareto front on interactivity(x) vs throughput(y)
+  // Proportional business metrics use the corresponding total/output/input
+  // throughput frontier so their knots exactly match the serving envelope.
+  const proportionalThroughputKey = PROPORTIONAL_TO_THROUGHPUT[metricKey];
+  const frontierThroughputKey = proportionalThroughputKey ?? 'tpPerGpu';
+  for (const point of points) {
+    if (extractMetric(point, frontierThroughputKey) === null) return null;
+  }
+
+  // Build Pareto front on interactivity(x) vs the applicable throughput(y).
   const frontier = paretoFrontUpperLeft<InferenceData>(
     points,
     (p) => p.x,
-    (p) => p.tpPerGpu.y,
+    (p) => extractMetric(p, frontierThroughputKey)!,
   );
   if (frontier.length === 0) return null;
 
@@ -172,9 +228,22 @@ export function interpolateMetricAtInteractivity(
     metricYs.push(v);
   }
 
+  // When a business metric is a fixed multiple of throughput, spline the
+  // matching throughput and apply that multiplier so the derived curve cannot
+  // drift from its throughput/interactivity Pareto curve. OpenRouter revenue
+  // falls through to a direct metric spline when the token mix varies by point.
+  if (proportionalThroughputKey) {
+    const tputYs = sorted.map((p) => extractMetric(p, proportionalThroughputKey)!);
+    const multiplier = recoverProportionalMultiplier(metricYs, tputYs);
+    if (multiplier !== null) {
+      const tputSlopes = monotoneSlopes(xs, tputYs);
+      const tput = hermiteInterpolate(xs, tputYs, tputSlopes, targetInteractivity);
+      return Math.max(0, tput) * multiplier;
+    }
+  }
+
   // Cost and energy per token are `constant / throughput`. Spline that
-  // throughput and re-derive rather than splining the metric, so the value
-  // agrees with the per-point figures on the inference chart.
+  // throughput and re-derive rather than splining the metric, preserving the identity.
   const throughputKey = RECIPROCAL_OF_THROUGHPUT[metricKey];
   if (throughputKey) {
     const tputYs: number[] = [];
@@ -216,6 +285,7 @@ interface UseInterpolatedTrendDataParams {
   selectedYAxisMetric: string;
   targetInteractivity: number;
   availableDates: string[];
+  tokenRevenuePricing?: TokenRevenuePricing | null;
   enabled: boolean;
 }
 
@@ -239,6 +309,7 @@ export function useInterpolatedTrendData({
   selectedPrecisions,
   selectedYAxisMetric,
   targetInteractivity,
+  tokenRevenuePricing = NORMALIZED_TOKEN_REVENUE_PRICING,
   enabled,
 }: UseInterpolatedTrendDataParams): UseInterpolatedTrendDataResult {
   const seqIslOsl = useMemo(() => sequenceToIslOsl(selectedSequence), [selectedSequence]);
@@ -247,8 +318,10 @@ export function useInterpolatedTrendData({
     enabled ? selectedModel : '',
     seqIslOsl?.isl ?? 0,
     seqIslOsl?.osl ?? 0,
-    selectedSequence === Sequence.AgenticTraces ? 'agentic_traces' : undefined,
+    selectedSequence === Sequence.AgenticTraces ? { benchmarkType: 'agentic_traces' } : undefined,
   );
+  const trendMetricKey = resolveMetricConfigKey(selectedYAxisMetric).slice(2) as YAxisMetricKey;
+  const requestedMetrics = useMemo(() => trendMetricDependencies(trendMetricKey), [trendMetricKey]);
 
   // Build lightweight InferenceData points grouped by date and hwKey.
   // Skips the full transformBenchmarkRows pipeline (~100x faster for ~100 dates).
@@ -259,14 +332,16 @@ export function useInterpolatedTrendData({
 
     for (const row of dedupeAgenticHistoryRuns(allRows)) {
       if (!selectedPrecisions.includes(row.precision)) continue;
+      if (!rowSupportsTrendMetric(row, selectedYAxisMetric)) continue;
 
-      const point = rowToLightweightPoint(row);
+      const point = rowToLightweightPoint(row, requestedMetrics, tokenRevenuePricing);
       if (!point) continue;
 
-      let dateMap = result.get(row.date);
+      const curveDate = benchmarkCurveDate(row);
+      let dateMap = result.get(curveDate);
       if (!dateMap) {
         dateMap = new Map();
-        result.set(row.date, dateMap);
+        result.set(curveDate, dateMap);
       }
 
       const hwKey = point.hwKey as string;
@@ -281,12 +356,12 @@ export function useInterpolatedTrendData({
     }
 
     return result;
-  }, [allRows, selectedPrecisions]);
+  }, [allRows, selectedPrecisions, requestedMetrics, selectedYAxisMetric, tokenRevenuePricing]);
 
   // Interpolation memo — instant when slider moves or metric changes
   const { trendLines, hwKeysWithData } = useMemo(() => {
     const resultMap = new Map<string, Map<string, TrendDataPoint>>();
-    const metricKey = selectedYAxisMetric.replace('y_', '') as YAxisMetricKey;
+    const metricKey = trendMetricKey;
 
     for (const [date, byGroupKey] of dateGroupedData) {
       for (const [groupKey, points] of byGroupKey) {
@@ -296,7 +371,6 @@ export function useInterpolatedTrendData({
           metricKey,
         );
         if (interpolated === null) continue;
-
         if (!resultMap.has(groupKey)) resultMap.set(groupKey, new Map());
         resultMap.get(groupKey)!.set(date, {
           date,
@@ -319,7 +393,12 @@ export function useInterpolatedTrendData({
         // Extend line to today if the last point is before today
         const last = points.at(-1)!;
         if (last.date < today) {
-          points.push({ date: today, value: last.value, x: last.x, synthetic: true });
+          points.push({
+            date: today,
+            value: last.value,
+            x: last.x,
+            synthetic: true,
+          });
         }
         lines.set(groupKey, points);
         // Return base hwKey for legend filtering
@@ -331,7 +410,7 @@ export function useInterpolatedTrendData({
     }
 
     return { trendLines: lines, hwKeysWithData: keysWithData };
-  }, [dateGroupedData, targetInteractivity, selectedYAxisMetric]);
+  }, [dateGroupedData, targetInteractivity, trendMetricKey]);
 
   // Artificial progress that ramps up while the API call is in flight
   const [progress, setProgress] = useState(0);
@@ -353,7 +432,12 @@ export function useInterpolatedTrendData({
   }, [isLoading]);
 
   if (!enabled) {
-    return { trendLines: new Map(), hwKeysWithData: [], loading: false, progress: 0 };
+    return {
+      trendLines: new Map(),
+      hwKeysWithData: [],
+      loading: false,
+      progress: 0,
+    };
   }
 
   return { trendLines, hwKeysWithData, loading: isLoading, progress };

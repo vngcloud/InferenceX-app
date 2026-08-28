@@ -26,6 +26,7 @@ describe('Inference ChartControls', () => {
 
   it('renders the Y-axis metric selector', () => {
     cy.get('[data-testid="yaxis-metric-selector"]').should('be.visible');
+    cy.get('[data-testid="cost-display-selector"]').should('not.exist');
   });
 
   it('Y-axis metric selector shows grouped options', () => {
@@ -41,6 +42,36 @@ describe('Inference ChartControls', () => {
     cy.get('@setSelectedYAxisMetric').should('have.been.calledOnce');
   });
 
+  it('lists and selects the schema-v2 derived axes in the Measured Energy group', () => {
+    const options = [
+      {
+        key: 'y_measuredJPerSuccessfulQuery',
+        label: 'Measured Joules per Successful Query',
+      },
+      {
+        key: 'y_measuredWhPerSuccessfulQuery',
+        label: 'Measured Watt-hours per Successful Query',
+      },
+      {
+        key: 'y_measuredPowerPercentTdp',
+        label: 'Measured Average Power as Percent of TDP',
+      },
+    ];
+
+    for (const option of options) {
+      cy.get('[data-testid="yaxis-metric-selector"]').click();
+      cy.contains('Measured Energy')
+        .parent()
+        .within(() => {
+          cy.contains('[role="option"]', option.label)
+            .scrollIntoView()
+            .should('be.visible')
+            .click();
+        });
+      cy.get('@setSelectedYAxisMetric').should('have.been.calledWith', option.key);
+    }
+  });
+
   it('hides the GPU comparison section when no GPUs are selected', () => {
     // Default mock: selectedGPUs = [] — GPU date range pickers should not render
     cy.contains('Comparison Date Range').should('not.exist');
@@ -51,6 +82,31 @@ describe('Inference ChartControls', () => {
     // The GPU Config label should be present (hideGpuComparison defaults to false)
     cy.contains('Chip Config').should('be.visible');
     cy.get('[data-testid="gpu-multiselect"]').should('be.visible');
+  });
+});
+
+describe('Inference ChartControls cost metrics', () => {
+  beforeEach(() => {
+    mountWithProviders(<InferenceChartControls />, {
+      inference: { selectedYAxisMetric: 'y_costh' },
+    });
+  });
+
+  it('shows cost per million and tokens per dollar as separate Y-axis options', () => {
+    cy.get('[data-testid="yaxis-metric-selector"]').click();
+    cy.contains('[role="option"]', 'Cost per Million Total Tokens (Owning - Hyperscaler)').should(
+      'exist',
+    );
+    cy.contains('[role="option"]', 'Total Tokens per $1 USD (Owning - Hyperscaler)').should(
+      'exist',
+    );
+    cy.get('[data-testid="cost-display-selector"]').should('not.exist');
+  });
+
+  it('selects tokens per dollar through the Y-axis metric control', () => {
+    cy.get('[data-testid="yaxis-metric-selector"]').click();
+    cy.contains('[role="option"]', 'Total Tokens per $1 USD (Owning - Hyperscaler)').click();
+    cy.get('@setSelectedYAxisMetric').should('have.been.calledWith', 'y_tokensPerDollarH');
   });
 });
 
@@ -66,7 +122,7 @@ describe('Inference ChartControls with GPUs selected', () => {
     cy.contains('Comparison Date Range').should('be.visible');
   });
 
-  it('flags the date range when nothing has been picked to compare against', () => {
+  it('leaves the optional date range unflagged for a selected current config', () => {
     mountWithProviders(<InferenceChartControls />, {
       inference: {
         selectedGPUs: ['h100'],
@@ -75,7 +131,9 @@ describe('Inference ChartControls with GPUs selected', () => {
       },
     });
 
-    cy.contains('button', 'Select date range').should('have.class', 'animate-pulse');
+    cy.contains('button', 'Select date range')
+      .should('not.have.class', 'animate-pulse')
+      .and('not.have.class', 'border-red-500');
   });
 
   it('leaves the date range unflagged when exact comparison entries are pinned', () => {

@@ -25,6 +25,11 @@ describe('Dropdown one-click switching', () => {
   });
 
   it('only one MultiSelect content panel is open at a time when switching dropdowns', () => {
+    // The default model is FP4-only in the fixtures, which hides the Precision
+    // control — switch to a multi-precision model so both dropdowns exist.
+    cy.visit('/inference?g_model=DeepSeek-R1-0528');
+    cy.get('[data-testid="inference-chart-display"]').should('exist');
+
     cy.get('[data-testid="model-selector"]').click();
     cy.get('[data-slot="select-content"]').should('have.length', 1);
 
@@ -42,6 +47,21 @@ describe('Dropdown one-click switching', () => {
 
     cy.get('[data-testid="model-selector"]').should('have.attr', 'aria-expanded', 'false');
     cy.get('[data-slot="select-content"]').should('not.exist');
+  });
+
+  it('marks the featured AgentX models with a NEW pill in the dropdown', () => {
+    cy.get('[data-testid="model-selector"]').click();
+
+    // A featured AgentX model carries the pill… (MiniMax M3 rather than the
+    // Kimi K3 default because the availability fixtures don't ship kimik3 rows)
+    cy.contains('[role="option"]', 'MiniMax M3 428B')
+      .find('[data-new-badge="model-option"]')
+      .should('be.visible')
+      .and('have.text', 'NEW');
+    // …while non-featured models render without one.
+    cy.contains('[role="option"]', 'DeepSeek R1 0528 671B')
+      .find('[data-new-badge="model-option"]')
+      .should('not.exist');
   });
 
   it('separates maintenance-mode models from deprecated models', () => {

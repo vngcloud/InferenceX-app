@@ -6,12 +6,14 @@
  * variables don't survive html-to-image.
  */
 
-import type * as d3 from 'd3';
+import * as d3 from 'd3';
 
 import type { KnownConfigIssue } from '@/lib/known-issues';
+import type { CustomLayerConfig, RenderContext } from '@/lib/d3-chart/D3Chart/types';
+import type { ContinuousScale } from '@/lib/d3-chart/types';
+import { CHART_TYPE } from '@/lib/d3-chart/typography';
 
-export interface KnownIssueAnnotation {
-  issue: KnownConfigIssue;
+interface AnnotationBase {
   /** Display label of the affected series, e.g. "GB300 NVL72 (Dynamo TRTLLM, MTP)" */
   label: string;
   /** Resolved stroke color of the affected series */
@@ -19,6 +21,20 @@ export interface KnownIssueAnnotation {
   /** Data-space coordinates of the series' visible points (arrow targets) */
   points: { x: number; y: number }[];
 }
+
+/** A filed upstream issue or a non-interactive preview notice rendered inside a chart. */
+export type KnownIssueAnnotation = AnnotationBase &
+  (
+    | { issue: KnownConfigIssue; preview?: never }
+    | {
+        issue?: never;
+        preview: {
+          id: string;
+          summary: string;
+          detail: string;
+        };
+      }
+  );
 
 export interface AnnotationRenderOptions {
   chartId: string;
@@ -38,13 +54,64 @@ export interface AnnotationRenderOptions {
   onLinkClick?: (annotation: KnownIssueAnnotation) => void;
 }
 
+export type KnownIssueLayerOptions = Omit<
+  AnnotationRenderOptions,
+  'width' | 'height' | 'xScale' | 'yScale' | 'rightInset'
+>;
+
+/** Build the shared render/zoom lifecycle for chart-level known-issue callouts. */
+export function createKnownIssueLayer(
+  resolveOptions: () => KnownIssueLayerOptions,
+  displayIdentity?: string,
+): CustomLayerConfig {
+  const draw = (ctx: RenderContext, xScale: ContinuousScale, yScale: ContinuousScale): void => {
+    const options = resolveOptions();
+    renderKnownIssueAnnotations(ctx.layout.g, ctx.layout.defs, {
+      ...options,
+      width: ctx.width,
+      height: ctx.height,
+      xScale,
+      yScale,
+      rightInset:
+        options.annotations.length === 0
+          ? 0
+          : measureLegendRightInset(
+              options.chartId,
+              ctx.layout.svg.node(),
+              ctx.layout.margin.left,
+              ctx.width,
+            ),
+    });
+  };
+
+  return {
+    type: 'custom',
+    key: 'known-issues',
+    displayIdentity,
+    render: (_zoomGroup, ctx) =>
+      draw(ctx, ctx.xScale as ContinuousScale, ctx.yScale as ContinuousScale),
+    onDisplayUpdate: (_zoomGroup, ctx) => {
+      const svg = ctx.layout.svg.node();
+      if (!svg) return;
+      const transform = d3.zoomTransform(svg);
+      draw(
+        ctx,
+        transform.rescaleX(ctx.xScale as ContinuousScale),
+        transform.rescaleY(ctx.yScale as ContinuousScale),
+      );
+    },
+    onZoom: (_zoomGroup, ctx) =>
+      draw(ctx, ctx.newXScale as ContinuousScale, ctx.newYScale as ContinuousScale),
+  };
+}
+
 const BOX_TOP = 8;
 const BOX_GAP = 8;
 const BOX_RIGHT_GAP = 10;
 const PAD_X = 10;
 const PAD_Y = 7;
-const LINE1_SIZE = 11;
-const LINE2_SIZE = 10;
+const LINE1_SIZE = CHART_TYPE.annotation;
+const LINE2_SIZE = CHART_TYPE.annotationSub;
 const LINE1_H = 14;
 const LINE2_H = 13;
 const SWATCH_R = 4;
@@ -104,8 +171,7 @@ export function renderKnownIssueAnnotations(
 
   let yCursor = BOX_TOP;
   annotations.forEach((annotation, index) => {
-    const { issue, label, color, points } = annotation;
-
+    const { issue, preview, label, color, points } = annotation;
     const markerId = `known-issue-arrowhead-${chartId}-${index}`;
     defs
       .append('marker')
@@ -121,16 +187,30 @@ export function renderKnownIssueAnnotations(
       .attr('fill', color);
 
     const anchor = layer
-      .append('a')
-      .attr('href', issue.url)
-      .attr('target', '_blank')
-      .attr('rel', 'noopener noreferrer')
+      .append(issue === undefined ? 'g' : 'a')
       .attr('class', 'known-issue-annotation')
-      .attr('data-testid', 'known-issue-annotation')
-      .attr('cursor', 'pointer')
-      .on('click', () => opts.onLinkClick?.(annotation));
+      .attr(
+        'data-testid',
+        preview === undefined ? 'known-issue-annotation' : `${preview.id}-notice`,
+      )
+      .attr('cursor', issue === undefined ? 'default' : 'pointer');
+    if (issue === undefined) {
+      anchor
+        .attr('role', 'note')
+        .attr('aria-label', preview?.summary ?? null)
+        .attr('data-preview-id', preview?.id ?? null);
+    } else {
+      anchor
+        .attr('href', issue.url)
+        .attr('target', '_blank')
+        .attr('rel', 'noopener noreferrer')
+        .on('click', () => opts.onLinkClick?.(annotation));
+    }
 
-    const detail = `${issue.summary} — filed since ${issue.filed} · `;
+    const detail =
+      issue === undefined
+        ? `${preview!.summary}: ${preview!.detail}`
+        : `${issue.summary}: filed since ${issue.filed} · `;
     const text1 = anchor
       .append('text')
       .attr('font-size', LINE1_SIZE)
@@ -139,14 +219,20 @@ export function renderKnownIssueAnnotations(
       .text(label);
     const text2 = anchor.append('text').attr('font-size', LINE2_SIZE);
     text2.append('tspan').attr('fill', opts.mutedForeground).text(detail);
-    text2
-      .append('tspan')
-      .attr('fill', opts.foreground)
-      .attr('text-decoration', 'underline')
-      .text(issue.issueRef);
+    if (issue !== undefined) {
+      text2
+        .append('tspan')
+        .attr('fill', opts.foreground)
+        .attr('text-decoration', 'underline')
+        .text(issue.issueRef);
+    }
 
     const w1 = measureTextWidth(text1.node(), label.length, LINE1_SIZE) + SWATCH_SPACE;
-    const w2 = measureTextWidth(text2.node(), detail.length + issue.issueRef.length, LINE2_SIZE);
+    const w2 = measureTextWidth(
+      text2.node(),
+      detail.length + (issue?.issueRef.length ?? 0),
+      LINE2_SIZE,
+    );
     const boxW = Math.max(w1, w2) + PAD_X * 2;
     const boxH = PAD_Y * 2 + LINE1_H + LINE2_H;
     const boxRight = width - BOX_RIGHT_GAP - (opts.rightInset ?? 0);

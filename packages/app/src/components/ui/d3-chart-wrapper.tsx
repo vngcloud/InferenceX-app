@@ -10,9 +10,11 @@ import { createPortal } from 'react-dom';
  * coordinates by the d3 layer.
  */
 function PortalTooltip({
+  chartId,
   tooltipRef,
   pinned,
 }: {
+  chartId: string;
   tooltipRef: React.RefObject<HTMLDivElement | null>;
   pinned: boolean;
 }) {
@@ -21,7 +23,7 @@ function PortalTooltip({
   const node = (
     <div
       ref={tooltipRef}
-      data-chart-tooltip
+      data-chart-tooltip={chartId}
       style={{
         position: 'fixed',
         left: 0,
@@ -81,8 +83,13 @@ export function D3ChartWrapper({
       <div className="flex flex-col lg:flex-row w-full">
         <div ref={setContainerRef} className="relative flex-1 min-w-0">
           <div className="relative">
+            {/* Stable hook for tests. `[data-testid="scatter-graph"] svg` also
+                matches every Lucide icon inside the card — dozens of them —
+                so picking "the first svg" silently grabs an icon whenever the
+                selected metric renders one above the chart. */}
             <svg
               ref={svgRef}
+              data-testid="d3-chart-svg"
               width="100%"
               height={dimensions.height}
               style={{ cursor: grabCursor ? 'grab' : undefined }}
@@ -111,7 +118,11 @@ export function D3ChartWrapper({
                 rise above sibling chart cards' stacking contexts. The d3 layer
                 writes viewport-coords into style.left/top — see
                 computeTooltipPosition. */}
-            <PortalTooltip tooltipRef={tooltipRef} pinned={Boolean(pinnedPoint)} />
+            <PortalTooltip
+              chartId={chartId}
+              tooltipRef={tooltipRef}
+              pinned={Boolean(pinnedPoint)}
+            />
             {noDataOverlay}
           </div>
           <p className="no-export text-xs text-muted-foreground text-center mt-2">{instructions}</p>
@@ -120,7 +131,13 @@ export function D3ChartWrapper({
           </div>
         </div>
         {legendElement && (
-          <div className="w-full h-96 lg:h-[575px] lg:w-48 lg:shrink-0 relative mt-3 lg:mt-0">
+          /* Sizes to the legend content: when the sidebar legend panel is open
+             (.sidebar-legend present) the column grows to fit the widest
+             legend label (capped) so full names display without truncation,
+             while still sitting next to the plot without overlapping it; when
+             closed the legend renders only a small reopen button and the
+             chart reclaims the width. */
+          <div className="w-full lg:w-auto lg:shrink-0 relative mt-3 lg:mt-0 has-[.sidebar-legend]:h-96 lg:has-[.sidebar-legend]:h-[575px] lg:has-[.sidebar-legend]:w-fit lg:has-[.sidebar-legend]:min-w-48 lg:has-[.sidebar-legend]:max-w-96">
             {legendElement}
           </div>
         )}

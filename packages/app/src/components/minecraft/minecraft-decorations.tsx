@@ -123,7 +123,7 @@ export function MinecraftDecorations() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
     const audio = new Audio('/decorative/minecraft/ender-dragon.mp3');
-    audio.volume = 0.5;
+    audio.volume = 0.25;
     const timeout = window.setTimeout(() => {
       audio.play().catch(() => {
         /* browser blocked autoplay — no prior user gesture */
@@ -170,7 +170,7 @@ export function MinecraftDecorations() {
         />
       </div>
 
-      <div className="hidden lg:block fixed bottom-1 right-2 z-0 text-[10px] text-foreground/50 text-right leading-tight">
+      <div className="hidden lg:block fixed bottom-1 right-2 z-0 text-3xs text-foreground/50 text-right leading-tight">
         <div>
           art:{' '}
           <a

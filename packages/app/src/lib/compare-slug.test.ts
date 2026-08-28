@@ -256,7 +256,7 @@ describe('compareModelDisplayLabel', () => {
       'Kimi K2.5/K2.6/K2.7-Code 1T — GB200 NVL72 vs MI355X',
     );
     expect(compareModelDisplayLabel(GLM_51, 'h100', 'h200')).toBe('GLM 5/5.1 — H100 vs H200');
-    expect(compareModelDisplayLabel(GLM_52, 'h100', 'h200')).toBe('GLM 5.2 — H100 vs H200');
+    expect(compareModelDisplayLabel(GLM_52, 'h100', 'h200')).toBe('GLM 5.3 744B — H100 vs H200');
   });
 });
 
@@ -273,6 +273,7 @@ describe('compareModelSeoName', () => {
     'glm-5-2': 'GLM-5.2',
     'minimax-m3': 'MiniMax M3',
     'minimax-m27': 'MiniMax M2.7',
+    'qwen-3-8-flash-next': 'Qwen3.8-Flash-Next',
     'qwen-3-5': 'Qwen3.5',
     'gptoss-120b': 'gpt-oss-120b',
     'llama-3-3-70b': 'Llama 3.3 70B',

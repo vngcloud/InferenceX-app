@@ -1,3 +1,5 @@
+import { expandLegendAdvanced } from '../support/legend-advanced';
+
 describe('Line Labels Toggle', () => {
   before(() => {
     cy.visit('/inference', {
@@ -8,6 +10,8 @@ describe('Line Labels Toggle', () => {
     // Wait for chart to load
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
     cy.get('.sidebar-legend').first().should('be.visible');
+    // Label switches live in the collapsed-by-default Advanced drawer.
+    expandLegendAdvanced();
   });
 
   it('Line Labels toggle exists in the legend', () => {
@@ -57,7 +61,7 @@ describe('Line Labels Toggle', () => {
     });
     cy.get('[data-testid="scatter-graph"] svg g.line-label').should('have.length.greaterThan', 0);
 
-    cy.get('[data-testid="scatter-graph"] svg').then(($svg) => {
+    cy.get('[data-testid="scatter-graph"] [data-testid="d3-chart-svg"]').then(($svg) => {
       const svg = $svg[0];
       const dots = svg.querySelectorAll('.dot-group');
       const labels = svg.querySelectorAll('g.line-label');
@@ -88,7 +92,7 @@ describe('Line Labels Toggle', () => {
 
     // The chart requires Shift for wheel zoom (so bare scroll doesn't hijack
     // the page). Dispatch a few shift+wheel events over the plot to zoom in.
-    cy.get('[data-testid="scatter-graph"] svg').then(($svg) => {
+    cy.get('[data-testid="scatter-graph"] [data-testid="d3-chart-svg"]').then(($svg) => {
       const svg = $svg[0];
       const r = svg.getBoundingClientRect();
       for (let i = 0; i < 3; i++) {
@@ -106,7 +110,7 @@ describe('Line Labels Toggle', () => {
     });
     cy.wait(300);
 
-    cy.get('[data-testid="scatter-graph"] svg').then(($svg) => {
+    cy.get('[data-testid="scatter-graph"] [data-testid="d3-chart-svg"]').then(($svg) => {
       const svg = $svg[0];
       const dots = svg.querySelectorAll('.dot-group');
       const labels = svg.querySelectorAll('g.line-label');
@@ -156,6 +160,7 @@ describe('Line Labels Toggle', () => {
       },
     });
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    expandLegendAdvanced();
     cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'checked');
 
     // Labels should be rendered
@@ -169,6 +174,7 @@ describe('Line Labels Toggle', () => {
       },
     });
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    expandLegendAdvanced();
     cy.get('#scatter-line-labels').should('have.attr', 'data-state', 'unchecked');
 
     // Labels should not be rendered
@@ -182,6 +188,7 @@ describe('Line Labels Toggle', () => {
       },
     });
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    expandLegendAdvanced();
     cy.get('#scatter-point-labels').should('have.attr', 'data-state', 'unchecked');
   });
 
@@ -192,6 +199,7 @@ describe('Line Labels Toggle', () => {
       },
     });
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    expandLegendAdvanced();
     cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'checked');
     // Labels toggle is auto-enabled by the URL hydration so the advanced
     // (parallelism) point labels actually render.
@@ -205,11 +213,12 @@ describe('Line Labels Toggle', () => {
       },
     });
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
+    expandLegendAdvanced();
     cy.get('#scatter-parallelism-labels').should('have.attr', 'data-state', 'checked');
     cy.get('#scatter-point-labels').should('have.attr', 'data-state', 'unchecked');
   });
 
-  it('appends the precision to each line label when multiple precisions are selected', () => {
+  it('places the precision between the GPU and engine when multiple precisions are selected', () => {
     // Pair the FP4+FP8 selection with a model that has both precisions in the
     // fixtures. The default model (DeepSeek-V4-Pro) only has FP4, so
     // `effectivePrecisions` would drop FP8 and the test couldn't observe the
@@ -222,8 +231,9 @@ describe('Line Labels Toggle', () => {
     cy.get('[data-testid="scatter-graph"]').should('be.visible');
 
     // With both FP4 and FP8 shown, each curve is its own line and the label
-    // must carry the precision so the two curves of the same hardware are
-    // distinguishable (e.g. "B200 (vLLM) FP8" vs "B200 (vLLM) FP4").
+    // must carry the precision between the GPU and engine so the two curves of
+    // the same hardware are distinguishable (e.g. "B200 FP8 (vLLM)" vs
+    // "B200 FP4 (vLLM)").
     cy.get('[data-testid="scatter-graph"] svg g.line-label .ll-text')
       .should('have.length.greaterThan', 0)
       .then(($texts) => {
@@ -237,6 +247,11 @@ describe('Line Labels Toggle', () => {
           labels.some((t) => /\bFP4\b/u.test(t)),
           'an FP4 line label exists',
         ).to.equal(true);
+        for (const label of labels.filter((t) => /\bFP(?:4|8)\b/u.test(t) && /\(.+\)/u.test(t))) {
+          expect(label, 'precision precedes the engine suffix').to.match(
+            /^.+\sFP(?:4|8)\s\(.+\)$/u,
+          );
+        }
       });
   });
 });
