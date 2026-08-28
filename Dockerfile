@@ -4,27 +4,29 @@
 # Built by .github/workflows/deploy.yml on the self-hosted dashboard runner.
 #
 # Two stages so the runtime image doesn't carry bun's cache / git / dev deps:
-#   builder — installs deps + runs `bun run build`
+#   builder — installs deps + runs `next build`
 #   runtime — copies the workspace (with .next + node_modules) and runs
-#             `bun run start`
+#             `next start`
 #
-# The whole bun workspace is shipped to runtime because `bun run start` is
-# `bun run --cwd packages/app start`, which needs the constants/db packages
-# reachable from the symlinks under packages/app/node_modules. Pruning that
-# would save image size but complicate the runtime, and the dashboard host
-# has plenty of disk.
+# The whole bun workspace is shipped to runtime because the constants/db
+# packages need to be reachable from the symlinks under
+# packages/app/node_modules. Pruning that would save image size but
+# complicate the runtime, and the dashboard host has plenty of disk.
 #
-# Base image tag matches package.json's `packageManager` (bun@1.3.14).
-#
-# `next build` itself runs under Node (see the `node-src` stage + the build
-# RUN step below), not Bun. Bun's JS engine segfaults nondeterministically
-# during Next.js 16.3+'s Turbopack "Collecting page data" worker-pool phase
-# (oven-sh/bun#36866) — it crashes on both 1.3.13 and 1.3.14, just at
-# different points, which is consistent with the issue's own read that this
-# is memory corruption rather than one fixed bad code path. So a Bun version
-# bump alone won't fix it; running the build with Node's V8 engine sidesteps
-# the bug entirely. Bun still does `bun install` and (at runtime) `bun run
-# start`, which don't hit this code path.
+# Base image tag matches package.json's `packageManager` (bun@1.3.14). Bun
+# still does `bun install`, but neither `next build` nor `next start` run
+# under Bun — see the `node-src` stage below. Bun's JS engine segfaults
+# nondeterministically during Next.js 16.3+'s Turbopack "Collecting page
+# data" worker-pool phase (oven-sh/bun#36866), and separately throws at
+# *request* time on any route that touches undici's Response/Request/etc.
+# (`e.util.markAsUncloneable is not a function` — Bun doesn't actually
+# export `node:worker_threads.markAsUncloneable` despite documenting it,
+# per oven-sh/bun#29423). Both are consistent with "Bun's Node compat is
+# incomplete for what Next.js 16.3+ / undici 8.x now need", not a bug tied
+# to one Bun patch version — so both `next build` and `next start` run
+# under Node (V8) instead, sidestepping Bun's engine entirely for anything
+# Next.js–shaped. `bun install` and the ad-hoc `bun run admin:*` ingest
+# scripts are untouched.
 
 FROM node:24-slim AS node-src
 
@@ -98,17 +100,23 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# CI=true: `bun run start` can trigger the root `prepare` script
-# (`is-ci || lefthook install`). This stage has no .git (COPY --from=builder
-# doesn't bring it, and it's .dockerignore'd besides), so without CI=true
-# short-circuiting is-ci, lefthook fails and crash-loops the container.
+# CI=true: any `bun run <script>` invoked in this container (e.g. an admin
+# ingest/cache command run via `docker compose exec app bun run admin:...`)
+# can trigger the root `prepare` script (`is-ci || lefthook install`). This
+# stage has no .git (COPY --from=builder doesn't bring it, and it's
+# .dockerignore'd besides), so without CI=true short-circuiting is-ci,
+# lefthook fails. The main CMD below no longer goes through `bun run`, but
+# ad-hoc bun scripts still do.
 ENV CI=true
 
 WORKDIR /app
 COPY --from=builder /app ./
 
+# Node binary only, to run `next start` — see the top-of-file note on why.
+COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
+
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 EXPOSE 3000
-CMD ["bun", "run", "start"]
+CMD ["sh", "-c", "cd packages/app && node node_modules/.bin/next start"]
