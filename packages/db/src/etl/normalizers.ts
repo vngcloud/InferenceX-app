@@ -52,6 +52,13 @@ const PREFIX_ALIASES: Record<string, string> = {
   // Some Gemma-4-31B sweeps (run 32946716838) emit `gemma4fi` instead of the
   // canonical `gemma4` DB key; same checkpoint (RedHatAI/gemma-4-31B-it-FP8-block).
   gemma4fi: 'gemma4',
+  // Native MTP depth 2/4/8 sweeps on vLLM v0.28.0 (run 33051618426) emit
+  // `gemma4v28m<depth>` instead of the canonical `gemma4` DB key; same
+  // checkpoint (RedHatAI/gemma-4-31B-it-FP8-block), depth is carried in
+  // `spec_decoding`/config, not the model key.
+  gemma4v28m2: 'gemma4',
+  gemma4v28m4: 'gemma4',
+  gemma4v28m8: 'gemma4',
 };
 
 function resolvePrefixToKey(prefix: string): string | null {
