@@ -120,9 +120,17 @@ async function previewChangelogBackfill(
       AND cl.base_ref = ${backfill.baseRef}
       AND cl.head_ref = ${backfill.headRef}
   `;
-  if (rows.length !== 1) {
+  if (rows.length === 0) {
+    // Registry entries are shared across every DB running this codebase (this
+    // fork's self-hosted Postgres included), but each backfill audits one
+    // specific database's own history. Zero rows just means this backfill
+    // targets a run/attempt this DB never ingested — not an error here.
+    console.log(`    ${backfill.id}: not in this DB, skipping.`);
+    return null;
+  }
+  if (rows.length > 1) {
     throw new Error(
-      `${backfill.id}: expected exactly one changelog row, found ${rows.length} ` +
+      `${backfill.id}: expected at most one changelog row, found ${rows.length} ` +
         `(run ${backfill.githubRunId} attempt ${backfill.runAttempt}, ` +
         `${backfill.baseRef}..${backfill.headRef})`,
     );
@@ -302,9 +310,16 @@ async function previewBenchmarkPointBackfill(
       AND br.offload_mode = ANY(${offloadModes})
       AND br.recipe_fingerprint IS NOT DISTINCT FROM ${backfill.recipeFingerprint ?? null}
   `;
-  if (rows.length !== 1) {
+  if (rows.length === 0) {
+    // Same cross-DB reasoning as previewChangelogBackfill: registry entries
+    // are shared across every DB running this codebase, but each backfill
+    // audits one specific database's own history.
+    console.log(`    ${backfill.id}: not in this DB, skipping.`);
+    return null;
+  }
+  if (rows.length > 1) {
     throw new Error(
-      `${backfill.id}: expected exactly one source or desired benchmark row, ` +
+      `${backfill.id}: expected at most one source or desired benchmark row, ` +
         `found ${rows.length} (${benchmarkPointDescription(backfill)})`,
     );
   }
