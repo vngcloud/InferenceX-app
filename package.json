@@ -71,10 +71,10 @@
     "undici": "8.10.0"
   },
   "engines": {
-    "bun": ">=1.3.13 <1.3.14",
+    "bun": ">=1.3.14",
     "node": ">=24.11.0"
   },
-  "packageManager": "bun@1.3.13",
+  "packageManager": "bun@1.3.14",
   "trustedDependencies": [
     "@posthog/cli",
     "core-js",

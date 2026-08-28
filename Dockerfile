@@ -14,16 +14,21 @@
 # would save image size but complicate the runtime, and the dashboard host
 # has plenty of disk.
 #
-# Base image tag matches package.json's `packageManager` (bun@1.3.13).
+# Base image tag matches package.json's `packageManager` (bun@1.3.14).
 #
-# Pinned below 1.3.14: Bun 1.3.14 segfaults (SIGILL) during `next build`'s
-# "Collecting page data" phase on Next.js 16.3+ (oven-sh/bun#36866 — Bun
-# doesn't export `markAsUncloneable` from node:worker_threads even though its
-# docs claim support, which breaks undici 8.x's Next.js build workers). Bun
-# 1.3.13 builds this app cleanly. Bump past 1.3.14 only once that issue is
-# confirmed fixed upstream.
+# `next build` itself runs under Node (see the `node-src` stage + the build
+# RUN step below), not Bun. Bun's JS engine segfaults nondeterministically
+# during Next.js 16.3+'s Turbopack "Collecting page data" worker-pool phase
+# (oven-sh/bun#36866) — it crashes on both 1.3.13 and 1.3.14, just at
+# different points, which is consistent with the issue's own read that this
+# is memory corruption rather than one fixed bad code path. So a Bun version
+# bump alone won't fix it; running the build with Node's V8 engine sidesteps
+# the bug entirely. Bun still does `bun install` and (at runtime) `bun run
+# start`, which don't hit this code path.
 
-FROM oven/bun:1.3.13-slim AS builder
+FROM node:24-slim AS node-src
+
+FROM oven/bun:1.3.14-slim AS builder
 
 # git is required: the root package.json's `prepare` script runs
 # `is-ci || lefthook install`, and lefthook shells out to git. Setting
@@ -52,6 +57,10 @@ RUN bun install --frozen-lockfile
 # Now copy the rest of the source and build.
 COPY . .
 
+# Node binary only, for the build RUN step below — see the top-of-file note
+# on why `next build` runs under Node instead of Bun.
+COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
+
 # `next build` evaluates pages at build time, and some (e.g. the
 # compare-precision/compare-spec-decode OG images' generateStaticParams)
 # actually query Postgres to enumerate static params — a dummy/unreachable
@@ -67,10 +76,10 @@ RUN --mount=type=secret,id=database_readonly_url \
     DATABASE_WRITE_URL="$(cat /run/secrets/database_write_url 2>/dev/null || echo postgresql://x:x@x:5432/x)" \
     DATABASE_DRIVER=postgres \
     DATABASE_SSL=false \
-    bun run build
+    sh -c 'cd packages/app && node node_modules/.bin/next build --turbopack'
 
 
-FROM oven/bun:1.3.13-slim AS runtime
+FROM oven/bun:1.3.14-slim AS runtime
 
 # gh + unzip are used by `bun run admin:db:ingest:run`, which shells out to
 # `gh api` to list & download a workflow run's artifacts and then unzips
